@@ -9,6 +9,9 @@ faces/
 __pycache__/
 *.py[cod]
 
+# macOS Finder droppings
+.DS_Store
+
 # Recorded output from `run.py --save`
 *.mp4
 *.avi

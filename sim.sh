@@ -29,9 +29,9 @@ stop() {
 
 [ "${1:-}" = "--stop" ] && { stop; echo "stopped."; exit 0; }
 
-[ -d "$MOTIONS" ] || { echo "no $MOTIONS -- run: python3 make_motions.py"; exit 1; }
+[ -d "$MOTIONS" ] || { echo "no $MOTIONS -- run: python3 tools/make_motions.py"; exit 1; }
 count=$(ls "$MOTIONS"/motion_*.csv 2>/dev/null | wc -l)
-[ "$count" -gt 0 ] || { echo "no motion_*.csv in $MOTIONS -- run: python3 make_motions.py"; exit 1; }
+[ "$count" -gt 0 ] || { echo "no motion_*.csv in $MOTIONS -- run: python3 tools/make_motions.py"; exit 1; }
 
 stop
 echo "starting simulator with $count motions from $MOTIONS"
@@ -46,7 +46,7 @@ for _ in $(seq 1 15); do
         echo
         echo "ready.  log: /tmp/sigma-sim.log"
         echo "  phorce play 3 --target sim:demo"
-        echo "  python3 $ROOT/care.py --target sim:demo"
+        echo "  python3 $ROOT/apps/care.py --target sim:demo"
         exit 0
     fi
 done

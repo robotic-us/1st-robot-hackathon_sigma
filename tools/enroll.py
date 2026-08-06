@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Manage the enrolled-face database.
 
-    python3 enroll.py --name alice          # capture from the webcam
-    python3 enroll.py --name bob --images ./bob_photos
-    python3 enroll.py --list
-    python3 enroll.py --delete alice
+    python3 tools/enroll.py --name alice          # capture from the webcam
+    python3 tools/enroll.py --name bob --images ./bob_photos
+    python3 tools/enroll.py --list
+    python3 tools/enroll.py --delete alice
 """
 import argparse
 import sys
@@ -12,6 +12,10 @@ import time
 
 import cv2
 import numpy as np
+
+if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sigma import config, draw
 from sigma.detect import FaceDetector
@@ -115,7 +119,7 @@ def main():
     if args.list:
         people = db.people()
         if not people:
-            print("No faces enrolled yet.  Try: python3 enroll.py --name <you>")
+            print("No faces enrolled yet.  Try: python3 tools/enroll.py --name <you>")
         else:
             print(f"{len(people)} enrolled ({len(db.names)} embeddings):")
             for n, c in people.items():

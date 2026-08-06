@@ -7,6 +7,10 @@ head and will not parse under OpenCV < 4.8 (this box runs 4.5.4).
 import sys
 import urllib.request
 
+if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from sigma import config
 
 ZOO = "https://github.com/opencv/opencv_zoo/raw"

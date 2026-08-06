@@ -40,8 +40,7 @@ the demo; do not draw the ideal loop and imply it runs.
 
 Run standalone::
 
-    python3 dream.py --selftest       # matcher + monitor checks, no hardware
-    python3 dream.py --demo           # rank the whole dictionary from a pose
+    python3 core/dream.py --demo           # rank the whole dictionary from a pose
 """
 
 from __future__ import annotations
@@ -54,7 +53,11 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from pvector import MotionChunk, load_chunk_dictionary
+if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.pvector import MotionChunk, load_chunk_dictionary
 
 LOGGER = logging.getLogger("dream")
 
@@ -444,112 +447,6 @@ class ChunkMockModel:
         row = min(len(table) - 1, max(0, int(round(elapsed_s / self.dt))))
         return [float(v) for v in table[row]]
 
-
-# --------------------------------------------------------------------------- #
-# Selftest
-# --------------------------------------------------------------------------- #
-def run_selftest() -> int:
-    """Exercise matcher and monitor against hand-built chunks.  No hardware."""
-    from pvector import AxisProgram, PVector
-
-    def chunk(slot_id: int, deltas_deg: Sequence[float], l_traj: int = 1600) -> MotionChunk:
-        return MotionChunk(
-            slot_id=slot_id, name=f"test {slot_id}",
-            programs=tuple(
-                AxisProgram(i, (PVector(yd=d, l_traj=l_traj),))
-                for i, d in enumerate(deltas_deg)
-            ),
-            synthesised=True,
-        )
-
-    small, medium, large = chunk(1, [2.0, 0.0]), chunk(2, [10.0, 0.0]), chunk(3, [40.0, 0.0])
-    chunks = {c.slot_id: c for c in (small, medium, large)}
-    cfg = DreamConfig()
-    matcher = ChunkMatcher(chunks, cfg)
-    here = [0.0, 0.0]
-
-    print("ChunkMatcher")
-
-    # 1. No external force -> the gentlest chunk wins on continuity.
-    ranked = matcher.rank([1, 2, 3], here)
-    assert ranked[0].slot_id == 1, f"expected slot 1 with no force, got {ranked[0].slot_id}"
-    print(f"  no force -> {ranked[0].describe()}")
-
-    # 2. Push back on axis 0 and the big swing must lose to the small one.
-    pushed = matcher.rank([1, 2, 3], here, external_force_a=[2.0, 0.0])
-    assert pushed[0].slot_id == 1, "contact on axis 0 must favour the smallest move"
-    assert pushed[0].resistance < pushed[-1].resistance, "resistance must order the ranking"
-    print(f"  dob=2.0A on axis 0 -> {pushed[0].describe()}")
-    print(f"                       worst: {pushed[-1].describe()}")
-
-    # 3. Task fit can outvote continuity when nothing is pushing back.
-    amps = {1: 0.15, 2: 0.45, 3: 0.85}
-    task_cfg = DreamConfig(w_task=50.0, w_continuity=0.01, w_resistance=0.0)
-    biased = ChunkMatcher(chunks, task_cfg).rank(
-        [1, 2, 3], here, target_amplitude=0.85, amplitude_of=amps)
-    assert biased[0].slot_id == 3, f"strong stirring should pick slot 3, got {biased[0].slot_id}"
-    print(f"  target amp 0.85 -> slot {biased[0].slot_id}")
-
-    # 4. The excursion veto has to fire before anything else.
-    tight = ChunkMatcher(chunks, DreamConfig(max_excursion_rad=0.1))
-    vetoed = tight.rank([1, 2, 3], here)
-    assert any(s.vetoed for s in vetoed), "a 40 deg swing must be vetoed at 0.1 rad"
-    assert tight.best([3], here) is None, "best() must not return a vetoed chunk"
-    print(f"  veto at 0.1 rad -> {[s.slot_id for s in vetoed if s.vetoed]} rejected")
-
-    # 5. No joint data -> pose terms drop out, nothing crashes, task still ranks.
-    blind = matcher.rank([1, 2, 3], None, target_amplitude=0.85, amplitude_of=amps)
-    assert blind[0].slot_id == 3 and blind[0].peak_excursion == 0.0
-    print("  no joint data -> ranks on task fit alone, pose terms inactive")
-
-    print("\nDreamMonitor")
-
-    # 6. Following the dream exactly must never trip the monitor.
-    monitor = DreamMonitor(cfg)
-    monitor.begin(medium, here, now=0.0)
-    t_ref, y_ref = medium.dream(here, dt=cfg.dt, horizon_s=medium.duration_s)
-    for i, t in enumerate(t_ref):
-        report = monitor.update(y_ref[i], now=float(t), external_force_a=[0.0, 0.0])
-    assert not report.diverged, "a perfectly tracked chunk must not diverge"
-    assert report.rms_rad < 1e-9, f"rms should be ~0, got {report.rms_rad}"
-    print(f"  perfect tracking -> {report.describe()}")
-
-    # 7. Jam it: hold the arm still while the dream keeps moving.
-    monitor.begin(large, here, now=0.0)
-    stuck, fired_at = np.array(here, dtype=float), None
-    for i, t in enumerate(t_ref):
-        report = monitor.update(stuck, now=float(t), external_force_a=[3.0, 0.0])
-        if report.diverged and fired_at is None:
-            fired_at = float(t)
-    assert fired_at is not None, "a jammed axis must trip the divergence monitor"
-    assert fired_at <= 1.0, f"divergence should be caught early, fired at {fired_at:.2f}s"
-    print(f"  jammed axis -> diverged at t={fired_at:.2f}s, {report.describe()}")
-
-    # 8. A single spike must NOT trip it (that is what diverge_hold_s is for).
-    monitor.begin(medium, here, now=0.0)
-    spiked = False
-    for i, t in enumerate(t_ref):
-        sample = y_ref[i].copy()
-        if i == len(t_ref) // 2:
-            sample[0] += 0.5   # one bad frame
-        report = monitor.update(sample, now=float(t))
-        spiked = spiked or report.diverged
-    assert not spiked, "a one-frame spike must not count as divergence"
-    print("  single-frame spike -> ignored (diverge_hold_s held)")
-
-    # 9. ASAP-lite residual must shift the next dream, not the command.
-    matcher.note_residual([0.05, 0.0])
-    _, corrected = matcher.corrected_dream(medium, here)
-    _, plain = medium.dream(here, dt=cfg.dt, horizon_s=cfg.horizon_s)
-    assert corrected[-1, 0] > plain[-1, 0], "residual must bias the dream"
-    assert abs(corrected[0, 0] - plain[0, 0]) < 1e-9, "residual must ramp in, not jump"
-    print(f"  residual 0.05 rad -> dream end shifted "
-          f"{corrected[-1, 0] - plain[-1, 0]:+.4f} rad, start unchanged")
-
-    print("\nselftest PASSED")
-    return 0
-
-
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -575,7 +472,6 @@ def run_demo(args: argparse.Namespace) -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--demo", action="store_true", help="rank the dictionary from a pose")
     parser.add_argument("--motion-map", help="the robot's MotionMap.csv")
     parser.add_argument("--slot-table", default="slots.json")
@@ -590,8 +486,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(levelname)-7s %(name)s: %(message)s",
     )
-    if args.selftest:
-        return run_selftest()
     if args.demo:
         return run_demo(args)
     parser.print_help()

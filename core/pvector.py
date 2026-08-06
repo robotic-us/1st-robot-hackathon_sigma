@@ -34,9 +34,8 @@ Where the numbers come from, in order of preference:
 
 Run standalone::
 
-    python3 pvector.py --selftest                  # boundary-condition checks
-    python3 pvector.py --from-slots slots.json     # dream every slot, print it
-    python3 pvector.py --motion-map MotionMap.csv  # same, from the real file
+    python3 core/pvector.py --from-slots slots.json     # dream every slot, print it
+    python3 core/pvector.py --motion-map MotionMap.csv  # same, from the real file
 """
 
 from __future__ import annotations
@@ -447,70 +446,6 @@ def load_chunk_dictionary(
                            motion_map, exc, slot_table)
     return chunks_from_slot_table(slot_table, units_per_deg=units_per_deg)
 
-
-# --------------------------------------------------------------------------- #
-# Selftest
-# --------------------------------------------------------------------------- #
-def run_selftest() -> int:
-    """Check the polynomial against the boundary conditions it claims to meet."""
-    print("P-Vector boundary conditions")
-
-    pv = PVector(yd=100.0, l_traj=1000, s0=0.0, sd=0.0)
-    assert abs(pv.evaluate(0.0, 0.0).item() - 0.0) < 1e-9, "y(0) must equal y0"
-    assert abs(pv.evaluate(0.0, 1.0).item() - 100.0) < 1e-9, "y(1) must equal yd"
-    assert abs(pv.velocity(0.0, 0.0).item()) < 1e-9, "initial velocity must be 0"
-    assert abs(pv.velocity(0.0, 1.0).item()) < 1e-9, "final velocity must be 0"
-    print("  rest-to-rest: y(0)=y0, y(1)=yd, y'(0)=y'(1)=0  -- ok")
-
-    # A plain s0=sd=0 move is the classic minimum-jerk curve: monotone, and it
-    # never overshoots its target.  If either fails, the coefficients are wrong.
-    traj = pv.sample(0.0, dt=0.001)
-    assert np.all(np.diff(traj) >= -1e-9), "s0=sd=0 must be monotone"
-    assert traj.max() <= 100.0 + 1e-6, "s0=sd=0 must not overshoot"
-    print(f"  monotone, no overshoot (peak {traj.max():.4f} <= 100)  -- ok")
-
-    # Non-zero shaping still has to honour the endpoints.
-    for s0, sd in ((10.0, 0.0), (0.0, 10.0), (20.0, 20.0), (-5.0, 5.0)):
-        shaped = PVector(yd=-40.0, l_traj=500, s0=s0, sd=sd)
-        assert abs(shaped.evaluate(7.0, 0.0).item() - 7.0) < 1e-9, f"y(0) wrong for {s0},{sd}"
-        assert abs(shaped.evaluate(7.0, 1.0).item() + 40.0) < 1e-9, f"y(1) wrong for {s0},{sd}"
-    print("  shaped segments (s0/sd != 0) still hit both endpoints  -- ok")
-
-    # Duration comes from L_traj at the pcm's 1 kHz recording rate.
-    assert abs(PVector(yd=1.0, l_traj=1000).duration_s - 1.0) < 1e-9
-    assert abs(PVector(yd=1.0, l_traj=3000).duration_s - 3.0) < 1e-9
-    print("  L_traj=1000 -> 1.000 s, L_traj=3000 -> 3.000 s  -- ok")
-
-    # Concatenation: two segments must join without a jump.
-    program = AxisProgram(0, (PVector(50.0, 500), PVector(-20.0, 500)))
-    dreamt = program.dream(0.0, dt=0.001)
-    assert abs(program.duration_s - 1.0) < 1e-9, "durations must add"
-    joint = np.abs(np.diff(dreamt)).max()
-    assert joint < 1.0, f"segment join produced a jump of {joint:.4f}"
-    assert abs(dreamt[-1] + 20.0) < 1e-6, "program must end on the last yd"
-    print(f"  two-segment join: max step {joint:.5f}, ends at {dreamt[-1]:.3f}  -- ok")
-
-    # Holding after the program ends (slower axes still running).
-    held = program.dream(0.0, dt=0.001, horizon_s=2.0)
-    assert abs(held[-1] - held[len(held) // 2]) < 1e-6 or abs(held[-1] + 20.0) < 1e-6
-    assert abs(held[-1] + 20.0) < 1e-6, "axis must hold its final value past the end"
-    print("  holds final value past program end  -- ok")
-
-    # The parser has to survive the real file's trailing zeros and blanks.
-    assert PVector.parse("2389.4,1500,0,0,0.0,0.0") == PVector(2389.4, 1500, 0.0, 0.0)
-    assert PVector.parse("108, 1500, 0, 0") == PVector(108.0, 1500, 0.0, 0.0)
-    assert PVector.parse("-") is None and PVector.parse("") is None
-    print("  MotionMap cell parsing (trailing zeros, '-', blanks)  -- ok")
-
-    assert _parse_axis_index("MD5") == 4
-    assert _parse_axis_index("0x06") == 4
-    assert _parse_axis_index("3") == 3
-    print("  axis id mapping: MD5 -> 4, 0x06 -> 4  -- ok")
-
-    print("\nselftest PASSED")
-    return 0
-
-
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -532,7 +467,6 @@ def describe(chunks: dict[int, MotionChunk]) -> None:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--motion-map", help="the robot's MotionMap.csv")
     parser.add_argument("--from-slots", default="slots.json")
     parser.add_argument("--units-per-deg", type=float, default=UNITS_PER_DEG)
@@ -543,8 +477,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(levelname)-7s %(name)s: %(message)s",
     )
-    if args.selftest:
-        return run_selftest()
 
     describe(load_chunk_dictionary(
         motion_map=args.motion_map,

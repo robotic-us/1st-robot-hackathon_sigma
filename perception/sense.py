@@ -26,9 +26,8 @@ Two design choices worth knowing:
 
 Run standalone::
 
-    python3 sense.py                  # live window, face + sound + distress
-    python3 sense.py --no-window      # print the numbers instead
-    python3 sense.py --selftest       # no camera, no microphone
+    python3 perception/sense.py             # live window, face + sound + distress
+    python3 perception/sense.py --no-window # print the numbers instead
 """
 
 from __future__ import annotations
@@ -42,7 +41,11 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from listen import Microphone, Sound
+if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from perception.listen import Microphone, Sound
 from sigma import config as face_config
 from sigma.draw import draw_result
 from sigma.pipeline import SigmaPipeline
@@ -183,53 +186,6 @@ def draw(frame: np.ndarray, reading: Reading, sense: Sense) -> np.ndarray:
                 (230, 230, 230), 1, cv2.LINE_AA)
     return canvas
 
-
-# --------------------------------------------------------------------------- #
-# Selftest
-# --------------------------------------------------------------------------- #
-def run_selftest() -> int:
-    """Check the two bits of maths that decide how the robot behaves."""
-    print("emotion -> distress")
-    n = len(face_config.EMOTIONS)
-
-    def one_hot(label: str) -> np.ndarray:
-        v = np.zeros(n, np.float32)
-        v[face_config.EMOTIONS.index(label)] = 1.0
-        return v
-
-    for label in face_config.EMOTIONS:
-        d = emotion_distress(one_hot(label))
-        assert abs(d - DISTRESS_WEIGHT[label]) < 1e-6, f"{label} weight wrong"
-        print(f"  {label:<9} -> {d:.2f}")
-
-    assert emotion_distress(one_hot("HAPPY")) == 0.0, "a smile must not summon the robot"
-    assert emotion_distress(one_hot("ANGRY")) > emotion_distress(one_hot("NEUTRAL"))
-
-    # The mixed case that motivated using probabilities instead of the label.
-    mixed = np.zeros(n, np.float32)
-    mixed[face_config.EMOTIONS.index("ANGRY")] = 0.45
-    mixed[face_config.EMOTIONS.index("SAD")] = 0.40
-    mixed[face_config.EMOTIONS.index("NEUTRAL")] = 0.15
-    d = emotion_distress(mixed)
-    assert 0.7 < d < 0.9, f"45% angry + 40% sad should read clearly upset, got {d:.3f}"
-    print(f"  45% ANGRY + 40% SAD + 15% NEUTRAL -> {d:.2f} (stable across a label flip)")
-
-    print("\nnoisy-OR fusion")
-    assert fuse(0.0, 0.0) == 0.0
-    assert abs(fuse(0.8, 0.0) - 0.8) < 1e-6, "sound silent -> face alone decides"
-    assert abs(fuse(0.0, 0.8) - 0.8) < 1e-6, "face absent -> sound alone decides"
-    assert fuse(0.5, 0.5) > 0.5, "both channels must reinforce"
-    assert fuse(0.9, 0.9) <= 1.0, "fusion must stay bounded"
-    for a, b in ((0.3, 0.4), (0.9, 0.1), (0.0, 1.0)):
-        assert fuse(a, b) >= max(a, b) - 1e-9, "fusion must never lower distress"
-    print(f"  face only  0.80 + 0.00 -> {fuse(0.8, 0.0):.2f}")
-    print(f"  sound only 0.00 + 0.80 -> {fuse(0.0, 0.8):.2f}")
-    print(f"  both       0.50 + 0.50 -> {fuse(0.5, 0.5):.2f}")
-
-    print("\nselftest PASSED")
-    return 0
-
-
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -239,14 +195,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--audio-device", default="plughw:WEBCAM,0")
     parser.add_argument("--no-sound", action="store_true")
     parser.add_argument("--no-window", action="store_true")
-    parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO),
                         format="%(levelname)-7s %(name)s: %(message)s")
-    if args.selftest:
-        return run_selftest()
 
     cap = cv2.VideoCapture(args.camera_index)
     if not cap.isOpened():

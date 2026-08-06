@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """SIGMA - live face recognition + 5-class emotion classification.
 
-    python3 run.py                 # live window
-    python3 run.py --headless      # terminal only (no X needed)
-    python3 run.py --source clip.mp4 --save out.mp4
+    python3 apps/run.py            # live window
+    python3 apps/run.py --headless      # terminal only (no X needed)
+    python3 apps/run.py --source clip.mp4 --save out.mp4
 
 Keys (windowed):  e enroll   r reset tracks   b toggle bars   space pause   q quit
 """
@@ -14,6 +14,10 @@ import time
 
 import cv2
 import numpy as np
+
+if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sigma import config, draw
 from sigma.pipeline import SigmaPipeline
@@ -90,14 +94,14 @@ def main():
 
     for path in (config.YUNET, config.SFACE, config.FERPLUS):
         if not path.exists():
-            print(f"Missing model: {path}\nRun: python3 fetch_models.py", file=sys.stderr)
+            print(f"Missing model: {path}\nRun: python3 tools/fetch_models.py", file=sys.stderr)
             return 1
 
     pipeline = SigmaPipeline(recognize=not args.no_recognize)
     n_people = len(pipeline.db.people()) if pipeline.db else 0
     if not args.no_recognize and n_people == 0:
         print("Note: no faces enrolled yet - everyone will show as 'unknown'.")
-        print("      Enroll with:  python3 enroll.py --name <you>   (or press 'e')")
+        print("      Enroll with:  python3 tools/enroll.py --name <you>   (or press 'e')")
 
     cap, label = open_source(args.source, args.camera)
     if not cap.isOpened():

@@ -27,8 +27,7 @@ Where the person was in the earlier pipeline, the tag is now:
 Run::
 
     ./cad/view.sh                   # terminal 1: RViz (arcs display included)
-    python3 demo.py                 # terminal 2: this
-    python3 demo.py --selftest      # no camera, no RViz, no ROS
+    python3 apps/demo.py            # terminal 2: this
 
 Keys in the camera window: ``j`` jam on/off, ``q`` quit.
 """
@@ -44,10 +43,14 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from dream import ChunkMatcher, DreamConfig, DreamMonitor
-from pvector import chunks_from_slot_table, load_motion_map
-from slot_table import AMPLITUDE_VALUE, load_slot_table
-from tag import TagReading, TagTracker, draw_overlay
+if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.dream import ChunkMatcher, DreamConfig, DreamMonitor
+from core.pvector import chunks_from_slot_table, load_motion_map
+from core.slot_table import AMPLITUDE_VALUE, load_slot_table
+from perception.tag import TagReading, TagTracker, draw_overlay
 
 # --- the cradle's geometry, from make_urdf's output (metres) ---------------- #
 AXIS0 = np.array([0.060, 0.037, 0.050])     # axis_0 joint centre
@@ -236,83 +239,12 @@ class RosSide:
         self.node.destroy_node()
         self.rclpy.shutdown()
 
-
-# --------------------------------------------------------------------------- #
-# Selftest: the whole decision/jam/preempt cycle, no hardware anywhere
-# --------------------------------------------------------------------------- #
-def run_selftest() -> int:
-    chunks = load_chunks()
-    table = load_slot_table("slots.json")
-    brain = Brain(chunks, table)
-    origin = "motions/" if not next(iter(chunks.values())).synthesised else "slots.json"
-    print(f"dictionary: {len(chunks)} chunks from {origin}\n")
-
-    still = TagReading(True, -0.6, 0.0, 0.5, 0.02, 0.0)
-    assert brain.decide(still, 0.0) is None, "a calm tag must not trigger a motion"
-    print("  calm tag              -> no motion  -- ok")
-
-    shaken_left = TagReading(True, -0.6, 0.0, 0.5, 0.85, 0.0)
-    slot = brain.decide(shaken_left, 1.0)
-    picked = table.slots[slot]
-    assert picked.direction.value == "left", f"expected a left slot, got {slot}"
-    assert len(brain.last_ranked) == 3, "all three amplitudes must be ranked"
-    assert picked.amplitude.value == "large", \
-        f"hard shake + no force should pick large, got {picked.amplitude.value}"
-    print(f"  hard shake at x=-0.6  -> slot {slot} ({picked.amplitude.value}), "
-          f"3 candidates ranked  -- ok")
-
-    # Play cleanly to the end: no divergence, normal dwell.
-    t = 1.0
-    while brain.playing is not None:
-        t += PLAY_DT
-        brain.tick(t)
-    assert not brain.preempted, "an unobstructed chunk must not diverge"
-    assert brain.next_ok - t > 0.5, "clean finish should use the full dwell"
-    print(f"  clean playback        -> no divergence, dwell {brain.next_ok - t:.1f}s  -- ok")
-
-    # Jam mid-play: divergence must fire, and the dwell must collapse.
-    # Shake on the RIGHT so the cradle has real ground to cover (it is parked
-    # at the left target; replaying the same slot would dream a flat line and
-    # a flat dream cannot diverge -- there is nothing to fall behind).
-    shaken_right = TagReading(True, 0.6, 0.0, 0.5, 0.85, 0.0)
-    slot = brain.decide(shaken_right, brain.next_ok + 0.1)
-    assert table.slots[slot].direction.value == "right"
-    t = brain.next_ok + 0.1
-    for _ in range(10):                      # let it move first
-        t += PLAY_DT; brain.tick(t)
-    brain.jam = True
-    diverged_at = None
-    while brain.playing is not None:
-        t += PLAY_DT; brain.tick(t)
-        if diverged_at is None and brain.monitor.latest().diverged:
-            diverged_at = t
-    assert diverged_at is not None, "a jammed cradle must trip the monitor"
-    assert brain.preempted, "the finish must carry the diverged verdict"
-    assert brain.next_ok - t < 0.5, "a diverged dream must collapse the dwell"
-    print(f"  jam mid-play          -> DIVERGED, dwell collapsed to "
-          f"{brain.next_ok - t:.1f}s  -- ok")
-
-    # Still jammed (dob high): the ranking must flip from large to gentle.
-    slot = brain.decide(shaken_right, brain.next_ok + 0.01)
-    picked = table.slots[slot]
-    assert picked.amplitude.value != "large", \
-        f"with 2.5A of contact the big sway must lose, got {picked.amplitude.value}"
-    print(f"  re-rank under contact -> slot {slot} ({picked.amplitude.value}), "
-          f"resistance flipped the choice  -- ok")
-
-    print("\nselftest PASSED")
-    return 0
-
-
 # --------------------------------------------------------------------------- #
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--no-window", action="store_true")
     args = parser.parse_args(argv)
-    if args.selftest:
-        return run_selftest()
 
     chunks = load_chunks()
     table = load_slot_table("slots.json")

@@ -30,8 +30,8 @@ Studio will overwrite these; treat them as scaffolding, not as the final poses.
 
 Usage::
 
-    python3 make_motions.py                    # write ./motions from slots.json
-    python3 make_motions.py --duration-s 2.0   # slower motions
+    python3 tools/make_motions.py               # write ./motions from slots.json
+    python3 tools/make_motions.py --duration-s 2.0   # slower motions
 """
 
 from __future__ import annotations

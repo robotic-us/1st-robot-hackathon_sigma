@@ -8,9 +8,9 @@ same P-Vector world model DREAM-Chunk dreams with (see pvector.py).
 So what you see in RViz is not an animation someone keyframed.  It is the exact
 trajectory the pcm would play for that slot, evaluated from the quintic:
 
-    python3 animate.py --slot 3          # play one motion slot, once
-    python3 animate.py --all             # cycle through every slot
-    python3 animate.py --sweep           # slow sine on each joint, for a sanity check
+    python3 apps/animate.py --slot 3          # play one motion slot, once
+    python3 apps/animate.py --all          # cycle through every slot
+    python3 apps/animate.py --sweep          # slow sine on each joint, for a sanity check
 
 Needs the model up first::
 
@@ -27,7 +27,11 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
-from pvector import load_chunk_dictionary
+if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.pvector import load_chunk_dictionary
 
 # URDF joint names, in the same order as slots.json's "axes", plus the passive
 # platform bearing (driven below, never commanded by a slot).
@@ -103,7 +107,7 @@ def main(argv=None) -> int:
         chunks = load_chunk_dictionary(motion_map=args.motion_map,
                                        slot_table=args.slot_table)
         if not chunks:
-            node.get_logger().error("no chunks -- run: python3 make_motions.py")
+            node.get_logger().error("no chunks -- run: python3 tools/make_motions.py")
             return 1
 
         while True:

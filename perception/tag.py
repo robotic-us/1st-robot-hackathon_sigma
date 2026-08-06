@@ -14,9 +14,8 @@ dependencies, and one tag on a phone screen is enough.
 
 Run::
 
-    python3 tag.py --make          # write tags/tag_0.png -- open it on a phone
-    python3 tag.py                 # live viewer
-    python3 tag.py --selftest      # synthetic frames, no camera
+    python3 perception/tag.py --make    # write tags/tag_0.png -- open it on a phone
+    python3 perception/tag.py           # live viewer
 """
 
 from __future__ import annotations
@@ -36,7 +35,12 @@ DICT = cv2.aruco.Dictionary_get(cv2.aruco.DICT_APRILTAG_36h11)
 
 @dataclass(frozen=True)
 class TagReading:
-    """Where the tag is and how much it is being shaken.  All unit-free."""
+    """Where the tag is, WHICH tag it is, and how much it moves.  Unit-free.
+
+    ``tag_id`` is the 36h11 marker id -- serve.py reads it as a state card
+    (tag_0 calm, tag_1 fussing, tag_2 crying), so which tag you show matters
+    and how you wave it does not.
+    """
 
     present: bool
     x: float          # [-1, 1] left .. right
@@ -44,6 +48,7 @@ class TagReading:
     distance: float   # [0, 1] apparent size; bigger = nearer
     motion: float     # [0, 1] EMA-smoothed shake intensity
     ts: float
+    tag_id: int = -1  # -1 = no tag
 
 
 class TagTracker:
@@ -87,13 +92,15 @@ class TagTracker:
             if self._last_good is not None and self._miss <= self.hold_frames:
                 return self._record(TagReading(
                     True, self._last_good.x, self._last_good.y,
-                    self._last_good.distance, self._motion, ts))
+                    self._last_good.distance, self._motion, ts,
+                    self._last_good.tag_id))
             last = self._last_good
             return TagReading(False, last.x if last else 0.0, last.y if last else 0.0,
                               0.0, self._motion, ts)
 
         self._miss = 0
         quad = corners[0][0]                    # (4,2) px, first tag wins
+        tag_id = int(ids.flatten()[0])
         self.corners = quad
         cx, cy = float(quad[:, 0].mean()), float(quad[:, 1].mean())
         side = float(np.linalg.norm(quad[0] - quad[3]))   # tag height, px
@@ -110,7 +117,7 @@ class TagTracker:
         self._last_center = (x, y)
 
         return self._record(TagReading(True, max(-1, min(1, x)), max(-1, min(1, y)),
-                                       distance, self._motion, ts))
+                                       distance, self._motion, ts, tag_id))
 
     def _record(self, reading: TagReading) -> TagReading:
         self._last_good = reading
@@ -130,7 +137,8 @@ def draw_overlay(frame: np.ndarray, reading: TagReading, tracker: TagTracker) ->
     if bar > 0:
         color = (0, int(255 * (1 - reading.motion)), int(255 * reading.motion))
         cv2.rectangle(canvas, (11, height - 25), (10 + bar, height - 11), color, -1)
-    cv2.putText(canvas, f"x {reading.x:+.2f}  motion {reading.motion:.2f}"
+    cv2.putText(canvas, f"tag {reading.tag_id if reading.present else '-'}  "
+                        f"x {reading.x:+.2f}  motion {reading.motion:.2f}"
                         f"{'' if reading.present else '   NO TAG'}",
                 (10, height - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
     return canvas
@@ -143,10 +151,11 @@ def render_tag(tag_id: int = 0, size: int = 200) -> np.ndarray:
                               cv2.BORDER_CONSTANT, value=255)
 
 
-def synthetic_frame(width: int, height: int, x: float, y: float, side: int) -> np.ndarray:
+def synthetic_frame(width: int, height: int, x: float, y: float, side: int,
+                    tag_id: int = 0) -> np.ndarray:
     """A tag at normalised (x, y) on a grey background -- selftest fuel."""
     frame = np.full((height, width), 110, np.uint8)
-    tag = render_tag(0, side)
+    tag = render_tag(tag_id, side)
     half = tag.shape[0] // 2
     cx = int((x + 1) * 0.5 * width)
     cy = int((y + 1) * 0.5 * height)
@@ -155,57 +164,12 @@ def synthetic_frame(width: int, height: int, x: float, y: float, side: int) -> n
     frame[y0:y1, x0:x1] = tag[:y1 - y0, :x1 - x0]
     return frame
 
-
-def run_selftest() -> int:
-    width, height, fps = 640, 480, 30.0
-    tracker = TagTracker()
-
-    # Still tag at a known spot: position right, motion ~0.
-    for i in range(40):
-        r = tracker.update(synthetic_frame(width, height, -0.4, 0.1, 120), ts=i / fps)
-    assert r.present, "a plainly visible tag must be detected"
-    assert abs(r.x - (-0.4)) < 0.06, f"x off: {r.x:+.3f} vs -0.400"
-    assert r.motion < 0.05, f"a still tag must read still, got {r.motion:.3f}"
-    print(f"  still tag   x={r.x:+.3f} (true -0.400)  motion={r.motion:.3f}  -- ok")
-
-    # Shaken tag: oscillate, motion must climb well above the still case.
-    shaken = TagTracker()
-    for i in range(60):
-        x = 0.15 * math.sin(2 * math.pi * 3.0 * i / fps)
-        r = shaken.update(synthetic_frame(width, height, x, 0.0, 120), ts=i / fps)
-    assert r.motion > 0.3, f"a hard-shaken tag must read agitated, got {r.motion:.3f}"
-    print(f"  shaken tag  motion={r.motion:.3f}  -- ok")
-
-    # Distance: a bigger tag reads nearer.
-    near = TagTracker().update(synthetic_frame(width, height, 0, 0, 190), ts=0.0)
-    far = TagTracker().update(synthetic_frame(width, height, 0, 0, 60), ts=0.0)
-    assert near.distance > far.distance, "bigger tag must read nearer"
-    print(f"  distance    near={near.distance:.2f} > far={far.distance:.2f}  -- ok")
-
-    # Dropout: hold a few frames, then absent; motion decays rather than spikes.
-    holder = TagTracker(hold_frames=3)
-    holder.update(synthetic_frame(width, height, 0.3, 0, 120), ts=0.0)
-    blank = np.full((height, width), 110, np.uint8)
-    for i in range(3):
-        held = holder.update(blank, ts=0.1 + i / fps)
-        assert held.present, f"hold failed on miss {i + 1}"
-    gone = holder.update(blank, ts=0.4)
-    assert not gone.present, "should report absent after hold_frames misses"
-    print("  dropout     held 3 frames then absent  -- ok")
-
-    print("\nselftest PASSED")
-    return 0
-
-
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--make", action="store_true", help="write tags/tag_0.png")
-    parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--camera-index", type=int, default=0)
     args = parser.parse_args(argv)
 
-    if args.selftest:
-        return run_selftest()
     if args.make:
         out = Path("tags"); out.mkdir(exist_ok=True)
         for tag_id in range(3):

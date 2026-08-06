@@ -17,7 +17,11 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
-from phorce_iface import MAX_MOTION_ID, MIN_MOTION_ID
+if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.phorce_iface import MAX_MOTION_ID, MIN_MOTION_ID
 
 LOGGER = logging.getLogger("slot_table")
 

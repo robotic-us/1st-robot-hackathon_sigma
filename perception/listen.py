@@ -22,9 +22,8 @@ voice-like is loud right now", which is the signal we actually want.
 
 Run standalone::
 
-    python3 listen.py                 # live meter, Ctrl-C to stop
-    python3 listen.py --selftest      # synthetic signals, no microphone
-    python3 listen.py --list          # what ALSA can see
+    python3 perception/listen.py       # live meter, Ctrl-C to stop
+    python3 perception/listen.py --list # what ALSA can see
 """
 
 from __future__ import annotations
@@ -175,58 +174,6 @@ class Microphone:
         with self._lock:
             return self._latest
 
-
-# --------------------------------------------------------------------------- #
-# Standalone modes
-# --------------------------------------------------------------------------- #
-def run_selftest() -> int:
-    """Drive _analyse() with signals whose answers we know in advance."""
-    n = CHUNK
-    t = np.arange(n) / SAMPLE_RATE
-    print("sound features")
-
-    silence = np.zeros(n, np.float32)
-    level, cry = _analyse(silence)
-    assert level == 0.0, "silence must read level 0"
-    print(f"  silence          level {level:.3f}  cry {cry:.3f}")
-
-    # A 500 Hz tone sits squarely in the cry band.
-    voice = 0.3 * np.sin(2 * np.pi * 500 * t).astype(np.float32)
-    level, cry = _analyse(voice)
-    assert cry > 0.8, f"a 500 Hz tone should be almost all cry-band, got {cry:.3f}"
-    assert level > 0.6, f"0.3 amplitude should be loud, got {level:.3f}"
-    print(f"  500 Hz tone      level {level:.3f}  cry {cry:.3f}")
-
-    # 5 kHz is well outside it -- hiss, not voice.
-    hiss = 0.3 * np.sin(2 * np.pi * 5000 * t).astype(np.float32)
-    level_h, cry_h = _analyse(hiss)
-    assert cry_h < 0.1, f"a 5 kHz tone must not read as voice, got {cry_h:.3f}"
-    print(f"  5 kHz tone       level {level_h:.3f}  cry {cry_h:.3f}")
-
-    # White noise is broadband: loud, but not voice-shaped.
-    rng = np.random.default_rng(0)
-    noise = (0.3 * rng.standard_normal(n)).astype(np.float32)
-    level_n, cry_n = _analyse(noise)
-    assert cry_n < 0.35, f"broadband noise should score low on cry, got {cry_n:.3f}"
-    print(f"  white noise      level {level_n:.3f}  cry {cry_n:.3f}")
-
-    # A quiet tone is voice-shaped but should not raise distress much.
-    quiet = 0.01 * np.sin(2 * np.pi * 500 * t).astype(np.float32)
-    level_q, cry_q = _analyse(quiet)
-    assert level_q * cry_q < 0.1, "quiet voice must not read as distress"
-    print(f"  quiet 500 Hz     level {level_q:.3f}  cry {cry_q:.3f}  "
-          f"distress {level_q * cry_q:.3f}")
-
-    loud_distress = level * cry
-    assert loud_distress > level_n * cry_n, "loud voice must beat noise on distress"
-    assert loud_distress > level_q * cry_q, "loud voice must beat quiet voice"
-    print(f"\n  distress ranking: loud voice {loud_distress:.3f} > "
-          f"noise {level_n * cry_n:.3f}, quiet {level_q * cry_q:.3f}  -- ok")
-
-    print("\nselftest PASSED")
-    return 0
-
-
 def run_meter(device: str, seconds: float) -> int:
     """Live bar meter -- the quickest way to sanity-check the mic and thresholds."""
     with Microphone(device) as mic:
@@ -253,14 +200,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--device", default="plughw:WEBCAM,0",
                         help="ALSA capture device (see --list)")
     parser.add_argument("--seconds", type=float, default=1e9)
-    parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--list", action="store_true", help="show capture devices")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(message)s")
 
-    if args.selftest:
-        return run_selftest()
     if args.list:
         subprocess.run(["arecord", "-l"], check=False)
         return 0

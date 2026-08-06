@@ -26,8 +26,8 @@ timer (one motion at a time, no thrashing).
 
 Run it::
 
-    python3 care.py --mock                  # no robot, no ROS -- start here
-    python3 care.py --mock --dream          # + DREAM-Chunk candidate matching
+    python3 apps/care.py --mock             # no robot, no ROS -- start here
+    python3 apps/care.py --mock --dream          # + DREAM-Chunk candidate matching
     python3 care.py                         # real robot; check nobody is near it
 """
 
@@ -40,10 +40,14 @@ from typing import Optional
 
 import cv2
 
-from slot_table import load_slot_table
-from listen import Microphone
-from phorce_iface import PlayOutcome, make_robot
-from sense import Reading, Sense, draw
+if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.slot_table import load_slot_table
+from perception.listen import Microphone
+from core.phorce_iface import PlayOutcome, make_robot
+from perception.sense import Reading, Sense, draw
 from sigma import config as face_config
 from sigma.pipeline import SigmaPipeline
 

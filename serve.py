@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
-"""DREAM-Chunk, live in a web browser.
+"""DREAM-Chunk plus the evidence-report cradle machine, live in a web browser.
 
-One stdlib HTTP server, four endpoints:
+One stdlib HTTP server:
 
     /            the dashboard (web/index.html -- canvas cradle sim + panels)
     /events      Server-Sent Events: the whole state as JSON, ~20 Hz
     /frame       MJPEG camera stream with the tag overlay
-    /slots       the motion-slot dictionary, once
-    /jam /play   controls: toggle the jam, play a slot by hand
+    /slots       the DREAM motion-slot dictionary, once
+    /motions     the M01-M50 library from the evidence report, once
+    /jam /play   controls: toggle the jam, play a DREAM slot by hand
+    /motion      queue a library command by id (R grade needs --research)
+    /auto        the report's state machine on/off (?set=on|off)
 
-The browser gets everything DREAM-Chunk knows, as it knows it:
-
-    * the cradle, animated from the same joint angles RViz gets
-    * a dashed "dream ghost" -- where the dream says the plate should be.
-      Jam the cradle and you watch the ghost sail on without it: that gap IS
-      the divergence signal, drawn.
-    * every decision's candidate arcs and cost table
-    * the slot dictionary, with candidates/winner/playing highlighted
+Motion behaviour follows docs/infant_robotic_cradle_evidence_report_ko.pdf
+(see cradle.py): the default is *not moving*.  The tag is a **state card**
+standing in for the infant sensors: WHICH tag you show is the state -- tag_0
+calm, tag_1 fussing, tag_2 crying (print them with ``python3 perception/tag.py --make``)
+-- losing the tag is a safety-gate failure, and how the tag moves means
+nothing.  The CradleMachine runs the report's ladder over that state: gate
+first, sleep taper, quiet hold, 30 s sway trials with improvement checks and
+caregiver alerts.  The engine's plate offset drives the same joint angles the
+canvas and RViz already animate; serve.py itself stays 2D and leaves the 3D
+view to the viz.  (--dream-auto restores the old tag-shake -> DREAM-slot
+autopilot instead.)
 
 No new dependencies: SSE and MJPEG are both plain HTTP, which is why the
 stdlib server is enough.  Open it from any laptop on the same network.
@@ -25,7 +31,8 @@ Run::
 
     python3 serve.py               # webcam + tag, http://<jetson-ip>:8080
     python3 serve.py --fake        # no camera: a synthetic tag drives the loop
-    python3 serve.py --selftest    # endpoint checks, headless, ~5 s
+    python3 serve.py --research    # unlock the R-grade modes (sim only!)
+    python3 tests.py               # all suites, incl. these endpoints
 """
 
 from __future__ import annotations
@@ -44,21 +51,32 @@ from urllib.parse import parse_qs, urlparse
 
 import cv2
 
-from demo import PLAY_DT, Brain, load_chunks, plate_point
-from slot_table import load_slot_table
-from tag import TagTracker, draw_overlay, synthetic_frame
+from core.cradle import LIBRARY_BY_ID, CradleMachine, MotionEngine, catalog
+from apps.demo import AXIS0, PIVOT, PLAY_DT, Brain, load_chunks, plate_point
+from core.slot_table import load_slot_table
+from perception.tag import TagTracker, draw_overlay, synthetic_frame
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
+
+# Arm length from CAD: how far the plate travels per radian of arm angle,
+# so the engine's millimetre offsets become the joint angle the viz draws.
+LEVER_M = float(PIVOT[2] - AXIS0[2])
 
 
 # --------------------------------------------------------------------------- #
 # Shared state between the sensor loop and the HTTP handlers
 # --------------------------------------------------------------------------- #
 class Shared:
-    def __init__(self, brain: Brain, chunks, table) -> None:
+    def __init__(self, brain: Brain, chunks, table,
+                 allow_research: bool = False, dream_auto: bool = False) -> None:
         self.brain = brain
         self.chunks = chunks
         self.table = table
+        self.engine = MotionEngine(allow_research=allow_research)
+        self.machine = CradleMachine(self.engine)
+        self.dream_auto = dream_auto
+        if dream_auto:
+            self.machine.auto = False   # one autopilot at a time
         self.lock = threading.Lock()
         self.state_json = b"{}"
         self.jpeg: Optional[bytes] = None
@@ -66,6 +84,7 @@ class Shared:
         self.decision_seq = 0
         self.decision: Optional[dict] = None
         self.play_request: Optional[int] = None
+        self.motion_request: Optional[str] = None
         self.stop = threading.Event()
 
     def log(self, text: str) -> None:
@@ -91,14 +110,34 @@ def slot_catalog(shared: Shared) -> list[dict]:
 # --------------------------------------------------------------------------- #
 # The sensor loop -- same Brain as demo.py, plus state/JPEG publishing
 # --------------------------------------------------------------------------- #
+# The tag is a state card, not a puppet: WHICH tag is in view is the infant
+# state, and waving it means nothing.  Unknown ids read as calm.
+TAG_LEVEL = {0: 0.0, 1: 0.30, 2: 0.60}   # calm / fussing / crying
+
+
+def tag_level(reading) -> float:
+    return TAG_LEVEL.get(reading.tag_id, 0.0) if reading.present else 0.0
+
+
+# The fake camera acts out a nursery shift with the cards: calm, a fuss the
+# trial soothes (sleep taper), calm, a cry that escalates, calm again.
+FAKE_SCRIPT = ((20.0, 0), (25.0, 1), (75.0, 0), (35.0, 2), (90.0, 0))
+FAKE_CYCLE_S = sum(seconds for seconds, _ in FAKE_SCRIPT)
+
+
 def fake_frame(t: float):
-    """A synthetic tag that wanders and periodically gets shaken."""
-    drift = 0.65 * math.sin(2 * math.pi * t / 24.0)
-    shake_env = max(0.0, math.sin(2 * math.pi * t / 17.0 - 1.2)) ** 2
-    jitter = 0.10 * shake_env * math.sin(2 * math.pi * 3.2 * t)
-    x = max(-0.9, min(0.9, drift + jitter))
+    """A synthetic state card that drifts gently; the drift carries no meaning."""
+    into = t % FAKE_CYCLE_S
+    tag_id = FAKE_SCRIPT[-1][1]
+    for seconds, candidate in FAKE_SCRIPT:
+        if into < seconds:
+            tag_id = candidate
+            break
+        into -= seconds
+    x = 0.5 * math.sin(2 * math.pi * t / 60.0)
     y = 0.1 * math.sin(t * 0.7)
-    return cv2.cvtColor(synthetic_frame(640, 480, x, y, 120), cv2.COLOR_GRAY2BGR)
+    return cv2.cvtColor(synthetic_frame(640, 480, x, y, 120, tag_id=tag_id),
+                        cv2.COLOR_GRAY2BGR)
 
 
 def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros) -> None:
@@ -127,15 +166,19 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros) -> None:
         reading = tracker.update(frame, now)
         brain.tick(now)
 
-        # Manual play from the browser wins over the automatic decision.
+        # Manual requests from the browser win over any automatic decision.
         with shared.lock:
             wanted, shared.play_request = shared.play_request, None
+            motion_req, shared.motion_request = shared.motion_request, None
+        if motion_req is not None:
+            ok, msg = shared.engine.command(motion_req, now)
+            shared.log(msg if ok else "refused: " + msg)
         slot = None
         if wanted is not None and brain.playing is None:
             slot = force_play(brain, shared.chunks, wanted, now)
             if slot:
                 shared.log(f"slot {slot} played by hand")
-        if slot is None:
+        if slot is None and shared.dream_auto:
             slot = brain.decide(reading, now)
             if slot is not None:
                 shared.decision_seq += 1
@@ -143,6 +186,20 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros) -> None:
                 top = brain.last_ranked[0]
                 shared.log(f"slot {slot} chosen (cost {top.total:.2f}, "
                            f"dob {brain.dob()[0]:.1f}A)")
+
+        # The evidence-report ladder: the tag's IDENTITY is the infant state
+        # (tag_0 calm, tag_1 fuss, tag_2 cry), a lost tag is a gate failure,
+        # and tag motion is deliberately ignored.  The engine's plate offset
+        # becomes the arm angle the canvas and RViz animate.
+        shared.machine.tick(now, reading.present, tag_level(reading), brain.jam)
+        for line in shared.machine.events:
+            shared.log(line)
+        shared.machine.events.clear()
+        shared.engine.tick(now)
+        if brain.playing is None and not brain.jam and shared.engine.active:
+            ap_mm, ml_mm, _ = shared.engine.offsets_mm()
+            theta = (ap_mm + ml_mm) / 1000.0 / LEVER_M
+            brain.pose = [theta] * 4
 
         report = brain.monitor.latest()
         if report.diverged and not was_diverged:
@@ -215,11 +272,13 @@ def build_state(shared: Shared, brain: Brain, reading, now: float) -> dict:
     return {
         "t": round(now, 3),
         "pose": [round(v, 4) for v in brain.pose],
-        "tag": {"present": reading.present, "x": round(reading.x, 3),
+        "tag": {"present": reading.present, "id": reading.tag_id,
+                "level": tag_level(reading), "x": round(reading.x, 3),
                 "motion": round(reading.motion, 3)},
         "jam": brain.jam,
         "dob": brain.dob()[0],
         "playing": playing,
+        "cradle": {**shared.engine.snapshot(), **shared.machine.snapshot(now)},
         "monitor": {
             "slot": report.active_slot, "err": round(report.error_rad, 4),
             "rms": round(report.rms_rad, 4), "diverged": report.diverged,
@@ -259,15 +318,33 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             elif url.path == "/slots":
                 self._json(slot_catalog(self.shared))
+            elif url.path == "/motions":
+                self._json(catalog())
+            elif url.path == "/motion":
+                self._motion(url)
+            elif url.path == "/auto":
+                query = parse_qs(url.query).get("set", [""])[0]
+                if query in ("on", "off"):
+                    self.shared.machine.auto = query == "on"
+                else:
+                    self.shared.machine.auto = not self.shared.machine.auto
+                state = "ON" if self.shared.machine.auto else "off"
+                self.shared.log(f"cradle machine auto {state}")
+                self._json({"auto": self.shared.machine.auto})
             elif url.path == "/jam":
                 self.shared.brain.jam = not self.shared.brain.jam
                 self.shared.log("JAM " + ("ON -- dob 2.5A" if self.shared.brain.jam else "off"))
                 self._json({"jam": self.shared.brain.jam})
             elif url.path == "/play":
                 slot = int(parse_qs(url.query).get("slot", ["0"])[0])
-                with self.shared.lock:
-                    self.shared.play_request = slot
-                self._json({"requested": slot})
+                if self.shared.engine.active:
+                    # one axis, one pattern at a time (report 5.1)
+                    self._json({"requested": None,
+                                "msg": "motion engine active -- /motion?id=M01 first"})
+                else:
+                    with self.shared.lock:
+                        self.shared.play_request = slot
+                    self._json({"requested": slot})
             elif url.path == "/events":
                 self._sse()
             elif url.path == "/frame":
@@ -276,6 +353,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(404)
         except (BrokenPipeError, ConnectionResetError):
             pass   # a browser tab closed; entirely normal
+
+    def _motion(self, url) -> None:
+        """Validate here, so the browser hears why; execute on the sensor loop."""
+        mid = parse_qs(url.query).get("id", [""])[0].upper()
+        m = LIBRARY_BY_ID.get(mid)
+        if m is None:
+            self._json({"ok": False, "msg": f"unknown motion {mid or '?'}"})
+        elif m.grade == "R" and not self.shared.engine.allow_research:
+            self._json({"ok": False, "msg": f"{m.id} {m.name} is research-only "
+                                            "(R) -- start with --research"})
+        else:
+            with self.shared.lock:
+                self.shared.motion_request = mid
+            self._json({"ok": True, "queued": mid, "name": m.name,
+                        "grade": m.grade})
 
     def _sse(self) -> None:
         self.send_response(200)
@@ -319,7 +411,7 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
     ros = None
     if use_ros:
         try:
-            from demo import RosSide
+            from apps.demo import RosSide
             ros = RosSide()
         except Exception as exc:   # ROS absent or misconfigured: not fatal
             shared.log(f"RViz mirroring off ({type(exc).__name__})")
@@ -330,57 +422,6 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     return server, worker, ros
 
-
-# --------------------------------------------------------------------------- #
-def run_selftest() -> int:
-    from urllib.request import urlopen
-
-    shared = Shared(Brain(load_chunks(), load_slot_table("slots.json")),
-                    load_chunks(), load_slot_table("slots.json"))
-    server, worker, _ = start(shared, port=0, camera_index=0, fake=True, use_ros=False)
-    port = server.server_address[1]
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{port}"
-    time.sleep(1.0)
-
-    page = urlopen(base + "/", timeout=5).read()
-    assert b"DREAM-Chunk" in page, "dashboard page must serve"
-    print(f"  GET /        {len(page)} bytes  -- ok")
-
-    slots = json.loads(urlopen(base + "/slots", timeout=5).read())
-    assert len(slots) == 10 and slots[0]["id"] == 1, f"expected 10 slots, got {len(slots)}"
-    print(f"  GET /slots   {len(slots)} slots, e.g. {slots[2]['name']} "
-          f"{slots[2]['target_deg']} deg  -- ok")
-
-    with urlopen(base + "/events", timeout=5) as stream:
-        line = stream.readline().decode()
-        assert line.startswith("data: "), f"not SSE: {line[:40]!r}"
-        state = json.loads(line[6:])
-    for key in ("pose", "tag", "monitor", "jam", "events"):
-        assert key in state, f"state missing {key!r}"
-    print(f"  GET /events  keys ok, tag x={state['tag']['x']:+.2f}  -- ok")
-
-    assert json.loads(urlopen(base + "/jam", timeout=5).read())["jam"] is True
-    assert json.loads(urlopen(base + "/jam", timeout=5).read())["jam"] is False
-    print("  GET /jam     toggles  -- ok")
-
-    urlopen(base + "/play?slot=9", timeout=5).read()
-    deadline = time.time() + 3.0
-    played = False
-    while time.time() < deadline and not played:
-        with urlopen(base + "/events", timeout=5) as stream:
-            state = json.loads(stream.readline().decode()[6:])
-        played = state.get("playing", {}) and state["playing"]["slot"] == 9
-        time.sleep(0.1)
-    assert played, "manual /play?slot=9 must start playing"
-    print(f"  GET /play    slot 9 playing, dream_theta={state['playing']['dream_theta']}  -- ok")
-
-    shared.stop.set()
-    server.shutdown()
-    print("\nselftest PASSED")
-    return 0
-
-
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, default=8080)
@@ -389,14 +430,17 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="no camera: a synthetic tag drives the loop")
     parser.add_argument("--no-ros", action="store_true",
                         help="do not mirror joints to RViz")
-    parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--research", action="store_true",
+                        help="unlock the R-grade library modes (sim only)")
+    parser.add_argument("--dream-auto", action="store_true",
+                        help="old autopilot: tag shake picks a DREAM slot "
+                             "instead of the report's cradle machine")
     args = parser.parse_args(argv)
-    if args.selftest:
-        return run_selftest()
 
     chunks = load_chunks()
     table = load_slot_table("slots.json")
-    shared = Shared(Brain(chunks, table), chunks, table)
+    shared = Shared(Brain(chunks, table), chunks, table,
+                    allow_research=args.research, dream_auto=args.dream_auto)
     server, worker, ros = start(shared, args.port, args.camera_index,
                                 args.fake, use_ros=not args.no_ros)
     print(f"SIGMA dashboard:  http://{lan_ip()}:{args.port}   "

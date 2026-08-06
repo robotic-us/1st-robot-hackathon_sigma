@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 URDF="cad/sigma.urdf"
-[ -f "$URDF" ] || { echo "missing $URDF -- run: python3 make_urdf.py"; exit 1; }
+[ -f "$URDF" ] || { echo "missing $URDF -- run: python3 tools/make_urdf.py"; exit 1; }
 
 ros2 run robot_state_publisher robot_state_publisher \
     --ros-args -p robot_description:="$(cat "$URDF")" &
