@@ -79,7 +79,9 @@ def main(argv: list[str] | None = None) -> int:
     for stale in out.glob("motion_*.csv"):
         stale.unlink()
 
-    l_traj = max(1, int(round(args.duration_s * 1000)))  # pcm records at 1 kHz
+    # Vigour maps to speed: a big soothing sway is a faster one, and the
+    # settle glides. --duration-s is the fallback for unknown amplitudes.
+    duration_by_amplitude = {"small": 2.2, "medium": 1.6, "large": 1.1, "settle": 2.8}
     written = 0
     for key, entry in sorted(raw.get("slots", {}).items(), key=lambda kv: int(kv[0])):
         slot_id = int(key)
@@ -88,10 +90,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  slot {slot_id}: no end_pose -- skipped")
             continue
         name = slot_name(entry, slot_id)
+        duration = duration_by_amplitude.get(str(entry.get("amplitude")), args.duration_s)
+        l_traj = max(1, int(round(duration * 1000)))  # pcm records at 1 kHz
         path = out / f"motion_{slot_id:02d}.csv"
         write_motion(path, slot_id, name, end_pose, l_traj, args.s0, args.sd)
         degrees = ", ".join(f"{math.degrees(v):+.2f}" for v in end_pose)
-        print(f"  {path}  {name:<15} -> [{degrees}] deg over {args.duration_s:.2f}s")
+        print(f"  {path}  {name:<15} -> [{degrees}] deg over {duration:.2f}s")
         written += 1
 
     print(f"\n{written} motion files in {out}/")

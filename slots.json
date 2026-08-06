@@ -3,116 +3,206 @@
     "Slot table: our own description of what each pre-recorded motion does.",
     "",
     "WHY THIS FILE EXISTS: slot internals cannot be read back from the robot.",
-    "'phorce list' tells you a slot's id and name and nothing else -- not its",
-    "direction, not its size, not the pose it starts from. So we describe them",
-    "here, and the decider picks a slot by matching this description.",
+    "'phorce list' tells you a slot's id and name and nothing else. So we",
+    "describe them here, and the decision layer picks a slot by matching this.",
     "",
-    "LAYOUT: a 3x3 grid (3 directions x 3 amplitudes) in slots 1-9, plus slot 10,",
-    "the settle/rest motion. Slots 1-50 exist on the robot; we use 10.",
+    "POSES (radians, axes 0-3): derived from the CAD mechanism, not taught.",
+    "The robot is a parallelogram rocker -- four arms swing together about Y",
+    "and the platform rides level on bearings at the arm tops. So every pose",
+    "commands the SAME angle on all four axes: +x sway is positive, -x is",
+    "negative, and centre motions return to 0. Giving the axes different",
+    "angles would fight the closed linkage (and visibly detaches the platform",
+    "in the RViz model, which cuts the loop).",
     "",
-    "THE POSES ARE PLACEHOLDERS -- every slot below has \"placeholder\": true and",
-    "the decider logs a warning at startup while any remain. Fill them in after",
-    "teaching the motions in phorce Studio:",
-    "  1. Teach the motion (servo off, move by hand, record, save to the slot).",
-    "  2. Read the joint angles at the START of the recording -> start_pose.",
-    "  3. Read the joint angles at the END of the recording  -> end_pose.",
-    "     ('phorce-console' shows live axis positions; axis[i].pos.)",
-    "  4. Paste them here in radians, in the order given by \"axes\", and delete",
-    "     that slot's \"placeholder\" flag.",
-    "",
-    "start_pose is what matters most: the decider prefers the slot whose start",
-    "pose is closest to where the robot actually is, so transitions stay smooth.",
-    "",
-    "ADDING MORE SLOTS: any number of slots may share a (direction, amplitude)",
-    "cell. When several match, the pose score picks between them -- so teaching",
-    "two variants of 'left/large' from different rest postures is useful, not a",
-    "conflict.",
-    "",
-    "\"axes\" lists which of the robot's 12 axes we use, and fixes the order of",
-    "every start_pose / end_pose array in this file."
+    "Still 'placeholder: true' because nothing has been taught on the real",
+    "robot -- once phorce Studio motions exist, replace these with read-back",
+    "angles and drop the flag."
   ],
-
-  "axes": [0, 1, 2, 3],
-
+  "axes": [
+    0,
+    1,
+    2,
+    3
+  ],
   "slots": {
     "1": {
       "desc": "left, small sway",
       "direction": "left",
       "amplitude": "small",
-      "start_pose": [-0.15, -0.10, 0.20, 0.0],
-      "end_pose": [-0.25, -0.13, 0.22, 0.0],
+      "start_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end_pose": [
+        -0.12,
+        -0.12,
+        -0.12,
+        -0.12
+      ],
       "placeholder": true
     },
     "2": {
       "desc": "left, medium sway",
       "direction": "left",
       "amplitude": "medium",
-      "start_pose": [-0.15, -0.10, 0.20, 0.0],
-      "end_pose": [-0.35, -0.16, 0.24, 0.0],
+      "start_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end_pose": [
+        -0.22,
+        -0.22,
+        -0.22,
+        -0.22
+      ],
       "placeholder": true
     },
     "3": {
       "desc": "left, large sway (answers strong stirring on the left)",
       "direction": "left",
       "amplitude": "large",
-      "start_pose": [-0.15, -0.10, 0.20, 0.0],
-      "end_pose": [-0.50, -0.21, 0.27, 0.0],
+      "start_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end_pose": [
+        -0.35,
+        -0.35,
+        -0.35,
+        -0.35
+      ],
       "placeholder": true
     },
     "4": {
       "desc": "center, small rock",
       "direction": "center",
       "amplitude": "small",
-      "start_pose": [0.0, -0.10, 0.20, 0.0],
-      "end_pose": [0.0, -0.13, 0.22, 0.0],
+      "start_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
       "placeholder": true
     },
     "5": {
       "desc": "center, medium rock",
       "direction": "center",
       "amplitude": "medium",
-      "start_pose": [0.0, -0.10, 0.20, 0.0],
-      "end_pose": [0.0, -0.16, 0.24, 0.0],
+      "start_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
       "placeholder": true
     },
     "6": {
       "desc": "center, large rock (answers strong stirring, centered)",
       "direction": "center",
       "amplitude": "large",
-      "start_pose": [0.0, -0.10, 0.20, 0.0],
-      "end_pose": [0.0, -0.21, 0.27, 0.0],
+      "start_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
       "placeholder": true
     },
     "7": {
       "desc": "right, small sway",
       "direction": "right",
       "amplitude": "small",
-      "start_pose": [0.15, -0.10, 0.20, 0.0],
-      "end_pose": [0.25, -0.13, 0.22, 0.0],
+      "start_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end_pose": [
+        0.12,
+        0.12,
+        0.12,
+        0.12
+      ],
       "placeholder": true
     },
     "8": {
       "desc": "right, medium sway",
       "direction": "right",
       "amplitude": "medium",
-      "start_pose": [0.15, -0.10, 0.20, 0.0],
-      "end_pose": [0.35, -0.16, 0.24, 0.0],
+      "start_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end_pose": [
+        0.22,
+        0.22,
+        0.22,
+        0.22
+      ],
       "placeholder": true
     },
     "9": {
       "desc": "right, large sway (answers strong stirring on the right)",
       "direction": "right",
       "amplitude": "large",
-      "start_pose": [0.15, -0.10, 0.20, 0.0],
-      "end_pose": [0.50, -0.21, 0.27, 0.0],
+      "start_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end_pose": [
+        0.35,
+        0.35,
+        0.35,
+        0.35
+      ],
       "placeholder": true
     },
     "10": {
       "desc": "settle / soothe-down to rest -- the last step of the wind-down ramp",
       "direction": "center",
       "amplitude": "settle",
-      "start_pose": [0.0, -0.10, 0.20, 0.0],
-      "end_pose": [0.0, 0.0, 0.0, 0.0],
+      "start_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "end_pose": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
       "placeholder": true
     }
   }

@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SIGMA · DREAM-Chunk live</title>
+<style>
+  :root {
+    --bg:#14161b; --panel:#1c1f26; --edge:#2a2e38; --ink:#d7dae2; --dim:#8a90a0;
+    --green:#3ddc84; --red:#e5484d; --amber:#f0b429; --blue:#4c9aff;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink);
+         font:14px/1.45 "Segoe UI",system-ui,sans-serif; padding:14px; }
+  h1 { font-size:17px; margin-bottom:10px; }
+  h1 small { color:var(--dim); font-weight:400; margin-left:8px; }
+  #conn { float:right; font-size:12px; color:var(--dim); }
+  main { display:grid; grid-template-columns:400px 1fr 330px; gap:12px; }
+  .panel { background:var(--panel); border:1px solid var(--edge);
+           border-radius:8px; padding:10px; }
+  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+              color:var(--dim); margin-bottom:8px; }
+  #cam { width:100%; border-radius:4px; background:#000; }
+  .bar { height:10px; background:#262a33; border-radius:5px; overflow:hidden;
+         margin:4px 0 8px; }
+  .bar i { display:block; height:100%; background:var(--blue); width:0;
+           transition:width .1s linear; }
+  #cradle { width:100%; background:#101217; border-radius:4px; }
+  #jam { width:100%; padding:12px; font-size:15px; font-weight:700;
+         border:0; border-radius:6px; background:#333845; color:var(--ink);
+         cursor:pointer; margin-bottom:10px; }
+  #jam.on { background:var(--red); color:#fff; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  td,th { padding:3px 5px; text-align:right; border-bottom:1px solid var(--edge); }
+  th { color:var(--dim); font-weight:600; }
+  td:first-child, th:first-child { text-align:left; }
+  tr.win td { color:var(--green); font-weight:700; }
+  tr.veto td { color:var(--red); }
+  #slots { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-top:12px; }
+  .slot { background:var(--panel); border:1.5px solid var(--edge); border-radius:6px;
+          padding:7px 9px; cursor:pointer; font-size:12px; transition:border .15s; }
+  .slot b { display:block; font-size:13px; }
+  .slot small { color:var(--dim); }
+  .slot.cand   { border-color:var(--blue); }
+  .slot.win    { border-color:var(--green); }
+  .slot.play   { border-color:var(--green); background:#1d2b22;
+                 box-shadow:0 0 8px #3ddc8440; }
+  .slot:hover  { border-color:var(--amber); }
+  #log { margin-top:12px; font:12px/1.7 ui-monospace,monospace; color:var(--dim);
+         max-height:130px; overflow-y:auto; }
+  #log div:first-child { color:var(--ink); }
+  .kv { display:flex; justify-content:space-between; font-size:12.5px;
+        color:var(--dim); margin:2px 0; }
+  .kv b { color:var(--ink); }
+  #divbar i { background:var(--amber); }
+  #divbar.bad i { background:var(--red); }
+</style>
+</head>
+<body>
+<h1>SIGMA · DREAM-Chunk <small>dreamed-state reactive action matching, live</small>
+    <span id="conn">connecting…</span></h1>
+<main>
+  <section class="panel">
+    <h2>Camera · AprilTag</h2>
+    <img id="cam" src="/frame" alt="camera">
+    <div class="kv"><span>tag x</span><b id="tagx">–</b></div>
+    <div class="bar"><i id="shakebar"></i></div>
+    <div class="kv"><span>shake → target amplitude</span><b id="shake">–</b></div>
+  </section>
+
+  <section class="panel">
+    <h2>Cradle — the sim <span style="color:var(--dim)">(solid = measured · dashed = the dream)</span></h2>
+    <canvas id="cradle" width="640" height="520"></canvas>
+    <div class="bar"><i id="playbar" style="background:var(--green)"></i></div>
+    <div class="kv"><span id="playname">idle</span><b id="pose">–</b></div>
+  </section>
+
+  <section class="panel">
+    <h2>DREAM-Chunk internals</h2>
+    <button id="jam">JAM the cradle (j)</button>
+    <div class="kv"><span>divergence |measured − dreamed|</span><b id="err">–</b></div>
+    <div class="bar" id="divbar"><i></i></div>
+    <div class="kv"><span>external force dob_a</span><b id="dob">–</b></div>
+    <div class="kv"><span>dream rms (ASAP residual)</span><b id="rms">–</b></div>
+    <table id="rank">
+      <thead><tr><th>slot</th><th>cost</th><th>resist</th><th>contin</th>
+                 <th>task</th><th></th></tr></thead>
+      <tbody><tr><td colspan="6" style="text-align:center;color:var(--dim)">
+        shake the tag to trigger a decision</td></tr></tbody>
+    </table>
+  </section>
+</main>
+
+<div id="slots"></div>
+<div class="panel" id="log" style="margin-top:12px">waiting for events…</div>
+
+<script>
+"use strict";
+/* ---- geometry, mm, straight from make_urdf's report ---------------------- */
+const COLS = [60, 260];                 // actuator columns (x), both at z=50
+const ARM  = [-6.4, 280.8];             // bearing relative to an actuator, at rest
+const PLATE = {x0:-78, x1:374, z0:342, z1:450};
+const HANGERS = [63.6, 263.6];          // hanger bar x positions
+const BREST = [COLS[0]+ARM[0], 50+ARM[1]];   // bearing world position at rest
+
+/* ---- state --------------------------------------------------------------- */
+let S = null;                 // latest server state
+let slots = [];               // /slots catalog
+let lastSeq = -1, arcs = null, arcsAt = 0;
+
+const $ = id => document.getElementById(id);
+
+fetch("/slots").then(r => r.json()).then(list => {
+  slots = list;
+  $("slots").innerHTML = list.map(s =>
+    `<div class="slot" id="slot${s.id}" onclick="fetch('/play?slot=${s.id}')">
+       <b>${s.id} · ${s.name}</b>
+       <small>${s.target_deg}° · ${s.duration}s · click to play</small>
+     </div>`).join("");
+});
+
+const es = new EventSource("/events");
+es.onopen  = () => $("conn").textContent = "live";
+es.onerror = () => $("conn").textContent = "reconnecting…";
+es.onmessage = e => {
+  S = JSON.parse(e.data);
+  if (S.decision && S.decision.seq !== lastSeq) {
+    lastSeq = S.decision.seq;
+    arcs = S.decision; arcsAt = performance.now();
+    showRanking(S.decision);
+  }
+  updatePanels();
+};
+
+$("jam").onclick = () => fetch("/jam");
+document.addEventListener("keydown", e => { if (e.key === "j") fetch("/jam"); });
+
+function updatePanels() {
+  $("tagx").textContent = S.tag.present ? S.tag.x.toFixed(2) : "no tag";
+  $("shake").textContent = S.tag.motion.toFixed(2);
+  $("shakebar").style.width = (S.tag.motion * 100) + "%";
+
+  $("jam").classList.toggle("on", S.jam);
+  $("jam").textContent = S.jam ? "JAMMED — release (j)" : "JAM the cradle (j)";
+  $("dob").textContent = S.dob.toFixed(1) + " A";
+  $("err").textContent = S.monitor.err.toFixed(3) + " rad"
+                       + (S.monitor.diverged ? "  ⚠ DIVERGED" : "");
+  $("rms").textContent = S.monitor.rms.toFixed(3) + " rad";
+  const frac = Math.min(1, S.monitor.err / (S.monitor.threshold * 2));
+  $("divbar").firstElementChild.style.width = (frac * 100) + "%";
+  $("divbar").classList.toggle("bad", S.monitor.diverged);
+
+  $("playbar").style.width = (S.playing ? S.playing.progress * 100 : 0) + "%";
+  $("playname").textContent = S.playing
+      ? `playing slot ${S.playing.slot} · ${S.playing.name}` : "idle";
+  $("pose").textContent = "θ " + S.pose[0].toFixed(2) + " rad";
+
+  for (const s of slots) {
+    const el = $("slot" + s.id);
+    if (!el) continue;
+    el.className = "slot";
+    if (arcs && performance.now() - arcsAt < 5000) {
+      const r = arcs.ranked.find(r => r.slot === s.id);
+      if (r) el.classList.add(r.slot === arcs.chosen ? "win" : "cand");
+    }
+    if (S.playing && S.playing.slot === s.id) el.classList.add("play");
+  }
+  $("log").innerHTML = S.events.map(t => `<div>${t}</div>`).join("");
+}
+
+function showRanking(d) {
+  $("rank").querySelector("tbody").innerHTML = d.ranked.map(r => `
+    <tr class="${r.vetoed ? "veto" : (r.slot === d.chosen ? "win" : "")}">
+      <td>${r.slot}</td><td>${r.vetoed ? "—" : r.cost.toFixed(2)}</td>
+      <td>${r.resist.toFixed(2)}</td><td>${r.contin.toFixed(2)}</td>
+      <td>${r.task.toFixed(2)}</td>
+      <td>${r.vetoed ? "VETO" : (r.slot === d.chosen ? "PLAY" : "")}</td>
+    </tr>`).join("");
+}
+
+/* ---- the cradle, drawn --------------------------------------------------- */
+const cv = $("cradle"), cx2 = cv.getContext("2d");
+const SC = 1.0, OX = 120, OY = 496;          // mm -> px, z up
+const px = x => OX + x * SC, py = z => OY - z * SC;
+
+function bearing(theta) {                    // world bearing offset for angle
+  const c = Math.cos(theta), s = Math.sin(theta);
+  return [c * ARM[0] + s * ARM[1], -s * ARM[0] + c * ARM[1]];
+}
+
+function draw() {
+  requestAnimationFrame(draw);
+  if (!S) return;
+  const th = S.pose[0];
+  const b = bearing(th);
+  const t = [COLS[0] + b[0] - BREST[0], 50 + b[1] - BREST[1]];  // coupler shift
+
+  cx2.clearRect(0, 0, cv.width, cv.height);
+
+  // dream arcs, fading out
+  if (arcs) {
+    const age = (performance.now() - arcsAt) / 1000;
+    if (age < 5) {
+      const fade = Math.max(0, 1 - age / 5);
+      for (const r of arcs.ranked) {
+        cx2.beginPath();
+        r.arc.forEach((p, i) => i ? cx2.lineTo(px(p[0]), py(p[1]))
+                                  : cx2.moveTo(px(p[0]), py(p[1])));
+        cx2.lineWidth = r.slot === arcs.chosen ? 4 : 1.5;
+        cx2.strokeStyle = r.vetoed ? `rgba(229,72,77,${fade})`
+                        : r.slot === arcs.chosen ? `rgba(61,220,132,${fade})`
+                        : `rgba(150,155,170,${0.6 * fade})`;
+        cx2.stroke();
+      }
+    }
+  }
+
+  // ground + base
+  cx2.strokeStyle = "#2a2e38"; cx2.lineWidth = 1;
+  cx2.beginPath(); cx2.moveTo(0, py(0)); cx2.lineTo(cv.width, py(0)); cx2.stroke();
+  cx2.fillStyle = "#262b34";
+  cx2.fillRect(px(0), py(95), 320 * SC, 95 * SC);
+
+  // arms + actuators
+  for (const col of COLS) {
+    cx2.strokeStyle = "#9aa3b5"; cx2.lineWidth = 9; cx2.lineCap = "round";
+    cx2.beginPath();
+    cx2.moveTo(px(col), py(50));
+    cx2.lineTo(px(col + b[0]), py(50 + b[1]));
+    cx2.stroke();
+    cx2.fillStyle = S.jam ? "#e5484d" : "#4c9aff";
+    cx2.beginPath(); cx2.arc(px(col), py(50), 14, 0, 7); cx2.fill();
+  }
+
+  // coupler: hangers + plate (translates, never rotates)
+  cx2.fillStyle = "#c3c9d6";
+  for (const hx of HANGERS)
+    cx2.fillRect(px(hx - 6 + t[0]), py(355 + t[1]), 12 * SC, 97 * SC);
+  cx2.fillRect(px(PLATE.x0 + t[0]), py(PLATE.z1 + t[1]),
+               (PLATE.x1 - PLATE.x0) * SC, (PLATE.z1 - PLATE.z0) * SC);
+
+  // the dream ghost: where the dream says the coupler should be.  When the
+  // cradle is jammed this keeps travelling -- the gap IS the divergence.
+  if (S.playing) {
+    const gd = bearing(S.playing.dream_theta);
+    const gt = [COLS[0] + gd[0] - BREST[0], 50 + gd[1] - BREST[1]];
+    cx2.setLineDash([7, 6]);
+    cx2.strokeStyle = S.monitor.diverged ? "#e5484d" : "#3ddc84";
+    cx2.lineWidth = 2;
+    cx2.strokeRect(px(PLATE.x0 + gt[0]), py(PLATE.z1 + gt[1]),
+                   (PLATE.x1 - PLATE.x0) * SC, (PLATE.z1 - PLATE.z0) * SC);
+    cx2.setLineDash([]);
+  }
+}
+draw();
+</script>
+</body>
+</html>

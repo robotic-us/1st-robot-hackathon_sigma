@@ -51,6 +51,16 @@ Visualization Manager:
         Expand Link Details: false
         Expand Tree: false
         Link Tree Style: Links in Alphabetic Order
+    - Class: rviz_default_plugins/MarkerArray
+      Name: DreamArcs
+      Enabled: true
+      Namespaces: {}
+      Topic:
+        Value: /dream_markers
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
     - Class: rviz_default_plugins/TF
       Name: TF
       Enabled: false
