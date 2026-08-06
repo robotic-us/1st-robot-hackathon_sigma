@@ -1,0 +1,313 @@
+<?xml version="1.0"?>
+<robot name="sigma">
+
+  <material name="grey"><color rgba="0.6 0.6 0.62 1"/></material>
+  <material name="accent"><color rgba="0.2 0.6 0.9 1"/></material>
+
+  <link name="part_0">
+    <visual>
+      <origin xyz="-0.060000 -0.037000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_0.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="-0.000000 -0.000000 -0.000000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_1">
+    <visual>
+      <origin xyz="-0.060000 -0.037000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_2">
+    <visual>
+      <origin xyz="-0.060000 -0.113000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_2.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_3">
+    <visual>
+      <origin xyz="-0.060000 -0.037000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_3.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_4">
+    <visual>
+      <origin xyz="-0.060000 -0.113000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_4.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_5">
+    <visual>
+      <origin xyz="-0.260000 -0.037000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_5.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_6">
+    <visual>
+      <origin xyz="-0.260000 -0.113000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_6.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_7">
+    <visual>
+      <origin xyz="-0.060000 -0.037000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_7.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_8">
+    <visual>
+      <origin xyz="-0.060000 -0.113000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_8.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="axis_2">
+    <visual>
+      <origin xyz="-0.260000 -0.037000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/axis_2.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="accent"/>
+    </visual>
+  </link>
+
+  <link name="axis_1">
+    <visual>
+      <origin xyz="-0.060000 -0.113000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/axis_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="accent"/>
+    </visual>
+  </link>
+
+  <link name="axis_0">
+    <visual>
+      <origin xyz="-0.060000 -0.037000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/axis_0.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="accent"/>
+    </visual>
+  </link>
+
+  <link name="axis_3">
+    <visual>
+      <origin xyz="-0.260000 -0.113000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/axis_3.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="accent"/>
+    </visual>
+  </link>
+
+  <link name="part_9">
+    <visual>
+      <origin xyz="-0.260000 -0.113000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_9.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_3r">
+    <visual>
+      <origin xyz="-0.260000 -0.037000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_3r.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_1r">
+    <visual>
+      <origin xyz="-0.260000 -0.037000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_1r.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_4r">
+    <visual>
+      <origin xyz="-0.260000 -0.113000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_4r.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <link name="part_2r">
+    <visual>
+      <origin xyz="-0.260000 -0.113000 -0.050000" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/part_2r.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <joint name="fix_part_0" type="fixed">
+    <parent link="part_7"/>
+    <child link="part_0"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_1" type="fixed">
+    <parent link="part_3"/>
+    <child link="part_1"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_2" type="fixed">
+    <parent link="part_4"/>
+    <child link="part_2"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_3" type="fixed">
+    <parent link="axis_0"/>
+    <child link="part_3"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_4" type="fixed">
+    <parent link="axis_1"/>
+    <child link="part_4"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_5" type="fixed">
+    <parent link="part_1r"/>
+    <child link="part_5"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_6" type="fixed">
+    <parent link="part_2r"/>
+    <child link="part_6"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_7" type="fixed">
+    <parent link="part_1"/>
+    <child link="part_7"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_8" type="fixed">
+    <parent link="part_2"/>
+    <child link="part_8"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="joint_axis_2" type="revolute">
+    <parent link="base_link"/>
+    <child link="axis_2"/>
+    <origin xyz="0.260000 0.037000 0.050000" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
+  </joint>
+
+  <joint name="joint_axis_1" type="revolute">
+    <parent link="base_link"/>
+    <child link="axis_1"/>
+    <origin xyz="0.060000 0.113000 0.050000" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
+  </joint>
+
+  <joint name="joint_axis_0" type="revolute">
+    <parent link="base_link"/>
+    <child link="axis_0"/>
+    <origin xyz="0.060000 0.037000 0.050000" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
+  </joint>
+
+  <joint name="joint_axis_3" type="revolute">
+    <parent link="base_link"/>
+    <child link="axis_3"/>
+    <origin xyz="0.260000 0.113000 0.050000" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
+  </joint>
+
+  <joint name="fix_part_9" type="fixed">
+    <parent link="axis_3"/>
+    <child link="part_9"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_3r" type="fixed">
+    <parent link="axis_2"/>
+    <child link="part_3r"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_1r" type="fixed">
+    <parent link="part_3r"/>
+    <child link="part_1r"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_4r" type="fixed">
+    <parent link="axis_3"/>
+    <child link="part_4r"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="fix_part_2r" type="fixed">
+    <parent link="part_4r"/>
+    <child link="part_2r"/>
+    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+  </joint>
+
+</robot>
