@@ -367,6 +367,9 @@ class MotionEngine:
             # what sort of thing this is (sine/taper/pause/...), so a reader
             # can describe it in words without parsing the name
             "kind": m.kind if m else "static",
+            # ...and which way it moves: ML sways, Z lifts, AP tilts (rendered
+            # as the see-saw channel -- the rig has no second horizontal axis)
+            "axis": m.axis if m else "",
             "f_hz": round(f, 2),
             "a_mm": round(a_now, 2),
             "env": round(self.env * self.amp_scale, 3),

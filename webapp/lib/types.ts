@@ -14,6 +14,7 @@ export interface Cradle {
   name: string;                   // "ML_SINE_0.6HZ_A10"
   grade: string;                  // C0 | P1 | R
   kind: string;                   // sine | static | pause | taper | soft_start | micro_resume
+  axis: string;                   // ML sways | Z lifts | AP tilts (see-saw) | APML both | ""
   f_hz: number;
   a_mm: number;                   // current amplitude, envelope applied
   env: number;                    // 0..1 amplitude envelope

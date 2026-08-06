@@ -235,7 +235,7 @@
     <div class="bar"><i id="envbar"></i></div>
   </div>
   <div class="stat">
-    <div class="k">How far it swings</div>
+    <div class="k">How far it moves</div>
     <div class="val" id="swayval">0.0 <small>of 30 mm</small></div>
     <div class="bar"><i id="swaybar"></i></div>
   </div>
@@ -375,22 +375,32 @@ function babyWord(tag) {
   return lvl >= CRY_LEVEL ? "Crying" : lvl >= CALM_LEVEL ? "Fussing" : "Calm";
 }
 
-/* A rate in hertz means nothing to most readers; a sway every N seconds does. */
+/* A rate in hertz means nothing to most readers; a sway every N seconds does.
+   The rig has three motions, and the words must not blur them: ML sways side
+   to side, Z lifts and lowers, AP tilts like a see-saw (the rig has no second
+   horizontal axis, so that is how those entries actually move). */
 function cradleWords(c) {
-  if (c.tapering) return ["slowing to a stop", "easing the rocking down to nothing"];
+  if (c.tapering) return ["slowing to a stop", "easing the motion down to nothing"];
   switch (c.kind) {
     case "static": return ["holding still", "not moving"];
     case "pause": return ["pausing to watch", "stopped for a moment to see what happens"];
-    case "taper": return ["slowing to a stop", "easing the rocking down to nothing"];
+    case "taper": return ["slowing to a stop", "easing the motion down to nothing"];
     case "soft_start": return ["starting gently", "easing the rocking up"];
-    case "micro_resume": return ["easing back in", "the same rocking at half strength"];
+    case "micro_resume": return ["easing back in", "the same motion at half strength"];
   }
-  const word = c.f_hz < 0.35 ? "slow" : c.f_hz < 0.55 ? "steady"
+  const pace = c.f_hz < 0.35 ? "slow" : c.f_hz < 0.55 ? "steady"
              : c.f_hz < 0.70 ? "brisk" : "quick";
-  const wide = c.a_mm >= 15 ? ", wide" : "";
   const every = c.f_hz > 0 ? (1 / c.f_hz).toFixed(1) : "–";
-  return [`${word}${wide} rocking`,
-          `one sway every ${every} s · ${c.a_mm.toFixed(0)} mm each way`];
+  const mm = c.a_mm.toFixed(0);
+  if (c.axis === "Z")
+    return [`${pace} bobbing`, `rises and settles every ${every} s · ${mm} mm`];
+  if (c.axis === "AP")
+    return [`${pace} see-saw tilt`, `tips head-to-toe every ${every} s · ${mm} mm`];
+  if (c.axis === "APML")
+    return [`${pace} sway and tilt`, `swaying and tipping together, every ${every} s`];
+  const wide = c.a_mm >= 15 ? ", wide" : "";
+  return [`${pace}${wide} rocking`,
+          `one sway every ${every} s · ${mm} mm each way`];
 }
 
 /* What the state machine will do next, in the reader's terms. */
@@ -529,12 +539,19 @@ function updatePanels() {
       ? Math.round(c.env * 100) + " <small>%</small>" : "– <small>idle</small>";
   setMeter("envbar", c.env, c.tapering ? cssv("--warn") : cssv("--accent"));
 
-  const mm = Math.abs(c.offset_mm.ap + c.offset_mm.ml);
+  // Three distinct motions -- summing them (the old code) added see-saw
+  // millimetres to sway millimetres.  The stat shows whichever is largest,
+  // named, against the report's 30 mm per-channel cap.
+  const chans = [[Math.abs(c.offset_mm.ml), "swing"],
+                 [Math.abs(c.offset_mm.z), "lift"],
+                 [Math.abs(c.offset_mm.ap), "tilt"]];
+  const [mm, chanWord] = chans.reduce((a, b) => (b[0] > a[0] ? b : a));
   const swayFrac = clamp(mm / SWAY_CAP_MM, 0, 1);
   const accFrac = clamp(c.a_peak_g / ACC_CAP_G, 0, 1);
   const worst = Math.max(swayFrac, accFrac);
   const safeCol = worst > 0.8 ? cssv("--warn") : cssv("--good");
-  $("swayval").innerHTML = `${mm.toFixed(1)} <small>of ${SWAY_CAP_MM} mm</small>`;
+  $("swayval").innerHTML =
+      `${mm.toFixed(1)} <small>of ${SWAY_CAP_MM} mm ${mm > 0.05 ? chanWord : ""}</small>`;
   setMeter("swaybar", swayFrac, safeCol);
   $("accval").innerHTML = `${c.a_peak_g.toFixed(3)} <small>of ${ACC_CAP_G} g</small>`;
   setMeter("accbar", accFrac, safeCol);
@@ -614,7 +631,7 @@ function showRanking(d) {
    visible.  The orb sits high in the frame so the sentence below it never
    fights the shape for space. ---- */
 const cv = $("babycv"), g = cv.getContext("2d");
-const view = { off: 0, ghost: 0, lvl: 0, env: 0 };
+const view = { off: 0, lift: 0, tilt: 0, ghost: 0, lvl: 0, env: 0 };
 const STILL = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const LOBES = [{k: 2, a: .024, w: .31}, {k: 3, a: .030, w: -.55},
                {k: 5, a: .017, w: .80}, {k: 7, a: .010, w: -1.15}];
@@ -646,7 +663,10 @@ function drawBaby() {
 
   const c = S.cradle, W = cv.width, H = cv.height, span = Math.min(W, H * 1.35);
   const t = performance.now() / 1000;
-  const mm = c.offset_mm.ap + c.offset_mm.ml;
+  // Three motions, three readings: ML sways the body sideways, Z lifts it,
+  // AP tips the plate it rides on.  The old code summed ap+ml into one x
+  // offset, which drew a see-saw as a sideways slide.
+  const sway = c.offset_mm.ml, lift = c.offset_mm.z, tilt = c.offset_mm.ap;
   view.lvl += ((S.tag.level ?? 0) - view.lvl) * 0.15;
   view.env += ((c.env || 0) - view.env) * 0.10;
   const lvl = view.lvl;
@@ -661,15 +681,37 @@ function drawBaby() {
   // Exaggerated like the RViz mirror -- true sway is ~10 mm and would be a
   // few pixels -- but never wide enough to push the body out of the panel.
   const pxmm = Math.min(span * 0.011, Math.max(0, W / 2 - R - 16 * dpr) / SWAY_CAP_MM);
-  view.off += (mm * pxmm - view.off) * 0.35;
-  view.ghost += ((S.playing ? S.playing.dream_theta * LEVER_MM : mm) * pxmm
+  view.off += (sway * pxmm - view.off) * 0.35;
+  view.lift += (lift * pxmm - view.lift) * 0.35;
+  view.tilt += (tilt - view.tilt) * 0.35;
+  view.ghost += ((S.playing ? S.playing.dream_theta * LEVER_MM : sway) * pxmm
                  - view.ghost) * 0.35;
 
   const room = Math.max(0, W / 2 - R * 1.05 - 6 * dpr);
-  // sits above centre: the sentence owns the bottom third of the hero
-  const cy = H * 0.40, cx = W / 2 + clamp(view.off, -room, room);
+  // sits above centre: the sentence owns the bottom third of the hero.
+  // Lift raises the body (canvas y grows downward), capped so it never
+  // collides with the safety chip or the sentence.
+  const rise = clamp(view.lift, -H * 0.06, H * 0.06);
+  const cy = H * 0.40 - rise, cx = W / 2 + clamp(view.off, -room, room);
   const col = S.tag.present ? stateColor(S.tag.emotion) : cssv("--critical");
   g.clearRect(0, 0, W, H);
+
+  // The plate the baby rides: the one place a see-saw tilt is visible, since
+  // rotating an amorphous blob reads as nothing.  Angle from the real
+  // geometry -- the two mount pairs sit 200 mm apart -- exaggerated the same
+  // way the sway is, then clamped so it stays a gesture, not a ramp.
+  const plateHalf = R * 1.15;
+  const ang = clamp(Math.atan2(2 * view.tilt, 200) * 3, -0.22, 0.22);
+  g.save();
+  g.translate(cx, cy + R * 1.22);
+  g.rotate(-ang);
+  g.beginPath();
+  g.moveTo(-plateHalf, 0); g.lineTo(plateHalf, 0);
+  g.lineWidth = 3 * dpr;
+  g.lineCap = "round";
+  g.strokeStyle = cssv("--baseline");
+  g.stroke();
+  g.restore();
 
   // the dream's plate position, drawn only once it visibly parts from the real
   if (S.playing && Math.abs(view.ghost - view.off) > 2 * dpr) {

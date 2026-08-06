@@ -746,6 +746,14 @@ def test_serve() -> None:
             state = json.loads(line[6:])
         for key in ("pose", "tag", "monitor", "jam", "events", "cradle"):
             assert key in state, f"state missing {key!r}"
+        # The dashboard words motion by axis (ML sways, Z lifts, AP tilts), so
+        # the frame must carry it and the page must branch on it -- without
+        # this, a Z mode reads as "rocking" and the see-saw as a sideways slide.
+        for key in ("axis", "kind", "offset_mm", "research"):
+            assert key in state["cradle"], f"cradle frame missing {key!r}"
+        for hook in (b'c.axis === "Z"', b"see-saw", b"bobbing",
+                     b"offset_mm.ml", b"offset_mm.z"):
+            assert hook in page, f"dashboard lost its axis wording: {hook!r}"
         assert state["tag"]["id"] == 0 and state["tag"]["level"] == 0.0, \
             f"the calm card must read id 0 / level 0, got {state['tag']}"
         print(f"  GET /events  keys ok, card id={state['tag']['id']} "
