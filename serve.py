@@ -3,7 +3,7 @@
 
 One stdlib HTTP server:
 
-    /            the dashboard (web/index.html -- canvas cradle sim + panels)
+    /            the dashboard (web/index.html; /style.css and /app.js beside it)
     /events      Server-Sent Events: the whole state as JSON, ~20 Hz
     /frame       MJPEG camera stream with the tag overlay
     /slots       the DREAM motion-slot dictionary, once
@@ -175,16 +175,26 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
         shared.log("virtual infant awake"
                    + (f" (seed {baby_seed})" if baby_seed is not None else ""))
     elif sense:
-        # Real sensing: the models only load in this mode.
-        from perception.face.pipeline import SigmaPipeline
+        # Real sensing.  The five-state watcher (the team's baby recognition,
+        # perception/watch.py) is the primary visual channel; the YuNet+FER+
+        # stack remains the fallback where mediapipe is not installed.  Only
+        # the fallback needs the ONNX models.
         from perception.listen import Microphone
         from perception.sense import Sense
         if not no_sound:
             mic = Microphone(audio_device)
             mic.start()
-        sensor = Sense(SigmaPipeline(), mic)
-        shared.log("real sensing: face+emotion"
-                   + ("" if no_sound else " + microphone"))
+        try:
+            from perception.watch import Watcher
+            sensor = Sense(microphone=mic, watcher=Watcher())
+            shared.log("real sensing: five-state watcher"
+                       + ("" if no_sound else " + microphone"))
+        except ImportError:
+            from perception.face.pipeline import SigmaPipeline
+            sensor = Sense(SigmaPipeline(), mic)
+            shared.log("real sensing: face+emotion (no mediapipe -- "
+                       "watcher unavailable)"
+                       + ("" if no_sound else " + microphone"))
     else:
         tracker = TagTracker()
     cap = None
@@ -245,7 +255,10 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
         # deliberately ignored.  --sense: face+cry distress is the state.  In
         # both modes a lost face/tag is a gate failure, and the engine's
         # plate offset becomes the arm angle the canvas and RViz animate.
-        shared.machine.tick(now, reading.present, infant_level(reading), brain.jam)
+        # Report 5.1 rules 1-2: a pain/posture alarm interrupts like a fault,
+        # never soothes -- so it rides the same input as a jam.
+        fault = brain.jam or getattr(reading, "alarm", False)
+        shared.machine.tick(now, reading.present, infant_level(reading), fault)
         for line in shared.machine.events:
             shared.log(line)
         shared.machine.events.clear()
@@ -386,10 +399,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         url = urlparse(self.path)
         try:
-            if url.path == "/":
-                body = (WEB_DIR / "index.html").read_bytes()
+            if url.path in ("/", "/style.css", "/app.js"):
+                # a fixed whitelist, not a static dir -- nothing to traverse
+                name, ctype = {
+                    "/": ("index.html", "text/html; charset=utf-8"),
+                    "/style.css": ("style.css", "text/css; charset=utf-8"),
+                    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                }[url.path]
+                body = (WEB_DIR / name).read_bytes()
                 self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)

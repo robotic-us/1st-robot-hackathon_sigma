@@ -24,7 +24,7 @@ python3 tests.py                         # 전체 셀프테스트 (10개 스위�
 python3 serve.py --fake                  # 카메라 없이: 합성 상태 카드 시나리오
 python3 serve.py --baby                  # 카메라 없이: 가상 영아 폐루프 (원 = 상태)
 python3 serve.py                         # 웹캠 + 태그 상태 카드 (tag_0/1/2)
-python3 serve.py --sense                 # 실전: 얼굴 감정 + 마이크가 상태를 판정
+python3 serve.py --sense                 # 실전: 5-상태 워처(mediapipe) + 마이크가 판정
 python3 tools/fetch_models.py            # --sense용 ONNX 모델 3종 (최초 1회)
 ```
 
@@ -47,7 +47,8 @@ phorce play 12 --target sim:demo         # M12 = ML 0.5 Hz A10 재생
 | `core/dream.py` · `core/pvector.py` | DREAM-Chunk 매처/모니터 + P-Vector 월드 모델 |
 | `core/slot_table.py` · `core/phorce_iface.py` | 슬롯 표 · phorce/ROS 2 어댑터 |
 | `perception/tag.py` | AprilTag **상태 카드** (tag_0 평온 / tag_1 칭얼 / tag_2 울음) |
-| `perception/sense.py` · `perception/listen.py` | 얼굴+소리 → distress 0..1 |
+| `perception/watch.py` | ★ 팀의 아기 인식+모션 플랜(docs/example.py 이식): 5-상태 분류기, 상태별 모션 힌트 |
+| `perception/sense.py` · `perception/listen.py` | 시각 채널(watcher 우선, FER+ 폴백)+소리 → distress 0..1 |
 | `perception/baby.py` | 가상 영아: 랜덤 상태 프로세스, 흔들림에 실제로 달래짐 |
 | `perception/face/` | 얼굴 검출(YuNet) · 인식(SFace) · 감정(FER+) |
 | `apps/` | demo(DREAM 시연) · care(구 진입점) · run(얼굴 데모) · animate(RViz 재생, `--tour`가 M 라이브러리를 실제로 돌림) |
@@ -62,6 +63,7 @@ phorce play 12 --target sim:demo         # M12 = ML 0.5 Hz A10 재생
 |---|---|
 | [docs/ARCHITECTURE.md](ARCHITECTURE.md) | 전체 구조 · 근거 보고서 ↔ 코드 대응표 |
 | `docs/infant_robotic_cradle_evidence_report_ko.pdf` | **모션 명세의 원전** |
+| [docs/VERIFY.md](VERIFY.md) | **아기 없이 인식기를 검증하는 4단 프로토콜** (합성→가상아기 폐루프→벤치→재생) |
 | [docs/dream-chunk.md](dream-chunk.md) | DREAM-Chunk 설계 |
 | [docs/face-recognition.md](face-recognition.md) | 얼굴 인식 + 5분류 감정 파이프라인 |
 | `docs/RH_Guide/` | 논문 3종 · OT 자료 · P-Vector · phact · 배선 |
@@ -91,8 +93,9 @@ python3 tests.py --list      # 목록
 - 시뮬레이터는 **모션 계약만** 흉내 냅니다. `/phorce/feedback`(1 kHz)은 나오지
   않으므로 DREAM-Chunk의 이탈 감시는 sim에서 동작하지 않습니다.
 - `pvector.UNITS_PER_DEG`는 실제 피드백으로 보정이 필요합니다.
-- 이 기구는 수평 1자유도입니다 — ML/AP 모션이 같은 축에 실리고, Z 모드는
-  재생할 자유도가 없습니다.
+- 기구는 5절 링키지 2쌍입니다: 채널은 sway(수평)·heave(수직)·pitch(시소) 셋.
+  AP 방향 *병진*만은 물리적으로 없어서 AP 모션은 pitch로 재생됩니다
+  (`apps/demo.py` 참고).
 
 ## 라이선스
 

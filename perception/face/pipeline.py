@@ -12,9 +12,11 @@ from .track import Tracker
 
 class Result:
     """One face, this frame."""
-    __slots__ = ("track_id", "box", "name", "sim", "emotion", "confidence", "probs")
+    __slots__ = ("track_id", "box", "name", "sim", "emotion", "confidence",
+                 "probs", "eyes")
 
-    def __init__(self, track_id, box, name, sim, emotion, confidence, probs):
+    def __init__(self, track_id, box, name, sim, emotion, confidence, probs,
+                 eyes=None):
         self.track_id = track_id
         self.box = box
         self.name = name
@@ -22,6 +24,7 @@ class Result:
         self.emotion = emotion
         self.confidence = confidence
         self.probs = probs
+        self.eyes = eyes    # ((rx,ry),(lx,ly)) from the YuNet row, for head roll
 
     def __repr__(self):
         return (f"<{self.name} ({self.sim:.2f}) "
@@ -79,7 +82,8 @@ class SigmaPipeline:
             else:
                 label, conf = "?", 0.0
                 probs = np.zeros(len(config.EMOTIONS), np.float32)
-            results.append(Result(t.id, t.box, t.name, t.sim, label, conf, probs))
+            results.append(Result(t.id, t.box, t.name, t.sim, label, conf, probs,
+                                  eyes=(tuple(t.face[4:6]), tuple(t.face[6:8]))))
         return results
 
     def reset_tracks(self):

@@ -56,7 +56,7 @@ export function Controls({ S }: { S: CradleState | null }) {
           </button>
         ))}
 
-        <button className={jam ? "jammed" : undefined} onClick={() => send("/jam")}>
+        <button className={jam ? "jam jammed" : "jam"} onClick={() => send("/jam")}>
           <b>{jam ? "Jammed — release" : "Simulate a jam"}</b><i>j</i>
         </button>
 

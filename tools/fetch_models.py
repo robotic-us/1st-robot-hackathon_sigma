@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download and verify the three ONNX models SIGMA needs.
+"""Download and verify the ONNX models SIGMA needs.
 
 YuNet is pinned to the 2022mar revision: the 2023mar rewrite changed the output
 head and will not parse under OpenCV < 4.8 (this box runs 4.5.4).  Every model
@@ -22,6 +22,9 @@ from perception.face import config
 
 ZOO = "https://github.com/opencv/opencv_zoo/raw"
 YUNET_COMMIT = "2121e57073a0e2b640a644f99f58dc4b4941724b"
+# BlazePose landmarks, curated by the OpenCV zoo.  Verified to parse AND run
+# under this box's cv2 4.5.4 (unlike YuNet 2023) before it was pinned here.
+POSE_COMMIT = "1f19f821d68288feff2ef5c53993b33da74b1509"
 
 MODELS = [
     (config.YUNET,
@@ -34,6 +37,10 @@ MODELS = [
      "https://github.com/onnx/models/raw/main/validated/vision/body_analysis/"
      "emotion_ferplus/model/emotion-ferplus-8.onnx",
      "a2a2ba6a335a3b29c21acb6272f962bd3d47f84952aaffa03b60986e04efa61c"),
+    (config.BLAZEPOSE,
+     f"{ZOO}/{POSE_COMMIT}/models/pose_estimation_mediapipe/"
+     "pose_estimation_mediapipe_2023mar.onnx",
+     "9d89c599319a18fb7d2e28451a883476164543182bafca5f09eb2cf767ed2f3f"),
 ]
 
 

@@ -1,130 +1,185 @@
-/* Palette: dataviz reference tokens, dark mode. Status colors are the
-   validated status palette (all >=3:1 on the dark surface) and always ship
-   beside a text label -- never color alone.
+/* The plain treatment: monochrome, square, flat.  No hue and no radius
+   anywhere; state is carried by words, weight and position.  The status
+   tokens survive because components and the orb resolve colours through
+   them, but they map onto an ink ramp -- fainter is calmer, stronger is
+   worse -- and every marked element sits beside a text label, so nothing
+   is lost with the hue.  Two grounds via prefers-color-scheme: paper
+   white and true black.  Mirrors web/style.css.
 
-   Layout rule: three zones, not nine boxes.  The hero answers "how is the
-   baby and what is the cradle doing"; the strip answers "by how much"; the
-   foot is utility.  Anything engineering-grade lives in the drawer.  Panels
-   do not nest, and nothing gets a border unless it earns one. */
+   Stage layout: the monitoring circle holds the centre and sticks to the
+   viewport; everything else stacks in the right-hand panel and scrolls
+   past it.  No headers anywhere -- the connection dot is the only trace
+   of the old masthead, and the panel blocks are introduced by their
+   rules, not by titles.  Type is instrument-sized: small labels, small
+   numbers, nothing shouts except the safety alert. */
 :root {
-  --page:#0d0d0d; --surface:#171716; --raised:#222221;
-  --ink:#ffffff; --ink-2:#c3c2b7; --muted:#898781;
-  --hairline:#2c2c2a; --baseline:#383835; --ring:rgba(255,255,255,.09);
-  --accent:#3987e5;
-  --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  --page:#ffffff; --surface:#ffffff; --raised:#f2f2f2;
+  --ink:#111111; --ink-2:#3d3d3d; --muted:#6f6f6f;
+  --hairline:#e2e2e2; --baseline:#b5b5b5; --ring:#d8d8d8;
+  --accent:#111111;
+  /* severity as an ink ramp, not a palette */
+  --good:#9a9a9a; --warn:#555555; --serious:#333333; --critical:#111111;
+  --scrim:255 255 255;                    /* hero text scrim, as rgb */
+  --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* true black: the page is off, only the light is on */
+    --page:#000000; --surface:#000000; --raised:#161616;
+    --ink:#ffffff; --ink-2:#c9c9c9; --muted:#8a8a8a;
+    --hairline:#1f1f1f; --baseline:#454545; --ring:#333333;
+    --accent:#ffffff;
+    --good:#767676; --warn:#a8a8a8; --serious:#dcdcdc; --critical:#ffffff;
+    --scrim:0 0 0;
+  }
 }
 * { box-sizing:border-box; margin:0; }
-html { color-scheme:dark; }
+html { color-scheme:light dark; }
 body { background:var(--page); color:var(--ink);
-       font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
-       padding:22px 24px 28px; max-width:1180px; margin:0 auto; }
+       font:13px/1.5 var(--sans);
+       padding:16px 20px 20px; max-width:1400px; margin:0 auto;
+       display:grid; grid-template-columns:minmax(0,1fr) 320px;
+       grid-template-rows:auto auto auto 1fr auto; gap:0 24px; }
+:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
 
-header { display:flex; align-items:baseline; gap:12px; margin-bottom:14px; }
-header h1 { font-size:15px; font-weight:600; letter-spacing:.01em; }
-header h1 span { color:var(--muted); font-weight:400; }
-.conn { margin-left:auto; font-size:12px; color:var(--muted); }
+header { display:contents; }
+header h1 { display:none; }
+.conn { grid-column:2; grid-row:2; justify-self:end; margin-bottom:6px;
+        font-size:11px; color:var(--muted); }
 .conn::before { content:"\25CF"; margin-right:6px; color:var(--baseline); }
 .conn.live::before { color:var(--good); }
 
-.dot { width:10px; height:10px; border-radius:50%; background:var(--muted);
+.dot { width:9px; height:9px; border-radius:50%; background:var(--muted);
        flex:none; display:inline-block; }
 
-.alert { margin-bottom:14px; padding:11px 16px; border-radius:9px;
-         background:color-mix(in srgb, var(--critical) 15%, var(--surface));
-         border:1px solid var(--critical); font-size:13.5px; }
+/* The one loud element: the safety alert inverts the page. */
+.alert { grid-column:1 / -1; grid-row:1; margin-bottom:12px;
+         padding:10px 14px;
+         background:var(--ink); color:var(--page); font-size:13px; }
 
-/* ---- zone 1: the hero. One focal point, and the sentence under it. ---- */
-.hero { position:relative; height:56vh; min-height:430px; overflow:hidden;
-        background:var(--surface); border:1px solid var(--ring);
-        border-radius:14px; }
-.hero canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
-.safechip { position:absolute; top:16px; right:18px; display:flex;
-            align-items:center; gap:8px; font-size:12px; color:var(--ink-2);
-            background:rgba(13,13,13,.55); border:1px solid var(--ring);
-            padding:6px 12px; border-radius:999px; backdrop-filter:blur(4px); }
-.say { position:absolute; left:0; right:0; bottom:0; padding:26px 30px;
-       background:linear-gradient(to top, rgba(13,13,13,.92), transparent); }
-.headline { display:flex; align-items:center; gap:13px; flex-wrap:wrap; }
-.headline .dot { width:13px; height:13px; }
-.headline .who { font-size:29px; font-weight:600; letter-spacing:-.02em; }
-.headline .arrow { color:var(--muted); font-size:21px; }
-.headline .doing { font-size:29px; font-weight:400; color:var(--ink-2);
-                   letter-spacing:-.02em; }
-.detail { font-size:12.5px; color:var(--muted); margin-top:7px; }
-.why { font-size:13.5px; color:var(--ink-2); margin-top:11px; max-width:62ch;
-       line-height:1.55; }
+/* ---- the stage: ambient.  No border, no panel -- the circle floats on
+   the page itself, its glow the only light around it.  It is pinned to
+   the viewport, so the sentence at its foot is always in view while the
+   panel scrolls past. ---- */
+.hero { position:sticky; top:16px; align-self:start;
+        grid-column:1; grid-row:2 / span 3;
+        height:calc(100vh - 36px); min-height:400px; overflow:hidden; }
+.hero canvas { position:absolute; inset:0; width:100%; height:100%;
+               display:block; }
+.safechip { position:absolute; top:0; left:0; display:flex;
+            align-items:center; gap:7px; font-size:11px; color:var(--muted);
+            padding:2px 0; }
+.say { position:absolute; left:0; right:0; bottom:0; padding:18px 2px 6px;
+       background:linear-gradient(to top, rgb(var(--scrim) / .9), transparent); }
+.headline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.headline .dot { width:10px; height:10px; }
+.headline .who { font-size:21px; font-weight:600; letter-spacing:-.01em; }
+.headline .arrow { color:var(--muted); font-size:15px; }
+.headline .doing { font-size:21px; font-weight:400; color:var(--ink-2);
+                   letter-spacing:-.01em; }
+.detail { font-size:11.5px; color:var(--muted); margin-top:4px; }
+.why { font-size:12px; color:var(--ink-2); margin-top:8px; max-width:56ch;
+       line-height:1.5; }
 
-/* ---- zone 2: the strip. Four numbers, no boxes. ---- */
-.strip { display:grid; grid-template-columns:repeat(4,1fr); gap:0; margin:14px 0; }
-.stat { padding:0 22px; border-left:1px solid var(--hairline); }
-.stat:first-child { padding-left:2px; border-left:0; }
-.stat .k { font-size:11px; color:var(--muted); text-transform:uppercase;
-           letter-spacing:.07em; }
-.stat .val { font-size:21px; font-weight:600; margin-top:5px;
-             font-variant-numeric:tabular-nums; letter-spacing:-.01em; }
-.stat .val small { font-size:12.5px; font-weight:400; color:var(--muted);
-                   letter-spacing:0; }
-.bar { position:relative; height:4px; border-radius:2px; margin-top:9px;
+/* ---- the readouts, stacked in the panel: a thin rule, a small label,
+   a number that stays quiet, a meter against its limit. ---- */
+.strip { grid-column:2; grid-row:3; display:grid;
+         grid-template-columns:1fr; gap:11px; margin:0 0 11px; }
+.stat { border-top:1px solid var(--baseline); padding-top:6px; }
+.stat .k { font-size:9.5px; color:var(--muted); text-transform:uppercase;
+           letter-spacing:.1em; }
+.stat .val { font-size:18px; font-weight:600; margin-top:2px;
+             font-variant-numeric:tabular-nums; letter-spacing:0; }
+.stat .val small { font-size:10.5px; font-weight:400; color:var(--muted); }
+.bar { position:relative; height:3px; margin-top:7px;
        background:var(--raised); }
-.bar i { position:absolute; inset:0 auto 0 0; width:0; border-radius:2px;
+.bar i { position:absolute; inset:0 auto 0 0; width:0;
          transition:width .15s linear; }
 .bar .tick { position:absolute; top:-2px; bottom:-2px; width:1px;
              background:var(--baseline); }
+@media (prefers-reduced-motion: reduce) { .bar i { transition:none; } }
 
-/* ---- zone 3: the foot. Utility, deliberately quiet. ---- */
-.foot { display:grid; grid-template-columns:216px 1fr 300px; gap:18px;
-        padding-top:16px; border-top:1px solid var(--hairline); }
-.foot h2 { font-size:10.5px; font-weight:600; text-transform:uppercase;
-           letter-spacing:.08em; color:var(--muted); margin-bottom:9px; }
-.cam { width:100%; aspect-ratio:4/3; max-height:260px; object-fit:cover; border-radius:8px;
-       background:#000; display:block; }
+/* ---- the panel's utility half: camera, keypad, log. ---- */
+.foot { grid-column:2; grid-row:4; }
+.foot > div { border-top:1px solid var(--baseline);
+              padding-top:8px; margin-bottom:12px; }
+.foot h2 { display:none; }
+.cam { width:100%; aspect-ratio:4/3; max-height:200px; object-fit:cover;
+       background:#000; display:block;
+       filter:grayscale(1); }   /* the feed obeys the page: no colour */
 
-.buttons { display:flex; flex-wrap:wrap; gap:7px; align-content:flex-start; }
-button { font:inherit; font-size:12.5px; color:var(--ink-2);
-         background:var(--raised); border:1px solid var(--ring);
-         border-radius:7px; padding:7px 12px; cursor:pointer; white-space:nowrap; }
-button:hover { border-color:var(--muted); color:var(--ink); }
+/* Buttons.  The generic button is an outlined key; hover inverts it, and
+   so do on-states -- there is no colour to lean on.  The manual controls
+   collapse into one hairline keypad: keys share rules like a machine's
+   front panel, the label left, the M-number or hotkey right, and the jam
+   key -- the dangerous one -- gets the full bottom row. */
+button { font:inherit; font-size:11.5px; color:var(--ink-2);
+         background:transparent; border:1px solid var(--baseline);
+         padding:6px 10px; cursor:pointer; white-space:nowrap; }
+button:hover { background:var(--ink); border-color:var(--ink);
+               color:var(--page); }
 button b { font-weight:500; }
-button i { font-style:normal; color:var(--muted); font-size:11px; margin-left:6px; }
-button.autoon { border-color:color-mix(in srgb, var(--good) 55%, var(--ring));
-                color:var(--ink); }
-button.jammed { background:var(--critical); border-color:var(--critical); color:#fff; }
-button.jammed i { color:rgba(255,255,255,.8); }
-.note { flex:1 1 100%; font-size:11.5px; color:var(--muted); margin-top:2px; }
+button i { font-style:normal; color:var(--muted); font-size:10px;
+           margin-left:6px; }
+button:hover i { color:var(--page); opacity:.7; }
+.buttons { display:grid; grid-template-columns:1fr 1fr; gap:1px;
+           background:var(--baseline); border:1px solid var(--baseline);
+           align-content:flex-start; }
+.buttons button { display:flex; justify-content:space-between;
+                  align-items:baseline; gap:8px; border:0;
+                  background:var(--page); text-align:left; }
+.buttons button:hover { background:var(--ink); }
+.buttons button:focus-visible { outline-offset:-3px; }
+.buttons .jam { grid-column:1 / -1; }
+button.autoon { background:var(--ink); color:var(--page); }
+button.autoon i { color:var(--page); opacity:.7; }
+button.jammed { background:var(--ink); color:var(--page); }
+button.jammed i { color:var(--page); opacity:.7; }
+.buttons .note { grid-column:1 / -1; background:var(--page);
+                 padding:6px 10px; }
+.note { font-size:10.5px; color:var(--muted); }
 
-.log { font:11.5px/1.75 ui-monospace,SFMono-Regular,monospace; color:var(--muted);
-       max-height:132px; overflow-y:auto; overflow-x:hidden; }
+.log { font:10.5px/1.7 var(--mono); color:var(--muted);
+       max-height:120px; overflow-y:auto; overflow-x:hidden; }
 .log div:first-child { color:var(--ink-2); }
 
 /* ---- the drawer: everything a reader should not need ---- */
-details { margin-top:20px; }
-details > summary { cursor:pointer; color:var(--muted); font-size:12px;
-                    padding:6px 2px; user-select:none; }
-.internals { display:grid; grid-template-columns:340px 1fr; gap:18px;
-             margin-top:10px; }
-.internals h2 { font-size:10.5px; font-weight:600; text-transform:uppercase;
-                letter-spacing:.08em; color:var(--muted); margin-bottom:9px; }
-.kv { display:flex; justify-content:space-between; gap:10px; font-size:12px;
-      color:var(--muted); margin:5px 0; }
+details { grid-column:1 / -1; grid-row:5; margin-top:16px; }
+details > summary { cursor:pointer; color:var(--muted); font-size:11px;
+                    padding:5px 0; user-select:none; }
+.internals { display:grid; grid-template-columns:320px 1fr; gap:24px;
+             margin-top:8px; }
+.internals > section { border-top:1px solid var(--baseline); padding-top:8px; }
+.internals h2 { font-size:9.5px; font-weight:600; text-transform:uppercase;
+                letter-spacing:.1em; color:var(--muted); margin-bottom:8px; }
+/* Key-value rows read as an index: dotted leaders, value flush right. */
+.kv { display:flex; justify-content:space-between; align-items:baseline;
+      gap:10px; font-size:11.5px; color:var(--muted); padding:3px 0; margin:0;
+      border-bottom:1px dotted var(--hairline); }
 .kv b { color:var(--ink-2); font-weight:500; white-space:nowrap;
         font-variant-numeric:tabular-nums; }
-table { width:100%; border-collapse:collapse; font-size:12px;
+table { width:100%; border-collapse:collapse; font-size:11.5px;
         font-variant-numeric:tabular-nums; }
-td,th { padding:4px 6px; text-align:right; border-bottom:1px solid var(--hairline); }
-th { color:var(--muted); font-weight:500; }
+td,th { padding:3px 6px; text-align:right; border-bottom:1px solid var(--hairline); }
+th { color:var(--muted); font-weight:600; font-size:9.5px;
+     text-transform:uppercase; letter-spacing:.06em; }
 td:first-child, th:first-child { text-align:left; }
 tr.win td { color:var(--ink); font-weight:600; }
 tr.veto td { color:var(--muted); text-decoration:line-through; }
-.slots { display:grid; grid-template-columns:repeat(5,1fr); gap:7px; margin-top:10px; }
-.slot { background:var(--raised); border:1px solid var(--ring); border-radius:7px;
-        padding:6px 8px; cursor:pointer; font-size:11px; color:var(--muted); }
-.slot b { display:block; font-size:11.5px; color:var(--ink-2); font-weight:500; }
-.slot:hover { border-color:var(--muted); }
-.slot.play { border-color:var(--good); }
+.slots { display:grid; grid-template-columns:repeat(5,1fr); gap:6px;
+         margin-top:9px; }
+.slot { background:var(--raised); border:1px solid var(--ring);
+        padding:5px 7px; cursor:pointer; font-size:10.5px; color:var(--muted); }
+.slot b { display:block; font-size:11px; color:var(--ink-2); font-weight:500; }
+.slot:hover { border-color:var(--ink); }
+.slot.play { border-color:var(--ink); }
 
 @media (max-width:940px) {
-  .strip { grid-template-columns:repeat(2,1fr); row-gap:18px; }
-  .stat:nth-child(3) { padding-left:2px; border-left:0; }
-  .foot, .internals { grid-template-columns:1fr; }
-  .headline .who, .headline .doing { font-size:24px; }
+  body { display:block; }
+  .conn { display:block; text-align:right; margin:0 0 8px; }
+  .hero { position:relative; top:0; min-height:400px; height:56vh; }
+  .strip { grid-template-columns:repeat(2,1fr); margin:12px 0; }
+  .internals { grid-template-columns:1fr; }
+  .headline .who, .headline .doing { font-size:18px; }
 }

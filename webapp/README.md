@@ -59,6 +59,20 @@ drawer at the bottom and nowhere else. The rule for the rest of the page: a
 reader should never need to know what "amplitude envelope" or "0.018 g" means
 to understand what the cradle is doing.
 
+The visual treatment is the plain one, shared with `web/index.html`:
+monochrome and square — no hue, no border radius. Severity is an ink ramp
+(fainter = calmer, stronger = worse) and every marked element sits beside a
+text label, so nothing is lost with the colour. Both grounds (paper white and
+near-black) come via `prefers-color-scheme`.
+
+The three zones survive but are arranged as a stage: the monitoring circle
+holds the centre of the page, and the readouts, camera, keypad and log stack
+in a 340 px right-hand panel. There are no headers — the connection dot is
+the only trace of the old masthead; panel blocks are introduced by their
+heavy top rules, not titles. The layout is pure CSS grid placement, so the
+component markup is identical to before. Tokens and the rationale live at
+the top of `app/globals.css`; components never restate a hex.
+
 ## Files
 
 | Path | What it is |
@@ -76,5 +90,6 @@ deriving them. If the report's numbers move, they move in both places.
 
 ## What this does not replace
 
-`web/index.html` is still the dashboard `serve.py` serves on :8080, still has
+`web/` (`index.html` + `style.css` + `app.js`) is still the dashboard
+`serve.py` serves on :8080, still has
 no build step, and is still what `tests.py` checks. This app is additive.

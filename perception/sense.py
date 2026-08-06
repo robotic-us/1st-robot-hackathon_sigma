@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """Webcam + microphone -> one small reading the robot can act on.
 
-This is the perception front end.  It replaces the coloured-circle tracker we
-prototyped with: a real face, its emotion, and the sound in the room.
+This is the perception front end.  The visual channel is the team's five-state
+infant watcher (perception/watch.py, rebased from docs/example.py); the YuNet +
+FER+ emotion path remains as the fallback for machines without mediapipe.
 
-    frame ──► YuNet ──► FER+ ──► emotion probabilities ─┐
-                                                        ├──► distress 0..1
-    mic   ──► RMS + voice-band ratio ───────────────────┘
+    frame ──► watch.py ──► 5 states ──► distress_of() ─┐   (or YuNet ► FER+)
+                                                       ├──► distress 0..1
+    mic   ──► RMS + voice-band ratio ──────────────────┘
+
+The split matters for safety: the watcher's DISTRESS_FACE is a visual pattern,
+not proven crying, so on its own it maps into the fuss band -- a gentle M10
+trial at most.  Only the sound channel, fused here, can push distress over
+CRY_LEVEL where the escalation ladder lives.  That is the watcher spec's own
+rule ("audio required before escalating"), enforced by the mapping.
 
 Everything downstream sees only :class:`Reading` -- five numbers and two
 labels.  No pixels, no audio buffers.  That is what keeps the decision layer
@@ -75,6 +82,7 @@ class Reading:
     distress: float   # [0, 1] fused face + sound
     emotion: str      # the argmax label, for the log and the overlay
     name: str         # who it is, if enrolled
+    alarm: bool = False   # report 5.1 rules 1-2: pain/posture -> interrupt
     face_distress: float = 0.0   # the two halves, kept separate so the log can
     sound_distress: float = 0.0  # say *why* distress is high
     ts: float = 0.0
@@ -112,16 +120,45 @@ class Sense:
         microphone: Optional[Microphone] = None,
         near_px: float = 260.0,   # face height that reads as distance = 1.0
         far_px: float = 40.0,     # ...and as 0.0
+        watcher=None,             # perception.watch.Watcher: the primary channel
     ) -> None:
-        self.pipeline = pipeline or SigmaPipeline()
+        self.watcher = watcher
+        self.pipeline = pipeline or (None if watcher is not None
+                                     else SigmaPipeline())
         self.microphone = microphone
         self.near_px = near_px
         self.far_px = far_px
         self.results: list = []   # last frame's faces, for the overlay
+        # The report-spec layer (watch.py): audio 4.2, body flow, the 4.3/5
+        # judge.  Runs on BOTH visual channels -- the learned FER+ labels and
+        # the mesh watcher feed the same judge, so the state names, sleep
+        # ladder and alarm behave identically whichever sensor is available.
+        from perception.watch import (AudioTrack, BodyMotion, InfantJudge,
+                                      PostureTrack)
+        self.audio_track = AudioTrack()
+        self.body_motion = BodyMotion()
+        self.judge = InfantJudge()
+        self.posture = PostureTrack()
+        self.last_judged = None    # InfantReading, for the log/overlay
+        # BlazePose is optional: without the model the posture cues fall back
+        # to face roll alone, and the judgments that need shoulders never lie.
+        try:
+            from perception.watch import PostureNet
+            self.posture_net = PostureNet()
+        except Exception:       # model absent or cv2 refuses: face roll only
+            self.posture_net = None
+        self._pose_every = 6      # frames between BlazePose runs (~3 Hz)
+        self._pose_n = 0
+        self._shoulders = None
 
     def update(self, frame: np.ndarray, ts: Optional[float] = None) -> Reading:
         ts = time.monotonic() if ts is None else ts
         height, width = frame.shape[:2]
+
+        self.body_motion.feed(frame)
+        self._pose_n += 1
+        if self.watcher is not None:
+            return self._update_watch(frame, ts, width, height)
 
         self.results = self.pipeline.process(frame)
         sound = self.microphone.latest() if self.microphone is not None \
@@ -145,17 +182,95 @@ class Sense:
         span = max(1.0, self.near_px - self.far_px)
         distance = float(np.clip((h_px - self.far_px) / span, 0.0, 1.0))
 
+        # The report-spec judge: FER+ is the learned 4.1 label source, the
+        # audio track carries 4.2, body flow 4.3.  Eyes and pain AUs need
+        # landmarks this path does not have, so they are None -- the sleep
+        # ladder and the pain alarm simply cannot fire here, which is honest.
+        from perception.watch import Signals, face_roll_deg
+        roll = face_roll_deg(*primary.eyes) if primary.eyes else None
+        box = (x_px, y_px, x_px + w_px, y_px + h_px)
+        if self.posture_net is not None and self._pose_n % self._pose_every == 0:
+            self._shoulders = self.posture_net.infer(frame, box)
+        risk = self.posture.feed(ts, roll, self._shoulders, float(w_px))
+        judged = self.judge.update(Signals(
+            ts=ts, face_conf=1.0, emotion=primary.emotion,
+            eyes_closed=None, pain_face=None, body_arch=None,
+            posture_risk=risk, body_flow=self.body_motion.flow,
+            audio=self.audio_track.feed(sound.level, sound.cry, ts)))
+        self.last_judged = judged
         face = emotion_distress(primary.probs)
         return Reading(
             present=True,
             x=float(np.clip(x, -1.0, 1.0)),
             y=float(np.clip(y, -1.0, 1.0)),
             distance=distance,
-            distress=fuse(face, sound.distress),
-            emotion=primary.emotion,
+            distress=judged.level,
+            emotion=judged.state,
             name=primary.name,
             face_distress=face,
             sound_distress=sound.distress,
+            alarm=judged.alarm,
+            ts=ts,
+        )
+
+
+    def _update_watch(self, frame: np.ndarray, ts: float,
+                      width: int, height: int) -> Reading:
+        """The mesh channel, through the same report-spec judge.
+
+        Landmarks give what FER+ cannot: blink-filtered eye closure for the
+        sleep ladder, and the tight-squeeze + wide-mouth pattern as the pain
+        AU.  Emotion is None here -- the mesh has no learned labels.
+        """
+        from perception.watch import Signals, distress_of
+
+        result = self.watcher.update(frame, ts)
+        obs = self.watcher.last[0]
+        sound = self.microphone.latest() if self.microphone is not None \
+            else Sound(0.0, 0.0, 0.0, ts)
+
+        if (self.posture_net is not None and obs.valid_face
+                and self._pose_n % self._pose_every == 0):
+            self._shoulders = self.posture_net.infer(frame, obs.bbox)
+        face_w = (obs.bbox[2] - obs.bbox[0]) if obs.bbox else 0.0
+        risk = self.posture.feed(ts, obs.roll_deg if obs.valid_face else None,
+                                 self._shoulders if obs.valid_face else None,
+                                 float(face_w))
+        judged = self.judge.update(Signals(
+            ts=ts,
+            face_conf=1.0 if obs.valid_face else 0.0,
+            emotion=None,
+            eyes_closed=obs.eye_mode in ("closed", "tight"),
+            pain_face=(obs.eye_mode == "tight" and obs.mouth_ratio >= 0.14),
+            body_arch=None, posture_risk=risk,
+            body_flow=self.body_motion.flow,
+            audio=self.audio_track.feed(sound.level, sound.cry, ts)))
+        self.last_judged = judged
+
+        if not judged.present:
+            # The gate handles a hidden face; a cry still counts on its own.
+            return Reading(present=False, x=0.0, y=0.0, distance=0.0,
+                           distress=max(judged.level, sound.distress),
+                           emotion=judged.state, name="-", face_distress=0.0,
+                           sound_distress=sound.distress,
+                           alarm=judged.alarm, ts=ts)
+
+        x = y = 0.0
+        if obs.bbox is not None:
+            x1, y1, x2, y2 = obs.bbox
+            x = (x1 + x2) / float(width) - 1.0
+            y = (y1 + y2) / float(height) - 1.0
+        return Reading(
+            present=True,
+            x=float(np.clip(x, -1.0, 1.0)),
+            y=float(np.clip(y, -1.0, 1.0)),
+            distance=float(np.clip(obs.face_area_ratio / 0.30, 0.0, 1.0)),
+            distress=judged.level,
+            emotion=judged.state,
+            name="-",
+            face_distress=distress_of(result.state, result.evidence_strength),
+            sound_distress=sound.distress,
+            alarm=judged.alarm,
             ts=ts,
         )
 
@@ -166,6 +281,11 @@ class Sense:
 def draw(frame: np.ndarray, reading: Reading, sense: Sense) -> np.ndarray:
     """Boxes and labels from perception.face.draw, plus the fused distress bar."""
     canvas = frame.copy()
+    if sense.watcher is not None:
+        from perception.watch import draw_overlay as watch_overlay
+        obs, result = sense.watcher.last
+        if result is not None:
+            watch_overlay(canvas, obs, result)
     for r in sense.results:
         draw_result(canvas, r)
 

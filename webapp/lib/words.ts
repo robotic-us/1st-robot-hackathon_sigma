@@ -24,6 +24,14 @@ const BABY_WORD: Record<string, string> = {
   SLEEP: "Sleeping", CALM: "Calm", HAPPY: "Happy", NEUTRAL: "Settled",
   FUSS: "Fussing", SAD: "Fussing", SURPRISE: "Startled",
   CRY: "Crying", ANGRY: "Crying",
+  AWAKE: "Awake", EYES_CLOSED: "Eyes closed",
+  SLEEP_CANDIDATE: "Drifting off", DISTRESS_FACE: "Looks upset",
+  UNKNOWN: "Can't see the baby",
+  QUIET_AWAKE: "Quiet and awake", STARTLE: "Startled",
+  FUSS_WEAK: "Fussing", CRY: "Crying",
+  STRONG_DISTRESS: "Very upset", PAIN_SUSPECT: "Needs you now",
+  DROWSY: "Getting sleepy", SLEEP_TENTATIVE: "Falling asleep",
+  SLEEP_STABLE: "Sleeping", STATE_UNCLEAR: "Can't see the baby",
 };
 
 /** Status role per state, so a colour never travels without its label. */

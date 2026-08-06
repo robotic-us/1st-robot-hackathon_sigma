@@ -9,6 +9,7 @@ FACES_DB = FACES_DIR / "faces.npz"
 YUNET = MODELS / "face_detection_yunet_2022mar.onnx"
 SFACE = MODELS / "face_recognition_sface_2021dec.onnx"
 FERPLUS = MODELS / "emotion-ferplus-8.onnx"
+BLAZEPOSE = MODELS / "pose_estimation_mediapipe_2023mar.onnx"
 
 # --- camera -----------------------------------------------------------------
 CAM_INDEX = 0

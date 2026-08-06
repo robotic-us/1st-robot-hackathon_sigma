@@ -52,9 +52,10 @@ export default function Orb({
     const g = cv.getContext("2d");
     if (!g) return;
 
-    // The palette is static, so read each token once -- this loop asks for
-    // colours sixty times a second and getComputedStyle is not free.
-    const tokens: Record<string, string> = {};
+    // The palette only changes when the colour scheme does, so read each token
+    // once and drop the cache on a theme flip -- this loop asks for colours
+    // sixty times a second and getComputedStyle is not free.
+    let tokens: Record<string, string> = {};
     const cssv = (name: string) =>
       name in tokens
         ? tokens[name]
@@ -62,6 +63,9 @@ export default function Orb({
             .getPropertyValue(name)
             .trim());
     const stateColor = (st: string) => cssv(ROLE[st] ?? "--muted");
+    const scheme = window.matchMedia("(prefers-color-scheme: dark)");
+    const retint = () => { tokens = {}; };
+    scheme.addEventListener("change", retint);
 
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const view = { off: 0, ghost: 0, lvl: 0, env: 0 };
@@ -170,7 +174,10 @@ export default function Orb({
     };
 
     raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      scheme.removeEventListener("change", retint);
+    };
   }, [latest]);
 
   return <canvas ref={ref} />;
