@@ -1,0 +1,14 @@
+# Models: 71 MB of ONNX binaries, re-fetchable with `python3 fetch_models.py`
+models/*.onnx
+
+# Enrolled face embeddings — biometric data, keep it off any remote
+faces/
+*.npz
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Recorded output from `run.py --save`
+*.mp4
+*.avi

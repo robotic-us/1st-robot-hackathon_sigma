@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>phorce studio — 해커톤 참가자 매뉴얼</title>
+<style>
+  /* ── phorce 브랜드 토큰 (src/phorce_studio/gui/design_tokens.py 와 동일) ── */
+  :root {
+    --navy:    #08122E;
+    --blue:    #003F87;
+    --cyan:    #1FA6E8;
+    --cyan-tint: #E7F6FD;
+    --page:    #F5F7FA;
+    --card:    #FFFFFF;
+    --border:  #E2E8F0;
+    --border-strong: #CBD5E1;
+    --text:    #2D3748;
+    --dim:     #556278;
+    --invert:  #FFFFFF;
+    --invert-dim: #DDE6F5;
+    --success: #16A34A;
+    --success-text: #166534;
+    --success-tint: #E7F6EF;
+    --warning: #D97706;
+    --warning-text: #92400E;
+    --warning-tint: #FEF3C7;
+    --danger:  #DC2626;
+    --danger-text: #991B1B;
+    --danger-tint: #FDECEC;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  body {
+    font-family: "Pretendard Variable", "Pretendard", "Malgun Gothic", "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+
+  .sheet { max-width: 860px; margin: 0 auto; padding: 0 20px 64px; }
+
+  /* ── 표지 ── */
+  header.cover {
+    background: var(--navy);
+    color: var(--invert);
+    border-radius: 0 0 18px 18px;
+    padding: 48px 40px 40px;
+    margin-bottom: 36px;
+  }
+  header.cover .eyebrow {
+    color: var(--cyan);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  header.cover h1 {
+    font-size: 34px;
+    font-weight: 800;
+    line-height: 1.25;
+    text-wrap: balance;
+    margin-bottom: 14px;
+  }
+  header.cover .tagline {
+    color: var(--invert-dim);
+    font-size: 16px;
+    max-width: 34em;
+  }
+  header.cover .keyline {
+    margin-top: 26px;
+    padding: 14px 18px;
+    background: rgba(31, 166, 232, 0.12);
+    border-left: 4px solid var(--cyan);
+    border-radius: 6px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  /* ── 섹션 공통 ── */
+  section { margin-bottom: 40px; }
+  h2 {
+    font-size: 22px;
+    font-weight: 800;
+    color: var(--blue);
+    margin-bottom: 6px;
+    text-wrap: balance;
+  }
+  h2 .no {
+    display: inline-block;
+    min-width: 34px;
+    text-align: center;
+    background: var(--blue);
+    color: var(--invert);
+    border-radius: 8px;
+    font-size: 16px;
+    padding: 2px 8px;
+    margin-right: 10px;
+    vertical-align: 2px;
+  }
+  .lede { color: var(--dim); margin-bottom: 16px; max-width: 44em; }
+  h3 { font-size: 16.5px; font-weight: 700; margin: 18px 0 8px; }
+
+  p { margin-bottom: 10px; max-width: 46em; }
+  ul, ol { margin: 0 0 12px 22px; }
+  li { margin-bottom: 6px; }
+  strong { font-weight: 700; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 14px;
+  }
+  .card > h3:first-child { margin-top: 0; }
+
+  /* "사전 설정" 각인 밴드 — 문서 전체에서 같은 모양 반복 */
+  .remember {
+    background: var(--cyan-tint);
+    border: 1px solid var(--cyan);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 14px 0;
+    font-weight: 600;
+    max-width: none;
+  }
+  .remember::before { content: "🔑 기억하세요 — "; font-weight: 800; color: var(--blue); }
+
+  .safety {
+    background: var(--danger-tint);
+    border: 1px solid var(--danger);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 14px 0;
+    max-width: none;
+  }
+  .safety::before { content: "⚠ 안전 — "; font-weight: 800; color: var(--danger-text); }
+
+  .tip {
+    background: var(--success-tint);
+    border: 1px solid var(--success);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 14px 0;
+    max-width: none;
+  }
+  .tip::before { content: "✔ 알아두면 좋아요 — "; font-weight: 800; color: var(--success-text); }
+
+  /* ── 버튼 표 ── */
+  .btn-table-wrap { overflow-x: auto; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 10px 0 14px;
+    font-size: 14.5px;
+    background: var(--card);
+  }
+  th {
+    text-align: left;
+    background: var(--page);
+    color: var(--dim);
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: .04em;
+  }
+  th, td { border: 1px solid var(--border); padding: 9px 12px; vertical-align: top; }
+  td.btn { white-space: nowrap; font-weight: 700; }
+
+  /* 화면 속 버튼처럼 보이는 라벨 */
+  .ui {
+    display: inline-block;
+    background: var(--blue);
+    color: var(--invert);
+    border-radius: 7px;
+    padding: 1px 9px 2px;
+    font-size: 13.5px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .ui.ghost { background: var(--card); color: var(--text); border: 1.5px solid var(--border-strong); }
+  .ui.danger { background: var(--danger); }
+  .ui.tab { background: var(--navy); }
+
+  /* ── 시스템 그림 ── */
+  .diagram {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 20px;
+    margin: 14px 0;
+    overflow-x: auto;
+  }
+  .diagram .row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    flex-wrap: nowrap;
+    min-width: 560px;
+  }
+  .node {
+    border-radius: 12px;
+    padding: 14px 16px;
+    text-align: center;
+    min-width: 128px;
+  }
+  .node .who { font-weight: 800; font-size: 16px; }
+  .node .what { font-size: 12.5px; margin-top: 3px; line-height: 1.45; }
+  .node.laptop { background: var(--cyan-tint); border: 2px solid var(--cyan); color: var(--text); }
+  .node.pcm    { background: var(--navy); color: var(--invert); }
+  .node.pcm .what { color: var(--invert-dim); }
+  .node.phact  { background: var(--card); border: 2px solid var(--border-strong); }
+  .node.jetson { background: var(--page); border: 2px dashed var(--border-strong); color: var(--dim); }
+  .link {
+    flex: 0 0 auto;
+    text-align: center;
+    color: var(--dim);
+    font-size: 12px;
+    padding: 0 6px;
+    line-height: 1.3;
+  }
+  .link .wire { display: block; color: var(--cyan); font-weight: 800; font-size: 15px; letter-spacing: -1px; }
+  .link.dashed .wire { color: var(--border-strong); }
+  .diagram .caption { text-align: center; color: var(--dim); font-size: 13px; margin-top: 14px; }
+
+  /* ── 역할 2단 ── */
+  .two-col { display: flex; gap: 14px; flex-wrap: wrap; }
+  .two-col .card { flex: 1 1 320px; margin-bottom: 0; }
+  .two-col h3 { margin-top: 0; }
+  .role-tag {
+    display: inline-block;
+    font-size: 11.5px;
+    font-weight: 800;
+    letter-spacing: .1em;
+    padding: 2px 10px;
+    border-radius: 99px;
+    margin-bottom: 8px;
+  }
+  .role-tag.studio { background: var(--cyan-tint); color: var(--blue); }
+  .role-tag.pcm { background: var(--navy); color: var(--invert); }
+
+  /* ── 교시 5단계 ── */
+  .steps { counter-reset: step; list-style: none; margin-left: 0; }
+  .steps > li {
+    counter-increment: step;
+    position: relative;
+    padding: 14px 18px 14px 58px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 10px;
+  }
+  .steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 16px; top: 16px;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--blue);
+    color: var(--invert);
+    font-weight: 800;
+    font-size: 15px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .steps .st { font-weight: 800; font-size: 15.5px; }
+  .steps p { margin: 4px 0 0; font-size: 14.5px; }
+  .steps .robot-moves {
+    display: inline-block;
+    background: var(--danger-tint);
+    color: var(--danger-text);
+    font-size: 12px;
+    font-weight: 800;
+    border-radius: 99px;
+    padding: 1px 10px;
+    margin-left: 6px;
+    vertical-align: 1px;
+  }
+  .steps .robot-still {
+    display: inline-block;
+    background: var(--success-tint);
+    color: var(--success-text);
+    font-size: 12px;
+    font-weight: 800;
+    border-radius: 99px;
+    padding: 1px 10px;
+    margin-left: 6px;
+    vertical-align: 1px;
+  }
+
+  /* ── 낱말 사전 ── */
+  dl.glossary { display: grid; grid-template-columns: 110px 1fr; gap: 6px 14px; }
+  dl.glossary dt { font-weight: 800; color: var(--blue); }
+  dl.glossary dd { color: var(--text); }
+
+  /* ── 마지막 요약 ── */
+  .finale {
+    background: var(--navy);
+    color: var(--invert);
+    border-radius: 14px;
+    padding: 26px 30px;
+  }
+  .finale h2 { color: var(--cyan); margin-bottom: 12px; }
+  .finale ol { margin-left: 22px; }
+  .finale li { margin-bottom: 8px; }
+  .finale .order {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: .01em;
+    margin-bottom: 14px;
+  }
+  .finale .order .arrow { color: var(--cyan); padding: 0 6px; }
+
+  footer.doc {
+    color: var(--dim);
+    font-size: 12.5px;
+    text-align: center;
+    margin-top: 28px;
+  }
+
+  /* ── 인쇄(PDF) ── */
+  @page { size: A4; margin: 14mm 12mm; }
+  @media print {
+    body { background: #FFFFFF; font-size: 13px; }
+    .sheet { max-width: none; padding: 0; }
+    header.cover { border-radius: 12px; margin-top: 0; }
+    section { break-inside: auto; }
+    .card, .steps > li, .diagram, .remember, .safety, .tip { break-inside: avoid; }
+    h2 { break-after: avoid; }
+    .page-break { break-before: page; }
+  }
+</style>
+</head>
+<body>
+
+<header class="cover">
+  <div class="eyebrow">phorce · hackathon guide</div>
+  <h1>phorce studio<br>해커톤 참가자 매뉴얼</h1>
+  <p class="tagline">
+    phorce studio는 로봇을 조종하는 리모컨이 아닙니다.
+    로봇이 움직이기 <strong>전에</strong>, 로봇에게 필요한 것들을 <strong>미리 심어 두는</strong> 프로그램입니다.
+  </p>
+  <div class="keyline">
+    여기서 저장하는 모든 것은 여러분의 노트북이 아니라 <u>로봇 안(pcm과 SD 카드)</u>에 남습니다.
+    로봇 전원을 껐다 켜도 그대로 유지됩니다. 이것이 "사전 설정"입니다.
+  </div>
+</header>
+
+<div class="sheet">
+
+<!-- ════════════════════════ 1 ════════════════════════ -->
+<section>
+  <h2><span class="no">1</span>이 프로그램은 무엇인가요?</h2>
+  <p class="lede">한 문장으로: <strong>로봇의 "미리 정해 두는 값"을 만드는 도구</strong>입니다.</p>
+
+  <div class="card">
+    <p>로봇이 나중에 스스로 움직이려면, 그 전에 사람이 정해 줘야 하는 것들이 있습니다.</p>
+    <ul>
+      <li>이 로봇에는 <strong>어떤 관절(모터)이 몇 개</strong> 붙어 있는가?</li>
+      <li>각 관절의 <strong>"0도" 기준(영점)</strong>은 어디인가?</li>
+      <li>전원을 켜면 <strong>어떤 자세</strong>로 시작할 것인가?</li>
+      <li>어떤 <strong>동작(모션)</strong>들을 알고 있어야 하는가?</li>
+    </ul>
+    <p>phorce studio는 이 네 가지를 화면에서 정하고, 로봇에 저장하는 프로그램입니다.
+       특히 네 번째 — 로봇을 손으로 직접 움직여서 동작을 가르치는 <strong>"교시"</strong> — 가 이 앱의 핵심입니다.</p>
+  </div>
+
+  <div class="remember">
+    studio를 끄고 노트북을 치워도, 저장한 설정과 동작은 로봇에 그대로 남아 있습니다.
+    나중에 로봇이 혼자 움직일 때 쓰는 것이 바로 지금 여러분이 저장하는 값입니다.
+  </div>
+</section>
+
+<!-- ════════════════════════ 2 ════════════════════════ -->
+<section>
+  <h2><span class="no">2</span>등장인물 — 무엇이 무엇과 연결되나요?</h2>
+  <p class="lede">phorce 로봇 시스템에는 네 명의 등장인물이 있습니다.</p>
+
+  <div class="diagram">
+    <div class="row">
+      <div class="node laptop">
+        <div class="who">studio</div>
+        <div class="what">여러분 노트북의<br>이 프로그램</div>
+      </div>
+      <div class="link"><span class="wire">──USB──</span>케이블 1개</div>
+      <div class="node pcm">
+        <div class="who">pcm</div>
+        <div class="what">로봇의 중앙 관리자<br>(SD 카드 보관)</div>
+      </div>
+      <div class="link"><span class="wire">──내부선──</span>로봇 몸속</div>
+      <div class="node phact">
+        <div class="who">phact ×12</div>
+        <div class="what">관절마다 하나씩<br>있는 모터 드라이버</div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:16px;">
+      <div class="node jetson">
+        <div class="who">Jetson</div>
+        <div class="what">로봇의 두뇌 (AI)<br>— 오늘은 안 씀</div>
+      </div>
+      <div class="link dashed"><span class="wire">┄┄┄┄┄</span>나중에 pcm과 연결</div>
+      <div class="node pcm" style="opacity:.45;">
+        <div class="who">pcm</div>
+        <div class="what">위와 같은 pcm</div>
+      </div>
+    </div>
+    <div class="caption">studio는 USB 케이블 하나로 pcm과 대화합니다. 관절을 실제로 돌리는 것은 언제나 pcm과 phact입니다.</div>
+  </div>
+
+  <div class="card">
+    <dl class="glossary">
+      <dt>studio</dt><dd>지금 보고 있는 이 프로그램. 사람의 결정을 받아서 pcm에 전달합니다.</dd>
+      <dt>pcm</dt><dd>로봇 몸속의 중앙 관리자 보드. 설정을 기억하고, 관절을 지휘하고, SD 카드에 동작 파일을 보관합니다.</dd>
+      <dt>phact</dt><dd>관절 하나를 담당하는 모터 드라이버. 최대 12개가 붙습니다. studio 화면에서는 "축"이라고 부릅니다.</dd>
+      <dt>Jetson</dt><dd>로봇의 두뇌 컴퓨터. 나중에 AI로 로봇을 움직일 때 pcm에게 명령을 내립니다. <strong>그때 쓰는 설정과 동작이, 지금 studio로 미리 넣어 두는 것들입니다.</strong></dd>
+    </dl>
+  </div>
+</section>
+
+<!-- ════════════════════════ 3 ════════════════════════ -->
+<section>
+  <h2><span class="no">3</span>studio와 pcm — 누가 무슨 일을 하나요?</h2>
+  <p class="lede">역할이 뚜렷하게 나뉩니다. studio는 "보여주고 결정받기", pcm은 "실제로 하기".</p>
+
+  <div class="two-col">
+    <div class="card">
+      <span class="role-tag studio">STUDIO 가 하는 일</span>
+      <ul>
+        <li>로봇의 지금 상태를 <strong>사람이 읽을 수 있게</strong> 화면·그래프로 보여줍니다.</li>
+        <li>이름·영점·자세 같은 <strong>사람의 결정</strong>을 입력받아 pcm에 저장을 요청합니다.</li>
+        <li>가르친 동작을 저장하기 전에 <strong>화면에서 미리</strong> 재생해 보여줍니다.</li>
+        <li>연결이 잠깐 끊기면 <strong>스스로 다시 연결</strong>합니다.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <span class="role-tag pcm">PCM 이 studio 연동으로 하는 일</span>
+      <ul>
+        <li>붙어 있는 phact(축)들을 <strong>찾아서 목록</strong>으로 알려줍니다.</li>
+        <li>받은 설정을 자기 <strong>내부 메모리(FLASH)</strong>에 저장합니다 — 전원을 꺼도 유지.</li>
+        <li>교시 중 관절 각도를 <strong>1초에 1,000번</strong> 기록해 studio로 보냅니다.</li>
+        <li>완성된 동작을 <strong>SD 카드에 파일로</strong> 보관하고, 요청이 오면 재생합니다.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="remember">
+    studio는 통역사, pcm은 실행자입니다. 버튼을 누르면 studio가 pcm에게 부탁하고,
+    실제 저장·기록·재생은 전부 로봇 안의 pcm이 합니다. 그래서 결과가 로봇에 남습니다.
+  </div>
+</section>
+
+<!-- ════════════════════════ 4 ════════════════════════ -->
+<section class="page-break">
+  <h2><span class="no">4</span>시작하기 — 연결 화면</h2>
+  <p class="lede">프로그램을 켜면 가장 먼저 보이는 화면입니다.</p>
+
+  <div class="card">
+    <ol>
+      <li>USB 케이블로 노트북과 로봇(pcm)을 연결합니다.</li>
+      <li><strong>연결할 포트</strong> 목록에서 로봇의 포트를 고릅니다. 대부분 자동으로 잡혀 있습니다.</li>
+      <li><span class="ui">연결</span> 버튼을 누릅니다.</li>
+    </ol>
+    <p>연결되면 studio가 pcm에 저장된 설정을 자동으로 읽어 옵니다.
+       <strong>수십 초 걸릴 수 있습니다 — 화면 안내를 보며 기다려 주세요.</strong> 끝나면 ① 설정 화면이 열립니다.</p>
+    <div class="btn-table-wrap">
+    <table>
+      <tr><th style="width:190px;">버튼</th><th>누르면 생기는 일</th></tr>
+      <tr><td class="btn"><span class="ui">연결</span></td><td>선택한 포트로 pcm과 대화를 시작합니다.</td></tr>
+      <tr><td class="btn"><span class="ui ghost">다시 검색</span></td><td>포트 목록을 새로 찾습니다. 케이블을 방금 꽂았다면 이걸 누르세요.</td></tr>
+      <tr><td class="btn"><span class="ui ghost">데모 열기 · 합성 데이터</span></td><td>로봇 없이 가짜 데이터로 화면과 흐름만 구경합니다. 아무것도 저장되지 않습니다.</td></tr>
+    </table>
+    </div>
+  </div>
+
+  <div class="tip">
+    로봇이 아직 없어도 <span class="ui ghost">데모 열기 · 합성 데이터</span>로 전체 화면을 미리 연습할 수 있습니다.
+  </div>
+</section>
+
+<!-- ════════════════════════ 5 ════════════════════════ -->
+<section>
+  <h2><span class="no">5</span>화면 구성 — 3개의 화면과 아래 상태 바</h2>
+  <p class="lede">왼쪽 세로 메뉴에서 화면을 고릅니다. 번호가 곧 작업 순서입니다.</p>
+
+  <div class="card">
+    <div class="btn-table-wrap">
+    <table>
+      <tr><th style="width:120px;">화면</th><th>하는 일</th></tr>
+      <tr><td class="btn"><span class="ui tab">① 설정</span></td><td>축 구성·이름·영점을 pcm에 저장합니다. <strong>가장 먼저 할 일.</strong></td></tr>
+      <tr><td class="btn"><span class="ui tab">② 교시</span></td><td>손으로 움직인 동작을 SD 카드의 모션 파일로 만듭니다. <strong>이 앱의 핵심.</strong></td></tr>
+      <tr><td class="btn"><span class="ui tab">③ 모니터</span></td><td>실시간 값을 그래프로 보고, 움직임 세기(게인)를 조정합니다. 확인용.</td></tr>
+    </table>
+    </div>
+
+    <h3>화면 아래 상태 바 — 어느 화면에서든 항상 보입니다</h3>
+    <p>지금 상태 네 가지(<strong>pcm · 서보 · 교시 · 재생</strong>)와, 급할 때 쓰는 버튼 두 개가 있습니다.</p>
+    <div class="btn-table-wrap">
+    <table>
+      <tr><th style="width:160px;">버튼</th><th>누르면 생기는 일</th></tr>
+      <tr><td class="btn"><span class="ui danger">재생 정지</span></td><td>재생 중인 동작을 멈춥니다.</td></tr>
+      <tr><td class="btn"><span class="ui danger">로봇 힘 끄기</span></td><td>모든 관절의 힘(서보)을 끕니다. 로봇이 이상하게 움직이면 이 버튼입니다.</td></tr>
+    </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>꼭 알아야 할 낱말: "서보" = 로봇의 힘</h3>
+    <dl class="glossary">
+      <dt>서보 켜짐</dt><dd>모터에 힘이 들어가 자세를 버팁니다. 손으로 밀어도 잘 안 움직입니다. <strong>재생할 때</strong> 필요합니다.</dd>
+      <dt>서보 꺼짐</dt><dd>모터가 힘을 뺍니다. 손으로 자유롭게 움직일 수 있습니다. <strong>가르칠 때(교시)</strong> 필요합니다.</dd>
+    </dl>
+    <p style="margin-top:8px;">그래서 순서는 언제나 — <strong>힘을 빼고 가르치고, 힘을 켜고 재생한다</strong> 입니다.</p>
+  </div>
+</section>
+
+<!-- ════════════════════════ 6 ════════════════════════ -->
+<section class="page-break">
+  <h2><span class="no">6</span><span class="ui tab" style="font-size:16px;vertical-align:3px;">① 설정</span>&nbsp; 로봇의 기본을 pcm에 저장</h2>
+  <p class="lede">위에서부터 순서대로 6개의 카드가 있습니다. 저장 결과는 전부 pcm 내부 메모리에 남습니다 — <strong>전원을 껐다 켜도 유지됩니다.</strong></p>
+
+  <div class="card">
+    <h3>1. 이름 설정</h3>
+    <p>이 로봇의 이름을 정합니다. <span class="ui">저장</span>을 누르면 이름이 pcm에 저장되어, 다음에 누가 연결해도 같은 이름이 보입니다.</p>
+
+    <h3>2. 구성 확인 · phact 이름</h3>
+    <p>지금 로봇에 실제로 붙어 있는 축(관절) 목록이 보입니다.</p>
+    <div class="btn-table-wrap">
+    <table>
+      <tr><th style="width:230px;">버튼</th><th>누르면 생기는 일</th></tr>
+      <tr><td class="btn"><span class="ui">지금 붙은 축으로 저장</span></td><td>"이 로봇은 이 관절들을 쓴다"를 확정해 pcm에 저장합니다. 이후 모든 화면이 이 목록을 기준으로 동작합니다.</td></tr>
+      <tr><td class="btn"><span class="ui ghost">구성 해제</span></td><td>확정을 지웁니다. 축 개수를 바꿀 때(관절을 더 붙이거나 뺄 때) 사용합니다.</td></tr>
+      <tr><td class="btn"><span class="ui ghost">이름 저장</span></td><td>각 관절에 사람이 읽기 쉬운 이름(예: "어깨", "팔꿈치")을 붙여 저장합니다. 그래프와 목록에 이 이름이 나옵니다.</td></tr>
+    </table>
+    </div>
+
+    <h3>3. 영점 설정 (핵심)</h3>
+    <p>영점 = 각 관절의 <strong>"여기가 0도"라는 기준점</strong>입니다. 관절을 원하는 기준 자세로 만든 뒤
+       <span class="ui">원점 설정</span>을 누르면, 그 위치가 0도가 됩니다. 실패한 축이 있으면
+       <span class="ui ghost">실패한 축만 다시 시도</span>로 그 축만 다시 하면 됩니다.</p>
+    <div class="safety">
+      영점은 <strong>동작을 가르치기(녹화) 전에</strong> 반드시 먼저 잡으세요.
+      영점을 나중에 바꾸면, 이미 저장한 동작들의 기준이 어긋나서 로봇이 엉뚱한 자세로 움직입니다.
+    </div>
+
+    <h3>4. 부팅 자세 옵션 (핵심)</h3>
+    <p>로봇 본체의 <strong>버튼 1(제어 시작)</strong>을 눌렀을 때, 로봇이 어떤 자세로 시작할지 미리 정합니다.
+       옵션을 고르고 <span class="ui">저장</span>합니다. 자세를 직접 정하는 옵션에서는
+       <span class="ui ghost">현재 자세 가져오기</span>(지금 로봇의 자세를 그대로 입력칸에 복사)나
+       <span class="ui ghost">전부 0°</span>를 쓸 수 있습니다.</p>
+
+    <h3>5. 종료 자세 옵션</h3>
+    <p>로봇을 끌 때, 힘을 빼기 전에 어떤 자세를 취할지 정합니다. 부팅 자세와 짝입니다.</p>
+
+    <h3>6. 모션 오디오</h3>
+    <p>동작 재생 시 효과음을 켜고 끕니다. 꺼도 오류·안전 안내음은 계속 나옵니다.</p>
+  </div>
+
+  <div class="remember">
+    이 화면의 모든 <span class="ui" style="font-size:12px;">저장</span>은 노트북이 아니라 <strong>pcm에 저장</strong>됩니다.
+    studio를 꺼도, 로봇 전원을 껐다 켜도, 로봇은 이 값들을 기억합니다.
+    나중에 로봇이 버튼 1로 혼자 시작할 때 쓰는 값이 바로 이것입니다.
+  </div>
+</section>
+
+<!-- ════════════════════════ 7 ════════════════════════ -->
+<section class="page-break">
+  <h2><span class="no">7</span><span class="ui tab" style="font-size:16px;vertical-align:3px;">② 교시</span>&nbsp; 손으로 가르치고, 로봇에 남기기</h2>
+  <p class="lede">"교시"는 로봇을 손으로 움직여서 동작을 가르치는 일입니다. 화면이 5단계로 안내합니다.
+     각 단계 카드는 제목을 눌러 자유롭게 접고 펼 수 있습니다.</p>
+
+  <ol class="steps">
+    <li>
+      <span class="st">슬롯 선택 <span class="robot-still">로봇 안 움직임</span></span>
+      <p>SD 카드에는 동작을 담는 번호 붙은 칸(<strong>슬롯</strong>)들이 있습니다.
+         격자에서 어느 칸이 차 있고 비었는지 한눈에 보입니다. 동작을 담을 슬롯을 고르세요.
+         (SD 카드는 대부분 자동 인식됩니다. 안 되면 <span class="ui ghost">찾기…</span> / <span class="ui ghost">새로고침</span>.)</p>
+    </li>
+    <li>
+      <span class="st">동작 녹화 <span class="robot-still">사람이 움직임</span></span>
+      <p>서보(힘)가 꺼진 상태에서 <span class="ui">● 녹화 시작</span>을 누르고, 로봇을 손으로 천천히 움직이세요.
+         그동안 pcm이 관절 각도를 <strong>1초에 1,000번</strong> 기록합니다. 끝나면 <span class="ui">■ 종료</span>.</p>
+    </li>
+    <li>
+      <span class="st">가르친 움직임 확인 <span class="robot-still">로봇 안 움직임</span></span>
+      <p>방금 기록한 움직임이 그래프로 보입니다. <span class="ui ghost">▶ 재생</span>은 <strong>화면에서만</strong> 재생합니다 —
+         로봇은 움직이지 않으니 안심하세요. 마음에 들면 <span class="ui">이 결과로 저장 준비</span>.</p>
+    </li>
+    <li>
+      <span class="st">모션 저장 <span class="robot-still">로봇 안 움직임</span></span>
+      <p>이름과 메모를 확인하고 저장 버튼을 누르면, 동작이 <strong>SD 카드에 파일로</strong> 저장됩니다.
+         studio는 저장 후 파일을 다시 읽어 <strong>제대로 저장됐는지 검증</strong>까지 합니다.
+         메모만 고치고 싶으면 <span class="ui ghost">메모만 저장</span>.</p>
+    </li>
+    <li>
+      <span class="st">로봇 테스트 <span class="robot-moves">로봇이 실제로 움직임!</span></span>
+      <p><span class="ui">서보 켜기</span>로 힘을 넣은 뒤 <span class="ui">로봇에서 재생</span>을 누르면,
+         저장된 모션을 <strong>실제 로봇이 재생</strong>합니다. 멈추려면 <span class="ui danger">로봇 정지</span>.
+         끝나면 <span class="ui ghost">서보 끄기</span>.</p>
+    </li>
+  </ol>
+
+  <div class="safety">
+    로봇이 실제로 움직이는 버튼은 <strong>⑤ 단계의 <span class="ui" style="font-size:12px;">로봇에서 재생</span> 뿐</strong>입니다.
+    누르기 전에 로봇 주변에 사람과 물건이 없는지 확인하세요. 놀라면 화면 아래
+    <span class="ui danger" style="font-size:12px;">재생 정지</span> 또는 <span class="ui danger" style="font-size:12px;">로봇 힘 끄기</span>.
+  </div>
+
+  <div class="remember">
+    저장된 모션 파일은 <strong>로봇의 SD 카드</strong>에 있습니다. 노트북을 치워도 로봇은 그 동작을 알고 있고,
+    나중에 Jetson(두뇌)이 "3번 동작 실행"이라고 명령하면 pcm이 그 파일을 꺼내 재생합니다.
+  </div>
+</section>
+
+<!-- ════════════════════════ 8 ════════════════════════ -->
+<section>
+  <h2><span class="no">8</span><span class="ui tab" style="font-size:16px;vertical-align:3px;">③ 모니터</span>&nbsp; 실시간 확인과 미세 조정</h2>
+  <p class="lede">왼쪽은 그래프, 오른쪽은 실시간 값 목록입니다. 로봇이 지금 무엇을 하는지 눈으로 확인하는 화면입니다.</p>
+
+  <div class="card">
+    <h3>그래프 도구</h3>
+    <div class="btn-table-wrap">
+    <table>
+      <tr><th style="width:210px;">버튼</th><th>누르면 생기는 일</th></tr>
+      <tr><td class="btn"><span class="ui ghost">최근 10초</span></td><td>그래프를 최근 10초 범위로 맞춥니다.</td></tr>
+      <tr><td class="btn"><span class="ui ghost">화면만 잠시 멈춤</span></td><td>그래프 화면만 멈춥니다. 로봇과 기록은 계속 돌아갑니다.</td></tr>
+      <tr><td class="btn"><span class="ui ghost">보기 초기화</span></td><td>확대·이동한 그래프를 처음 상태로 되돌립니다.</td></tr>
+      <tr><td class="btn"><span class="ui ghost">두 점 재기</span></td><td>그래프 위 두 점을 골라 시간·각도 차이를 재줍니다.</td></tr>
+      <tr><td class="btn"><span class="ui ghost">고속 로그</span></td><td>정밀 데이터를 파일로 기록합니다. 분석이 필요할 때만 쓰세요.</td></tr>
+    </table>
+    </div>
+
+    <h3>게인 조정 (위치 PID)</h3>
+    <p><strong>게인</strong> = 로봇이 목표 자세를 얼마나 세게, 빠릿하게 따라갈지의 세기입니다.</p>
+    <div class="btn-table-wrap">
+    <table>
+      <tr><th style="width:160px;">버튼</th><th>누르면 생기는 일</th></tr>
+      <tr><td class="btn"><span class="ui">적용</span></td><td>새 게인을 로봇에 <strong>임시로</strong> 넣어 바로 시험합니다. 전원을 끄면 사라집니다.</td></tr>
+      <tr><td class="btn"><span class="ui">설정 저장</span></td><td>마음에 든 게인을 phact 내부 메모리에 <strong>영구 저장</strong>합니다.</td></tr>
+      <tr><td class="btn"><span class="ui danger">서보 끄기</span></td><td>시험 중 움직임이 이상하면 즉시 힘을 끕니다.</td></tr>
+    </table>
+    </div>
+    <p>즉, 여기서도 규칙은 같습니다 — <strong>적용은 시험, 저장은 각인.</strong> 저장한 값이 로봇의 사전 설정이 됩니다.</p>
+  </div>
+</section>
+
+<!-- ════════════════════════ 9 ════════════════════════ -->
+<section>
+  <h2><span class="no">9</span>이런 일이 생기면 — 당황하지 마세요</h2>
+
+  <div class="card">
+    <div class="btn-table-wrap">
+    <table>
+      <tr><th style="width:280px;">이런 화면이 보이면</th><th>이렇게 하세요</th></tr>
+      <tr>
+        <td>"응답이 잠깐 끊겼습니다 — 작업은 그대로입니다"</td>
+        <td>아무것도 안 해도 됩니다. studio가 몇 초 안에 스스로 다시 연결합니다. 저장하던 내용은 사라지지 않습니다.</td>
+      </tr>
+      <tr>
+        <td>저장/읽기 중 SD 카드 드라이브가 잠깐 사라졌다 나타남</td>
+        <td>정상입니다. SD 카드를 studio와 pcm이 번갈아 쓰기 때문입니다. 화면 안내가 끝날 때까지 기다리면 됩니다.</td>
+      </tr>
+      <tr>
+        <td>한참 기다려도 반응이 없음</td>
+        <td>USB 케이블을 확인하고, 연결 화면으로 돌아가 <span class="ui" style="font-size:12px;">연결</span>을 다시 누르세요.</td>
+      </tr>
+      <tr>
+        <td>버튼이 눌리지 않게 흐려져 있음</td>
+        <td>지금 단계에서 쓰면 안 되는 버튼입니다. 버튼 근처의 안내 문구가 이유를 알려줍니다. 순서대로 진행하면 열립니다.</td>
+      </tr>
+      <tr>
+        <td>"부팅 에러 복구" 안내가 보임</td>
+        <td>축 구성과 실제 관절 개수가 달라진 상태입니다. 화면 안내대로 ① 설정에서 축 구성만 다시 저장(또는 <span class="ui ghost" style="font-size:12px;">구성 해제</span>) 후 로봇을 재부팅하세요.</td>
+      </tr>
+    </table>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════ 10 ════════════════════════ -->
+<section>
+  <div class="finale">
+    <h2>딱 이것만 기억하세요</h2>
+    <div class="order">① 설정 <span class="arrow">→</span> ② 교시 <span class="arrow">→</span> ③ 모니터</div>
+    <ol>
+      <li><strong>순서대로.</strong> 영점(① 설정)을 먼저 잡고 나서 동작을 가르치세요(② 교시). 순서가 바뀌면 동작이 어긋납니다.</li>
+      <li><strong>힘을 빼고 가르치고, 힘을 켜고 재생한다.</strong> 서보 꺼짐 = 손으로 교시, 서보 켜짐 = 로봇이 재생.</li>
+      <li><strong>로봇이 실제로 움직이는 버튼은 [로봇에서 재생] 하나.</strong> 누르기 전에 주변 확인, 급하면 [로봇 힘 끄기].</li>
+      <li><strong>저장 = 로봇에 각인.</strong> 설정은 pcm에, 동작은 SD 카드에 남습니다. 전원을 꺼도 유지됩니다 — 그것이 이 프로그램의 존재 이유, <u>로봇 시스템의 사전 설정</u>입니다.</li>
+    </ol>
+  </div>
+</section>
+
+<footer class="doc">
+  phorce studio · 해커톤 참가자 매뉴얼 · 2026-08-04 · 궁금한 점은 운영진에게 물어보세요.
+</footer>
+
+</div>
+</body>
+</html>

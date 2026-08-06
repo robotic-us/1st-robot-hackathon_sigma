@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>phorce — 여러분의 Jetson 시스템 안내</title>
+<style>
+  body { font-family: "Noto Sans CJK KR", "Noto Sans KR", sans-serif;
+         max-width: 760px; margin: 2rem auto; padding: 0 1rem;
+         font-size: 10.5pt; line-height: 1.7; color: #222; }
+  h1 { color: #75552d; border-bottom: 3px solid #75552d; padding-bottom: .3rem; }
+  h2 { color: #75552d; border-bottom: 1px solid #dccdb4; padding-bottom: .2rem; margin-top: 2.2rem; }
+  h3 { color: #5d4423; margin-top: 1.6rem; }
+  code { font-family: "Noto Sans Mono CJK KR", monospace; background: #f5f0e6;
+         padding: .1rem .3rem; border-radius: 3px; font-size: 9.5pt; }
+  pre { background: #2b2b2b; color: #eee; padding: .8rem 1rem; border-radius: 6px;
+        overflow-x: auto; white-space: pre-wrap; font-size: 9pt; }
+  pre code { background: none; color: inherit; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: 9.5pt; }
+  th, td { border: 1px solid #ccc; padding: .35rem .55rem; text-align: left; vertical-align: top; }
+  th { background: #f0e8d8; }
+  .box  { border-left: 5px solid #75552d; background: #faf6ee; padding: .6rem .9rem; margin: 1rem 0; }
+  .tip  { border-left: 5px solid #2c8a4a; background: #f0f8f2; padding: .6rem .9rem; margin: 1rem 0; }
+  .warn { border-left: 5px solid #d99000; background: #fdf7ea; padding: .6rem .9rem; margin: 1rem 0; }
+  .lead { font-size: 11.5pt; color: #444; }
+  .foot { color: #888; font-size: 8.5pt; margin-top: 3rem; border-top: 1px solid #ddd; padding-top: .5rem; }
+  table.diagram { border: none; border-collapse: separate; border-spacing: 0 3px; }
+  table.diagram td { border: none; padding: 0; }
+  table.diagram td.dbox { border: 2px solid; border-radius: 8px;
+                          padding: .5rem .8rem; text-align: center; }
+  .d-you   { border-color: #2c8a4a; background: #eaf5ee; }
+  .d-sw    { border-color: #75552d; background: #faf6ee; }
+  .d-kern  { border-color: #a04545; background: #faf0ee; }
+  .d-hw    { border-color: #888;    background: #f2f2f2; }
+  .dchan { text-align: center; font-size: 9pt; color: #555; padding: .1rem 0; }
+  /* 화면 전용 미화 — PDF 변환기는 아래를 무시한다 */
+  table:not(.diagram) tr:nth-child(even) td { background: #fbf9f4; }
+  h2 { padding-left: .45rem; border-left: 4px solid #75552d; }
+</style>
+</head>
+<body>
+
+<!-- 제목을 표로 감싼 이유: PDF 변환기(soffice)가 body 첫 블록 요소를 훼손하는
+     버그가 있는데, 표는 안전하게 렌더링된다 -->
+<table style="border:none;width:100%"><tr><td style="border:none;padding:0">
+<h1>phorce — 여러분의 Jetson 시스템 안내</h1>
+</td></tr></table>
+
+<p class="lead">여러분이 받은 Jetson(젯슨)이 어떻게 구성되어 있는지를 한 장으로
+설명합니다. 그냥 쓰기만 할 거라면 안 읽어도 됩니다 — 전부 미리 연결되어
+있습니다. 리눅스를 다뤄 본 분이라면 이 문서로 "커널에 무슨 패치가 됐고, 뭐가 왜
+깔려 있는지"를 파악할 수 있습니다.</p>
+
+<h2>1. phorce 시스템에서 Jetson 의 역할</h2>
+
+<p>phorce 로봇 시스템은 세 장치의 팀입니다:</p>
+
+<table>
+<tr><th>장치</th><th>몸에 비유하면</th><th>하는 일</th></tr>
+<tr><td><b>Jetson</b></td><td>🧠 두뇌</td><td>생각하는 곳 — <b>여러분의 코드가 사는 곳</b>. AI, 판단, 개발 전부 여기</td></tr>
+<tr><td><b>pcm</b></td><td>🧵 신경 중추</td><td>모션 재생과 안전의 최종 결정권자. Jetson 의 요청을 받아 관절들을 지휘</td></tr>
+<tr><td><b>phact ×6</b></td><td>💪 근육</td><td>관절 하나마다 붙은 모터 장치</td></tr>
+</table>
+
+<div class="box"><b>여러분이 이 위에서 하는 일:</b> 로봇의 상태(1초에 1000번
+올라오는 관절 데이터)를 보고, <b>"언제 몇 번 모션을 재생할지" 판단하는 코드</b>
+— AI 정책이든 제어 로직이든 — 를 만드는 것입니다.<br><br>
+<b>제약 조건:</b> 관절을 직접 실시간으로 조종하는 길은 안전을 위해 막혀
+있습니다. 로봇을 움직이는 방법은 <b>모션 번호(1~50) 전송 하나</b>입니다.
+이 제약 안에서 작업하시면 됩니다 — 자세한 사용법은 ④ API 레퍼런스에 있습니다.</div>
+
+<h2>2. 시스템 구성도</h2>
+
+<p>초록 = 여러분의 영역, 갈색 = 우리가 설치해 둔 소프트웨어, 붉은색 = 특별히
+손본 커널, 회색 = 하드웨어.</p>
+
+<table class="diagram">
+<tr><td class="dbox d-you" style="border:2px solid #2c8a4a;background:#eaf5ee;border-radius:8px;padding:8px 12px;text-align:center"><b>여러분의 작업 공간</b><br>
+<span style="font-size:9pt">여러분의 코드 · <code>phorce</code> CLI · Python/C++ 예제 · 화면(<code>phorce-console</code>)</span></td></tr>
+<tr><td class="dchan">▼ ▲</td></tr>
+<tr><td class="dbox d-sw" style="border:2px solid #75552d;background:#faf6ee;border-radius:8px;padding:8px 12px;text-align:center"><b>phorce SDK</b> (deb 패키지 8개, <code>/opt/ros/humble</code>)<br>
+<span style="font-size:9pt">공개 창구 · Python/C++ 클라이언트 · 로봇 통신 프로그램(안전 감시 포함)</span></td></tr>
+<tr><td class="dchan">▼ ▲</td></tr>
+<tr><td class="dbox d-sw" style="border:2px solid #75552d;background:#faf6ee;border-radius:8px;padding:8px 12px;text-align:center"><b>ROS 2 Humble</b> (로봇 미들웨어 · RViz 등 시각화 포함)</td></tr>
+<tr><td class="dchan">▼ ▲</td></tr>
+<tr><td class="dbox d-kern" style="border:2px solid #a04545;background:#faf0ee;border-radius:8px;padding:8px 12px;text-align:center"><b>실시간 커널</b> <code>5.15.148-rt-tegra</code> (PREEMPT_RT 패치)<br>
+<span style="font-size:9pt">CPU 12개 중 <b>8–11번을 로봇 통신 전용으로 격리</b> — 나머지 0–7번이 여러분 것</span></td></tr>
+<tr><td class="dchan">▼ ▲</td></tr>
+<tr><td class="dbox d-hw" style="border:2px solid #888;background:#f2f2f2;border-radius:8px;padding:8px 12px;text-align:center"><b>NVIDIA Jetson AGX Orin</b> — Ubuntu 22.04 (L4T 36.4.3 · JetPack 6.2)<br>
+<span style="font-size:9pt">CUDA 12.6 · cuDNN 9.3 · TensorRT 10.3 (AI/GPU) · 저장장치 NVMe 1TB</span></td></tr>
+<tr><td class="dchan">▼ ▲ &nbsp;유선랜 <code>eno1</code> — 로봇 전용선 (EtherCAT, 1초에 1000번)</td></tr>
+<tr><td class="dbox d-hw" style="border:2px solid #888;background:#f2f2f2;border-radius:8px;padding:8px 12px;text-align:center"><b>로봇</b> — pcm → phact ×6</td></tr>
+</table>
+
+<div class="tip"><b>한 문장 요약:</b> 평범한 Ubuntu 22.04 + ROS 2 개발 컴퓨터인데,
+<b>커널만 실시간용으로 바꾸고 CPU 4개를 로봇 통신 전용으로 떼어 놓은</b>
+시스템입니다. 여러분의 코드는 나머지 8개 코어에서 평범하게 돌면 됩니다.</div>
+
+<h2>3. 핵심 네 가지</h2>
+
+<h3>3-1. 왜 커널이 특별한가 — PREEMPT_RT</h3>
+<p>로봇 관절과는 <b>1초에 1000번</b>, 즉 1밀리초에 한 번씩 통신해야 합니다.
+보통 커널은 가끔 다른 일을 하느라 수백 마이크로초씩 한눈을 파는데, 로봇
+제어에서는 그 한눈이 곧 떨림과 오차가 됩니다. PREEMPT_RT 패치는 커널 내부의
+"양보 못 하는 구간"을 거의 없애서, 급한 일이 언제든 CPU 를 바로 차지할 수 있게
+만든 것입니다. 확인해 보려면:</p>
+<pre><code>uname -r                    # 5.15.148-rt-tegra  ← 끝의 rt 가 실시간 커널 표시
+cat /sys/kernel/realtime    # 1</code></pre>
+
+<h3>3-2. CPU 지도 — 8개는 여러분 것, 4개는 로봇 것</h3>
+<table>
+<tr><th>코어</th><th>주인</th><th>하는 일</th></tr>
+<tr><td><b>0–7</b></td><td>여러분 + 일반 시스템</td><td>여러분의 코드, ROS 2, GUI, 빌드, AI/GPU 작업 — 전부 여기</td></tr>
+<tr><td><b>8–11</b></td><td>로봇 통신 (격리)</td><td>1kHz 실시간 루프 전용. 일반 프로세스와 인터럽트가 못 들어오게 커널 수준에서 분리</td></tr>
+</table>
+<div class="warn"><b>8–11번 코어에 여러분의 프로세스를 일부러 고정(<code>taskset</code>
+등)하지 마세요.</b> 로봇 통신의 전용 차선입니다. 아무것도 안 하면 침범할 일이
+없습니다 — 시스템이 알아서 여러분의 프로세스를 0–7번에만 배치합니다.</div>
+<p>이 격리 덕분에 로봇 통신의 시간 흔들림(jitter)이 최대 204µs 에서 <b>7µs</b>
+수준까지 줄었습니다 — 로봇이 부드럽게 움직이는 비결입니다.</p>
+
+<h3>3-3. 계정과 보드 고유값</h3>
+<ul>
+<li>계정은 <code>phorce</code> 입니다. <b>처음 로그인할 때 비밀번호를 새로
+정하게 되어 있습니다</b> — 모든 보드가 같은 이미지로 만들어졌기 때문에, 첫
+로그인에서 보드마다 다른 비밀번호를 갖게 하는 장치입니다.</li>
+<li><code>sudo</code> 를 쓸 수 있습니다 — 필요한 패키지는
+<code>sudo apt install ...</code> 로 자유롭게 설치하세요.</li>
+<li>보드의 신원(machine-id, SSH 지문)은 첫 부팅 때 보드마다 새로 만들어집니다 —
+옆 팀 보드와 SSH 지문이 다른 것이 정상입니다.</li>
+</ul>
+
+<h3>3-4. 알아두면 좋은 특성</h3>
+<ul>
+<li><b>부팅 화면이 한동안 조용합니다.</b> 부팅 설정(<code>video=efifb:off</code>)
+때문에 초반 로그가 화면에 안 나옵니다 — 멈춘 게 아니니 기다리세요.</li>
+<li><b>유선랜 포트(<code>eno1</code>)는 로봇 전용선입니다.</b> IP 주소가 없고,
+일반 랜선을 꽂아도 인터넷이 되지 않습니다. 인터넷은 Wi-Fi 로 쓰세요.</li>
+<li><b>로그인만 하면 <code>phorce</code>·<code>ros2</code> 명령이 바로 됩니다.</b>
+로그인할 때 ROS 환경이 자동으로 잡히도록 되어 있어서
+<code>source /opt/ros/humble/setup.bash</code> 를 직접 칠 필요가 없습니다.</li>
+<li><b>커널·드라이버는 업데이트가 잠겨 있습니다</b>(apt hold). 자동 업데이트가
+실시간 커널을 보통 커널로 되돌리는 것을 막기 위해서입니다. 일반 패키지 설치는
+전혀 영향받지 않습니다.</li>
+</ul>
+
+<h2>4. 커널 부팅 인자 — 격리는 이렇게 구현되어 있습니다</h2>
+
+<p><code>cat /proc/cmdline</code> 에 보이는 실시간 관련 설정입니다. 하나의
+세트로 동작합니다:</p>
+
+<table>
+<tr><th>인자</th><th>무엇을 하나</th><th>왜</th></tr>
+<tr><td><code>isolcpus=managed_irq,domain,8-11</code></td><td>코어 8–11 을 일반 스케줄러와 인터럽트에서 분리</td><td>로봇 통신 전용 차선 확보</td></tr>
+<tr><td><code>nohz_full=8-11</code></td><td>격리 코어의 주기적 타이머 인터럽트(틱) 제거</td><td>1kHz 루프를 건드리는 마지막 방해까지 제거</td></tr>
+<tr><td><code>rcu_nocbs=8-11</code> + <code>rcu_nocb_poll</code></td><td>커널 내부 청소 작업을 다른 코어로 위임</td><td>청소 작업이 격리 코어를 깨우지 않게</td></tr>
+<tr><td><code>kthread_cpus=0-7</code> · <code>irqaffinity=0-7</code></td><td>커널 스레드와 기본 인터럽트를 0–7 에 묶음</td><td>격리 코어 침범을 원천 차단</td></tr>
+<tr><td><code>nohz=on</code></td><td>동적 틱 켜기</td><td>위 세트의 전제 조건</td></tr>
+<tr><td><code>video=efifb:off</code></td><td>부팅 초반 화면 출력 끔</td><td>3-4 절 — 부팅이 조용해 보이는 이유</td></tr>
+</table>
+
+<h2>5. Appendix — 설치된 것들과 그 이유</h2>
+
+<p>"이건 왜 깔려 있지?"의 답 모음입니다. 해커톤에서 만나게 될 것만 담았습니다.</p>
+
+<h3>5-1. 기반 소프트웨어</h3>
+<table>
+<tr><th>구성요소</th><th>무엇</th><th>왜</th></tr>
+<tr><td>실시간 커널</td><td>PREEMPT_RT 패치 리눅스 (3-1 절)</td><td>1kHz 로봇 통신의 시간 보장</td></tr>
+<tr><td>Ubuntu 22.04 / L4T 36.4.3</td><td>Jetson 용 기본 운영체제 (JetPack 6.2 세대)</td><td>모든 것의 바탕</td></tr>
+<tr><td>CUDA · cuDNN · TensorRT</td><td>GPU 컴퓨팅과 AI 추론 도구 (12.6 / 9.3 / 10.3)</td><td>여러분의 AI 워크로드용</td></tr>
+<tr><td>ROS 2 Humble (desktop)</td><td>로봇 미들웨어 + RViz·rqt 시각화</td><td>SDK 와 여러분 코드의 공용 기반</td></tr>
+<tr><td>Docker</td><td>컨테이너 실행 도구</td><td>여러분의 추가 소프트웨어 스택을 컨테이너로 돌리고 싶을 때</td></tr>
+</table>
+
+<h3>5-2. phorce SDK (deb 패키지 8개)</h3>
+<table>
+<tr><th>패키지</th><th>담긴 것</th></tr>
+<tr><td><code>phorce-interfaces</code></td><td>통신 규약 정의 — 메시지·서비스·액션 (모든 언어의 공통 어휘)</td></tr>
+<tr><td><code>phorce-cli</code></td><td><code>phorce</code> 터미널 명령 + 로그인 자동 환경</td></tr>
+<tr><td><code>phorce-client-py</code></td><td>Python 라이브러리 (<code>import phorce</code>) + 예제</td></tr>
+<tr><td><code>phorce-client-cpp</code></td><td>C++ 라이브러리 + 예제</td></tr>
+<tr><td><code>phorce-sim</code></td><td>시뮬레이터 (이 행사에서는 사용하지 않음)</td></tr>
+<tr><td><code>phorce-console</code></td><td>화면 프로그램 (그래프 · 버튼 재생)</td></tr>
+<tr><td><code>phorce-robot-runtime</code></td><td>로봇과 직접 통신하는 프로그램 + 안전 감시자 — <b>로봇 통신선을 만질 수 있는 유일한 패키지</b> (안전 경계)</td></tr>
+<tr><td><code>phorce-sdk</code></td><td>위 참가자용 패키지를 한 번에 묶은 메타패키지</td></tr>
+</table>
+
+<h3>5-3. 실시간을 지키는 장치들</h3>
+<table>
+<tr><th>구성요소</th><th>무엇</th><th>왜</th></tr>
+<tr><td><code>jetson-rt-perf.service</code></td><td>부팅마다: 최대 성능 모드 · 클럭 고정 · 격리 코어 절전 금지 · 인터럽트를 0–7 로 정리</td><td>격리 코어가 "잠에서 깨는 지연" 없이 항상 즉응하도록</td></tr>
+<tr><td><code>ethercat-nic-opt.service</code></td><td>부팅마다 로봇 전용선(<code>eno1</code>)을 1kHz 통신에 맞게 조율하고, 적용됐는지 되읽어 확인</td><td>패킷이 랜카드에서 뭉치거나 늦지 않게</td></tr>
+<tr><td>업데이트 잠금</td><td>커널·드라이버 apt hold + 자동 업데이트 데몬 끔</td><td>자동 업데이트가 실시간 구성을 되돌리지 않게 (3-4 절)</td></tr>
+</table>
+
+<h3>5-4. 연결과 권한</h3>
+<table>
+<tr><th>구성요소</th><th>무엇</th><th>왜</th></tr>
+<tr><td><code>eno1</code> 로봇 전용</td><td>네트워크 관리자가 이 포트를 건드리지 않게 설정 (IP 없음)</td><td>일반 네트워크 트래픽이 로봇 통신선에 끼어들지 않게</td></tr>
+<tr><td>로봇 프로그램의 특별 권한</td><td>로봇 통신 프로그램에만 필요한 최소 권한(raw 네트워크 접근·실시간 우선순위)을 부여하고, 그에 필요한 라이브러리 경로를 시스템에 등록</td><td><code>sudo</code> 없이도 로봇 프로그램이 돌게 — 전체를 root 로 돌리는 것보다 안전</td></tr>
+<tr><td>로그인 자동 환경</td><td><code>/etc/profile.d</code> 의 스크립트가 ROS 환경을 자동 적용</td><td>"로그인하면 바로 <code>phorce</code>" (3-4 절)</td></tr>
+<tr><td>첫 부팅 자가설정</td><td>보드 신원(machine-id·SSH 키) 생성 + 구성 자가검사</td><td>복제된 보드가 각자 고유해지고, 잘못 구성된 보드는 걸러지게</td></tr>
+</table>
+
+<p class="foot">phorce 해커톤 참가자 문서 ⑤ 시스템 안내 —
+함께 보기: ① 퀵 가이드 · ② 튜토리얼 · ③ 매뉴얼 · ④ API 레퍼런스 ·
+내 보드 확인: <code>uname -r</code> · <code>dpkg -l 'phorce-*'</code></p>
+
+</body>
+</html>

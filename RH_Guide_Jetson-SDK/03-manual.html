@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>phorce 매뉴얼 — 명령·API·인터페이스 참조</title>
+<style>
+  body { font-family: "Noto Sans CJK KR", sans-serif; font-size: 10.5pt; line-height: 1.65;
+         color: #1a1a1a; max-width: 740px; margin: 0 auto; padding: 24px 28px; }
+  h1 { font-size: 21pt; color: #2a6f6a; margin: 0 0 4px; border-bottom: 3px solid #2a6f6a; padding-bottom: 10px; }
+  h2 { font-size: 14.5pt; color: #2a6f6a; margin: 28px 0 8px; border-bottom: 1px solid #d3e0df; padding-bottom: 5px; }
+  h3 { font-size: 12pt; color: #333; margin: 18px 0 6px; }
+  .lead { color: #555; font-size: 11pt; margin: 6px 0 16px; }
+  code { font-family: "Noto Sans Mono CJK KR", monospace; font-size: 9.5pt;
+         background: #eaf1f0; padding: 1px 5px; border-radius: 3px; color: #10514c; }
+  pre { font-family: "Noto Sans Mono CJK KR", monospace; font-size: 9pt; background: #2b2b2b;
+        color: #eee; padding: 11px 13px; border-radius: 6px; line-height: 1.5; white-space: pre-wrap; }
+  pre code { background: none; color: #eee; padding: 0; }
+  .box { border: 1px solid #ddd; border-left: 5px solid #888; background: #faf9f7;
+         padding: 9px 13px; margin: 11px 0; border-radius: 4px; }
+  .tip { border-left-color: #2c8a4a; background: #f0f7f2; }
+  .warn { border-left-color: #d99000; background: #fdf7ea; }
+  .stop { border-left-color: #c0392b; background: #fbeeec; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 9.5pt; }
+  th, td { border: 1px solid #ccc; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #eaf1f0; }
+  .foot { margin-top: 32px; padding-top: 12px; border-top: 1px solid #ddd; color: #888; font-size: 9pt; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 3px 0; }
+  .toc { background: #f6f9f8; border: 1px solid #d3e0df; border-radius: 6px; padding: 10px 16px; font-size: 10pt; }
+  .toc a { color: #2a6f6a; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<h1>phorce 매뉴얼</h1>
+<p class="lead">참가자가 쓰는 명령·API·인터페이스의 체계적 참조. 개념 설명은 퀵 가이드,
+따라하기는 튜토리얼을 보세요. 이 문서는 "정확히 뭐가 있고 어떻게 부르나"의 사전입니다.</p>
+
+<div class="toc">
+<b>차례</b> &nbsp; 1. 시스템 개요 · 2. CLI · 3. GUI · 4. Python API · 5. C++ API ·
+6. ROS 2 인터페이스 · 7. 피드백 필드 · 8. 모션 슬롯 계약 · 9. 거절 코드 ·
+10. 안전 · 11. 흔한 실수 · 12. 참가자 API 가 아닌 것 · 13. 용어집
+</div>
+
+<h2>1. 시스템 개요</h2>
+<p><b>Jetson</b>(젯슨, 여러분의 컴퓨터) — <b>pcm</b>(중계기) — <b>phact</b>(관절 모터 — 와이어 12축 중 6축 장착).
+참가자가 만지는 표면은 <b>두 방향</b>뿐입니다.</p>
+<ul>
+  <li><b>⬆️ 피드백:</b> 로봇이 12축 상태를 <b>1kHz</b>(1초 1000번)로 올려보냄 (<code>/phorce/feedback</code>)</li>
+  <li><b>⬇️ 모션 재생:</b> 참가자는 <b>모션 ID(1~50) 하나</b>를 보냄 → 미리 저장된 동작을 로봇이 재생</li>
+</ul>
+<p>모션 궤적은 행사 전 <b>phorce Studio</b>로 만들어 로봇(pcm)에 저장됩니다. 참가자 코드는
+관절을 직접 제어하지 않고 <b>재생할 동작 번호만</b> 고릅니다.</p>
+
+<h2>2. CLI 레퍼런스 — <code>phorce</code></h2>
+<p>파이썬으로 만든 명령줄 도구. 서브커맨드는 <b>4개</b>입니다.</p>
+<table>
+  <tr><th>명령</th><th>하는 일</th><th>기본 타임아웃</th></tr>
+  <tr><td><code>phorce doctor</code></td><td>게이트웨이·카탈로그·상태 진단 한 장</td><td>2초</td></tr>
+  <tr><td><code>phorce list</code></td><td>재생 가능한 모션 목록 (정본 = 로봇 적재 슬롯)</td><td>5초</td></tr>
+  <tr><td><code>phorce play &lt;id&gt;</code></td><td>모션 하나 재생, 완료까지 대기 (진행률 표시)</td><td>30초</td></tr>
+  <tr><td><code>phorce status</code></td><td>모션 슬롯 상태 한 장 (읽기 전용)</td><td>2초</td></tr>
+</table>
+<p><b>공통 플래그</b> (모든 명령): <code>--target</code>(기본 <code>robot</code> = 실물 — 그대로 두면 됨),
+<code>--namespace</code>, <code>--domain-id</code>, <code>--timeout &lt;초&gt;</code>, <code>--json</code>(기계 판독용).</p>
+<p><b>종료 코드</b> (스크립트에서 유용):</p>
+<table>
+  <tr><th>코드</th><th>뜻</th><th>코드</th><th>뜻</th></tr>
+  <tr><td><code>0</code></td><td>성공</td><td><code>3</code></td><td>게이트웨이 없음</td></tr>
+  <tr><td><code>1</code></td><td>거부/실패/준비안됨</td><td><code>4</code></td><td>타임아웃</td></tr>
+  <tr><td><code>2</code></td><td>사용법 오류</td><td><code>5</code></td><td>BUSY (요청 폐기, 큐 없음)</td></tr>
+  <tr><td colspan="2"></td><td><code>130</code></td><td>사용자 취소(Ctrl+C)</td></tr>
+</table>
+<div class="tip box"><code>phorce list</code> 의 목록은 젯슨 파일이 아니라 <b>로봇이 실제 적재한
+슬롯</b>(0x4202 비트맵)입니다. 목록에 뜨면 재생 가능, 안 뜨면 불가.</div>
+
+<h2>3. GUI — <code>phorce-console</code></h2>
+<p>관측·전송용 샘플 화면 (PyQt5). 실행: <code>phorce-console</code>. 별도 API 가 아니라
+참가자와 <b>똑같은 모션 액션</b>을 부르는 ROS 2 노드입니다.</p>
+<ul>
+  <li>12축 위치/속도/전류/온도 관측, 시계열 그래프(동시 8채널), 신선도·E-Stop·EtherCAT 상태</li>
+  <li>모션 슬롯 버튼 전송 — <b>대상 칸을 ● 실물 로봇으로 바꿔 사용</b> (기본값 "시뮬레이터"는
+      이 행사에서 쓰지 않음). 실물 선택 시 테두리 빨강 + 버튼 <b>[실물 전송]</b> + 경고문 (3중 동시)</li>
+  <li>자동 반복 재생 기능 없음. <code>python3-pyqtgraph</code> 없으면 그래프만 비활성(관측·전송은 동작)</li>
+</ul>
+
+<h2>4. Python API</h2>
+<p>여기는 요약입니다 — <b>전체 시그니처·클래스별 메서드·필드 사전은
+<a href="04-api-reference.html#py">04-api-reference 의 Python 탭</a></b>을 보세요.</p>
+<h3>4-1. <code>phorce</code> 파사드 (권장, 가장 쉬움)</h3>
+<pre><code>import phorce
+with phorce.connect() as robot:          # 기본 target=robot(실물) — 그대로 쓰면 됨
+    result = robot.play(1)               # 완료까지 블로킹
+    print(result.ok)                     # ★ 속성(attribute)입니다. ok() 아님
+    for m in robot.motions():            # 카탈로그 순회
+        print(m.id, m.name)
+    handle = robot.play_async(2, on_feedback=cb)   # 비동기
+    handle.wait(timeout=30)</code></pre>
+<p><b>공개 심볼:</b> <code>connect</code>, <code>doctor</code>, <code>Robot</code>, <code>Target</code>,
+<code>Motions</code>, <code>Motion</code>, <code>Catalog</code>, <code>Feedback</code>, <code>Status</code>,
+<code>PlayHandle</code>, <code>PlayResult</code>.<br>
+<b>예외:</b> <code>PhorceError</code>(최상위), <code>PhorceUnavailable</code>, <code>MotionBusy</code>,
+<code>MotionRejected</code>, <code>MotionAborted</code>.<br>
+<b>상수:</b> <code>MIN_MOTION_ID</code>(1), <code>MAX_MOTION_ID</code>(50), <code>NO_MOTION_ID</code>(0).</p>
+<div class="tip box">거절/실패는 조용히 지나가지 않고 <b>예외</b>로 옵니다. <code>try/except</code> 로
+<code>MotionBusy</code>(기다림) / <code>MotionRejected</code>(사람 개입)만 구분하면 충분합니다.</div>
+
+<h3>4-2. 표준 rclpy (직접 구독)</h3>
+<pre><code>from rclpy.qos import qos_profile_sensor_data     # ★ 필수
+from agx_msgs.msg import PhorceFeedback
+node.create_subscription(PhorceFeedback, "/phorce/feedback", cb, qos_profile_sensor_data)</code></pre>
+<div class="stop box"><b>QoS 함정:</b> <code>/phorce/feedback</code> 는 반드시
+<code>qos_profile_sensor_data</code>(best-effort)로 구독. 기본 reliable 로 하면 에러 없이
+<b>한 개도 안 옵니다.</b></div>
+
+<h2>5. C++ API — <code>phorce_cpp::motion_client</code></h2>
+<p>여기는 요약입니다 — <b>전체 시그니처와 구조체 필드는
+<a href="04-api-reference.html#cpp">04-api-reference 의 C++ 탭</a></b>을 보세요.</p>
+<pre><code>find_package(phorce_cpp REQUIRED)
+target_link_libraries(x phorce_cpp::motion_client)   // 공개 의존: rclcpp, rclcpp_action, agx_msgs</code></pre>
+<table>
+  <tr><th>타입 / 메서드</th><th>설명</th></tr>
+  <tr><td><code>MotionClient::attach(node, Target)</code></td><td>클라이언트 생성. 스스로 spin 안 함(executor 는 호출자 몫)</td></tr>
+  <tr><td><code>play_async(id, cb={})</code></td><td>동작 요청 → <code>shared_ptr&lt;PlayOperation&gt;</code></td></tr>
+  <tr><td><code>motions_async()</code></td><td>카탈로그 조회 → future</td></tr>
+  <tr><td><code>latest_status()</code>, <code>action_ready()</code>, <code>wait_for_action_server()</code></td><td>상태·준비 확인</td></tr>
+  <tr><td><code>PlayOperation::result()</code></td><td><code>shared_future&lt;PlayResult&gt;</code></td></tr>
+  <tr><td><code>PlayOperation::cancel()</code></td><td>취소 (E-Stop 아님 — 실물에선 거부될 수 있음)</td></tr>
+  <tr><td><code>PlayResult::ok()</code></td><td>성공 여부</td></tr>
+  <tr><td><code>PlayResult::busy()</code></td><td><b>큐 가득참(코드 5)일 때만 참</b> → 재시도 루프 조건</td></tr>
+  <tr><td><code>PlayResult::needs_operator()</code></td><td>코드 12·13 (사람이 버튼)</td></tr>
+  <tr><td><code>Target::robot()</code></td><td>대상 선택 (기본값 — 실물)</td></tr>
+</table>
+<p><b>상수:</b> <code>kMinMotionId=1</code>, <code>kMaxMotionId=50</code>, <code>kNoMotionId=0</code>,
+<code>kMaxSequenceLength=1</code>, <code>kStateFreshLimitMs=1500</code>.</p>
+<div class="warn box">콜백 안에서 <code>future.get()</code> 으로 블로킹하지 마세요(자기 자신을 굶깁니다).
+타이머/루프에서 <code>wait_for(0ms)</code> 로 논블로킹 확인하세요.</div>
+
+<h2>6. ROS 2 인터페이스</h2>
+<table>
+  <tr><th>이름</th><th>종류 / 타입</th><th>속도·QoS</th><th>용도</th></tr>
+  <tr><td><code>/phorce/feedback</code></td><td>topic · <code>PhorceFeedback</code></td><td>1kHz · sensor_data</td><td>⬆️ 12축 실시간 상태 (참가자 입력)</td></tr>
+  <tr><td><code>/phorce/status</code></td><td>topic · <code>PhorceStatus</code></td><td>10Hz · reliable</td><td>모드·지터·카운터 요약</td></tr>
+  <tr><td><code>/phorce/motion_window</code></td><td>topic · <code>MotionWindowStatus</code></td><td>2Hz · latched</td><td>적재 슬롯 비트맵·busy 등</td></tr>
+  <tr><td><code>…/play_motion_sequence</code></td><td>action · <code>PlayMotionSequence</code></td><td>—</td><td>⬇️ <b>참가자 유일 구동 API</b></td></tr>
+  <tr><td><code>…/motion_slot_state</code></td><td>topic · <code>MotionSlotState</code></td><td>—</td><td>모션 슬롯 상태 (읽기 전용, 폴링→발사 금지)</td></tr>
+  <tr><td><code>~/list_motion_slots</code></td><td>service · <code>ListMotionSlots</code></td><td>—</td><td>카탈로그 조회</td></tr>
+</table>
+<p>Raw 액션 호출 (파사드 없이, CLI 와 동일 경로):</p>
+<pre><code>ros2 action send_goal /motion_action_server/play_motion_sequence \
+  agx_msgs/action/PlayMotionSequence "{motion_ids: [1], stop_on_error: true}" -f</code></pre>
+
+<h2>7. 피드백 필드 (<code>PhorceFeedback</code> / <code>AxisFeedback[12]</code>)</h2>
+<p><b>프레임당:</b> <code>stamp</code>, <code>wkc</code>, <code>tx_cycle_seq</code>, <code>axis_valid_mask</code>,
+<code>axis_stale_mask</code>, <code>axis_oper_mask</code>, <code>axis_fault_mask</code>, <code>am_rx_age_ms</code>, <code>status_flags</code>, <code>axis[12]</code>.</p>
+<table>
+  <tr><th>축당 필드</th><th>뜻</th></tr>
+  <tr><td><code>position_rad</code> / <code>velocity_rad_s</code></td><td>관절 각도(rad) / 각속도(rad/s)</td></tr>
+  <tr><td><code>current_a</code> / <code>dob_a</code></td><td>모터 전류(A) / 외란 추정(A)</td></tr>
+  <tr><td><code>bus_v</code> / <code>temp_c</code></td><td>전압(V) / 온도(°C)</td></tr>
+  <tr><td><code>kp_echo</code> / <code>kd_echo</code></td><td>적용 중 게인 되울림 (<code>kp</code>=A/rad, <code>kd</code>=A/(rad/s) — 전류 도메인)</td></tr>
+  <tr><td><code>valid</code></td><td><b>이 축을 믿어도 되는 유일한 양(+)의 증거.</b> <code>!stale</code> 로 대체 금지</td></tr>
+  <tr><td><code>oper</code> / <code>stale</code> / <code>fault</code></td><td>운전중 / 오래됨 / 결함</td></tr>
+</table>
+
+<h2>8. 모션 슬롯 계약</h2>
+<ul>
+  <li>재생 가능 ID: <b><code>1..50</code></b></li>
+  <li><code>0</code> = no-motion sentinel — <b><code>play(0)</code> 금지</b></li>
+  <li><code>motion_00.csv</code> = 템플릿, 카탈로그·재생에서 제외</li>
+  <li>요청 하나당 ID 하나 (<code>max_sequence_length = 1</code>)</li>
+  <li>카탈로그 정본 = <b>로봇(pcm)</b> 이 적재한 슬롯. 젯슨 파일 아님</li>
+</ul>
+
+<h2>9. 거절 코드 (<code>PlayMotionSequence</code> reject_reason)</h2>
+<table>
+  <tr><th>코드</th><th>이름</th><th>대응</th></tr>
+  <tr><td>5</td><td>QUEUE_FULL / BUSY</td><td><b>기다리면 풀림.</b> 재시도 루프는 이 코드에서만</td></tr>
+  <tr><td>12</td><td>NOT_READY_FOR_MOTION</td><td><b>사람:</b> 영점 버튼(1번) 0.6초 → 3초 대기</td></tr>
+  <tr><td>13</td><td>RECOVERY_REQUIRED</td><td><b>사람:</b> 2번 버튼 파킹 → 다시 영점</td></tr>
+  <tr><td>4</td><td>MOTION_ID_NOT_LOADED</td><td><code>phorce list</code> 에 있는 id 사용</td></tr>
+  <tr><td>3</td><td>MOTION_ID_RANGE</td><td>1~50 범위로</td></tr>
+  <tr><td>6·11</td><td>MASTER_NOT_OP·AXIS_NOT_OPERATIONAL</td><td>EtherCAT/축 상태 확인 (배선·전원)</td></tr>
+  <tr><td>0·1·2·7·8·9·10</td><td>NONE/EMPTY/TOO_LONG/COMMAND_SOURCE/STATE_STALE/SUPERVISOR_VETO/CONTRACT_NOT_ACTIVE</td><td>요청 형식·상태 문제 — 메시지 detail 참조</td></tr>
+</table>
+<div class="warn box"><b>재시도 루프는 코드 5(BUSY)에서만</b> 돌리세요. 12·13 은 기다려도
+안 풀립니다 — 사람이 버튼을 눌러야 합니다.</div>
+<p style="font-size:9pt;color:#666">표의 이름은 줄인 표기입니다 — 정식 상수와 Python
+<code>.reason</code> 문자열에는 <code>REJECT_</code> 접두사가 붙습니다
+(예: <code>REJECT_QUEUE_FULL</code>). 코드에서 비교할 때는 숫자(<code>.code</code>)가 안전합니다.</p>
+
+<h2>10. 안전</h2>
+<ul>
+  <li><b>비상 정지는 물리 E-Stop 버튼</b> 하나뿐. 코드의 <code>cancel()</code> 은 E-Stop 이 아님</li>
+  <li>실물 전송 전 항상 로봇 주변 확인</li>
+  <li>모든 하행 명령은 게이트웨이의 <b>안전 감시자</b> 6단계(하드veto→신선도→NaN→한계→슬루)를 통과해야 나감</li>
+  <li>참가자 API(모션 슬롯)는 이 감시자를 우회할 수 없음 — 안전하게 설계됨</li>
+</ul>
+
+<h2>11. 흔한 실수</h2>
+<table>
+  <tr><th>증상</th><th>원인·해결</th></tr>
+  <tr><td>doctor 가 NOT READY / "서버 없음"</td><td>스택(터미널 2개)을 안 켰거나 닫음 — ① 퀵 가이드 3-2절 시동 걸기</td></tr>
+  <tr><td>모션 목록·상태가 계속 빈 채</td><td>로봇 전원보다 스택을 먼저 켰음 — 터미널 1(monitor) 재시작</td></tr>
+  <tr><td>버튼 복구 직후 첫 재생이 "중단됨(error=17)"</td><td>상태 갱신(0.5초 주기)이 따라오기 전 — <b>한 번 더 보내면 됩니다</b></td></tr>
+  <tr><td>피드백이 하나도 안 옴(에러도 없음)</td><td>QoS 누락 → <code>qos_profile_sensor_data</code> 로 구독</td></tr>
+  <tr><td>거의 다 BUSY 로 거절</td><td>빠른 콜백에서 <code>play()</code> 호출 → 느린 루프로 옮기기 (큐 없음)</td></tr>
+  <tr><td>계속 "준비 안 됨"</td><td>영점 버튼(1번) 안 눌림 — 사람이 눌러야</td></tr>
+  <tr><td><code>phorce: command not found</code></td><td>재로그인. 그래도 없으면 그 보드 재검수</td></tr>
+  <tr><td>C++ 재빌드 후 권한 오류</td><td><code>sudo agr-setcap-ethercat &lt;실행파일&gt;</code> 재실행(저수준만 해당)</td></tr>
+  <tr><td>로봇이 안 움직임(에러 없음)</td><td>GUI 대상 칸이 기본값 "시뮬레이터"로 남아 있는 경우가 대부분 — <b>● 실물 로봇</b>으로 변경</td></tr>
+</table>
+
+<h2>12. 참가자 API 가 아닌 것 (의도적 비공개)</h2>
+<p>다음은 참가자용이 아닙니다. 이것 없이도 로봇을 충분히 다룰 수 있게 설계됐습니다.</p>
+<ul>
+  <li>관절 1kHz 직접 스트리밍, raw PDO/SDO 접근</li>
+  <li>레시피 4량({목표위치, 피드포워드토크, Kp, Kd}) 저수준 명령 — 내부/벤치 전용</li>
+  <li>CSV·P/F/I Vector 편집 — 이것은 행사 전 phorce Studio 의 몫</li>
+</ul>
+
+<h2>13. 용어집</h2>
+<table>
+  <tr><td><b>Jetson</b> (젯슨)</td><td>여러분이 코드를 돌리는 컴퓨터(뇌)</td></tr>
+  <tr><td><b>pcm</b></td><td>Jetson 과 모터 사이 중계기(신경). EtherCAT 슬레이브 — 모션 슬롯을 적재·재생하는 주체(카탈로그 정본)</td></tr>
+  <tr><td><b>phact</b></td><td>관절마다 붙은 모터 장치(근육). 와이어 12축 중 현 기체는 6축 장착</td></tr>
+  <tr><td><b>모션 슬롯 / ms_id</b></td><td>미리 저장된 동작 하나와 그 번호(1~50)</td></tr>
+  <tr><td><b>피드백</b></td><td><code>/phorce/feedback</code> — 12축 상태를 1kHz 로 올리는 스트림</td></tr>
+  <tr><td><b>게이트웨이</b></td><td>참가자 요청을 받아 안전 검사 후 로봇에 전달하는 보호 계층</td></tr>
+  <tr><td><b>EtherCAT</b></td><td>Jetson–pcm 을 잇는 산업용 실시간 통신(1kHz)</td></tr>
+  <tr><td><b>phorce Studio</b></td><td>행사 전 모션 궤적을 만들어 로봇에 저장하는 도구(참가자 미사용)</td></tr>
+  <tr><td><b>영점 버튼</b></td><td>기체의 1번 버튼. 로봇을 모션 수신 상태로 만드는 물리 버튼</td></tr>
+</table>
+
+<p class="foot">phorce 해커톤 참가자 문서 ③ 매뉴얼 — 함께 보기: ① 퀵 가이드 · ② 튜토리얼 ·
+④ API 레퍼런스(함수·필드 사전) · ⑤ 시스템 안내</p>
+
+</body>
+</html>

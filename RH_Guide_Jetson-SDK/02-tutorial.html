@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>phorce 튜토리얼 — 로봇을 보고, 판단하고, 움직이는 코드 만들기</title>
+<style>
+  body { font-family: "Noto Sans CJK KR", sans-serif; font-size: 11pt; line-height: 1.7;
+         color: #1a1a1a; max-width: 720px; margin: 0 auto; padding: 24px 28px; }
+  h1 { font-size: 21pt; color: #1e5f8a; margin: 0 0 4px; border-bottom: 3px solid #1e5f8a; padding-bottom: 10px; }
+  h2 { font-size: 15pt; color: #1e5f8a; margin: 30px 0 8px; border-bottom: 1px solid #d5dee0; padding-bottom: 5px; }
+  h3 { font-size: 12.5pt; color: #333; margin: 20px 0 6px; }
+  .lead { color: #555; font-size: 11.5pt; margin: 6px 0 18px; }
+  code { font-family: "Noto Sans Mono CJK KR", monospace; font-size: 10pt;
+         background: #eef2f4; padding: 1px 5px; border-radius: 3px; color: #0a4a70; }
+  pre { font-family: "Noto Sans Mono CJK KR", monospace; font-size: 9pt; background: #2b2b2b;
+        color: #eee; padding: 12px 14px; border-radius: 6px; line-height: 1.5; white-space: pre-wrap; }
+  pre code { background: none; color: #eee; padding: 0; }
+  .box { border: 1px solid #ddd; border-left: 5px solid #888; background: #faf9f7;
+         padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .tip { border-left-color: #2c8a4a; background: #f0f7f2; }
+  .warn { border-left-color: #d99000; background: #fdf7ea; }
+  .stop { border-left-color: #c0392b; background: #fbeeec; }
+  .goal { border-left-color: #1e5f8a; background: #eef4f8; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; }
+  th, td { border: 1px solid #ccc; padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: #eef2f4; }
+  .lesson { background: #1e5f8a; color: #fff; padding: 2px 10px; border-radius: 4px; font-size: 11pt; }
+  .foot { margin-top: 34px; padding-top: 12px; border-top: 1px solid #ddd; color: #888; font-size: 9pt; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .big { font-size: 12pt; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>phorce 튜토리얼</h1>
+<p class="lead">퀵 가이드로 로봇을 한 번 움직여 봤다면, 이제 <b>여러분의 코드</b>가 로봇을
+보고 스스로 판단해 동작을 고르게 만듭니다. 쉬운 것부터 한 레슨씩 쌓아 갑니다.
+파이썬을 먼저, 그다음 C++ 를 봅니다.</p>
+
+<div class="goal box"><b>이 튜토리얼을 끝내면 할 수 있는 것</b><br>
+로봇의 관절 상태를 1초에 1000번 받아서, "이런 상황이면 → 이 동작을 재생"하는
+여러분만의 규칙(또는 AI)을 코드로 만들 수 있습니다.</div>
+
+<div class="warn box"><b>이 튜토리얼의 코드는 전부 실물 로봇에 붙습니다.</b> <code>play()</code>
+가 실행되면 로봇이 실제로 움직입니다 — 실행 전 항상 주변을 확인하세요. 코드 실수는
+겁내지 않아도 됩니다: 이상한 요청은 로봇이 스스로 거절하고, 위급하면 물리 E-Stop 입니다.</div>
+
+<h2><span class="lesson">레슨 0</span> &nbsp;준비 운동</h2>
+<p>SDK 예제들은 젯슨에 이미 설치돼 있습니다. 어디 있는지 먼저 찾아 둡니다.</p>
+<pre><code># 예제 폴더 위치를 EX 라는 이름에 저장 (한 번만)
+EX="$(ros2 pkg prefix phorce)/share/phorce/examples"
+ls "$EX"
+#   01_first_motion.py  02_read_feedback.py  03_feedback_to_motion.py  raw_action.py</code></pre>
+<p>예제를 실행하는 법: <code>python3 "$EX/01_first_motion.py" 1</code> (뒤의 <code>1</code> 은 재생할 동작 번호).</p>
+
+<h2><span class="lesson">레슨 1</span> &nbsp;로봇의 눈으로 보기 — 피드백 한 장</h2>
+<div class="goal box"><b>목표:</b> 로봇이 보내는 관절 상태를 눈으로 확인한다.</div>
+<p>먼저 코드 없이, 로봇이 뭘 보내는지 터미널에서 봅니다.</p>
+<pre><code>ros2 topic hz /phorce/feedback          # 1000 근처면 정상 (1초에 1000번)
+ros2 topic echo /phorce/feedback --once # 딱 한 장을 펼쳐 보기</code></pre>
+<p>한 장 안에는 <b>관절 12개</b> 각각의 정보가 들어 있습니다. 자주 쓰는 것만:</p>
+<table>
+  <tr><th>필드</th><th>뜻</th></tr>
+  <tr><td><code>position_rad</code></td><td>관절 각도 (라디안). 로봇이 지금 어느 각도인가</td></tr>
+  <tr><td><code>velocity_rad_s</code></td><td>관절이 도는 속도</td></tr>
+  <tr><td><code>current_a</code></td><td>모터에 흐르는 전류 (힘을 얼마나 쓰는가)</td></tr>
+  <tr><td><code>temp_c</code></td><td>모터 온도</td></tr>
+  <tr><td><code>valid</code></td><td><b>이 축 데이터를 믿어도 되는가</b> (아주 중요 — 아래 설명)</td></tr>
+</table>
+<div class="warn box"><b>꼭 지킬 규칙 하나:</b> 어떤 축 값을 쓰기 전에 그 축의 <code>valid</code>
+가 <b>참(true)</b>인지 확인하세요. <code>valid</code> 가 참일 때만 그 숫자가 진짜입니다.
+"오래되지 않았으니 괜찮겠지"(<code>!stale</code>)로 대신하면 안 됩니다 — 아직 한 번도
+안 온 축은 stale 도 아니거든요. <b>"믿어도 된다"는 증거는 <code>valid</code> 하나뿐</b>입니다.</div>
+
+<h2><span class="lesson">레슨 2</span> &nbsp;파이썬으로 상태 읽기</h2>
+<div class="goal box"><b>목표:</b> 코드로 로봇 상태를 받아서 화면에 뿌린다.</div>
+<p>가장 쉬운 길은 <code>phorce</code> 라는 준비된 도구(파사드)를 쓰는 겁니다. 복잡한 ROS 설정을
+대신 해 줍니다.</p>
+<pre><code>import phorce
+
+# connect() 는 로봇(게이트웨이)에 붙는다. with 블록을 나가면 알아서 정리한다.
+with phorce.connect() as robot:
+    st = robot.status()              # 로봇 상태 요약 한 장 (읽기만 — 명령 안 보냄)
+    print("지금 상태:", st.state_name)   # "IDLE" 이면 새 동작을 보내기 좋은 때
+    report = robot.doctor()          # 건강검진 (phorce doctor 명령과 같은 판정)
+    print("연결 정상?", report.ok)</code></pre>
+<p>실행: <code>python3 그파일.py</code>. 상태 이름이 출력되면 성공입니다.
+(<code>state_name</code> 이 알려주는 값들 — <code>IDLE</code>·<code>EXECUTING</code>·
+<code>RECOVERY_REQUIRED</code> 등 — 은 ④ API 레퍼런스의 Python 탭에 정리돼 있습니다.)</p>
+
+<h3>관절 값 하나하나를 직접 받고 싶다면 (rclpy)</h3>
+<p>더 자세한 1kHz 피드백을 직접 구독할 수도 있습니다. 이땐 <b>딱 한 가지 함정</b>이 있어요.</p>
+<pre><code>import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data     # ★ 이게 핵심
+from agx_msgs.msg import PhorceFeedback
+
+class Watcher(Node):
+    def __init__(self):
+        super().__init__("watcher")
+        # ★ 반드시 qos_profile_sensor_data 로 구독할 것.
+        #   그냥 구독하면 1kHz 발행자와 안 맞아서 "한 개도 안 옴" (조용히 침묵).
+        self.create_subscription(
+            PhorceFeedback, "/phorce/feedback", self.on_fb, qos_profile_sensor_data)
+
+    def on_fb(self, msg):
+        axis0 = msg.axis[0]
+        if axis0.valid:                            # ★ valid 먼저 확인
+            print(f"0번 관절 각도: {axis0.position_rad:.3f} rad")
+
+rclpy.init(); rclpy.spin(Watcher())</code></pre>
+<div class="stop box"><b>가장 흔한 실수:</b> <code>qos_profile_sensor_data</code> 를 빼먹으면
+에러도 안 나고 <b>그냥 아무것도 안 옵니다</b>. "왜 조용하지?" 싶으면 이걸 먼저 의심하세요.</div>
+
+<h2><span class="lesson">레슨 3</span> &nbsp;핵심 — 보고 → 판단 → 움직이기</h2>
+<div class="goal box"><b>목표:</b> 로봇 상태를 계속 보다가, 조건이 맞으면 동작을 재생한다.
+이게 여러분 프로젝트의 뼈대입니다.</div>
+<p>여기 <b>가장 중요한 규칙</b>이 있습니다. 두 가지 속도를 <b>섞지 마세요.</b></p>
+<table>
+  <tr><th>빠른 일 (1초 1000번)</th><th>느린 일 (1초 2번쯤)</th></tr>
+  <tr><td>피드백을 받아서 <b>"최신 상태"만 저장</b>. 판단·전송은 절대 여기서 안 함</td>
+      <td>저장된 최신 상태를 보고 <b>판단</b>해서, 필요하면 <b>동작 재생</b></td></tr>
+</table>
+<pre><code>import threading, time
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+import phorce
+from agx_msgs.msg import PhorceFeedback
+
+latest = {"pos0": None}                  # 빠른 콜백이 최신값만 여기 저장
+
+class Observer(Node):                    # 레슨 2 후반과 똑같은 1kHz 구독
+    def __init__(self):
+        super().__init__("observer")
+        self.create_subscription(
+            PhorceFeedback, "/phorce/feedback", self.on_fb, qos_profile_sensor_data)
+    def on_fb(self, msg):                # 1kHz 로 불림 — 저장만!
+        a0 = msg.axis[0]
+        if a0.valid:
+            latest["pos0"] = a0.position_rad
+
+rclpy.init()
+threading.Thread(target=rclpy.spin, args=(Observer(),), daemon=True).start()
+# ↑ 관측은 뒤에서 계속 돌게 둔다 — play() 가 기다리는 동안에도 멈추지 않게
+
+with phorce.connect() as robot:
+    while True:                          # 느린 판단 루프 (0.5초마다)
+        time.sleep(0.5)
+        p = latest["pos0"]
+        if p is None:
+            continue
+        # ── 여기가 여러분의 "머리" ── 규칙이든 AI든 자유
+        if p &gt; 0.5:                      # 예: 0번 관절이 많이 꺾였으면
+            try:
+                robot.play(2)            # 2번 동작 재생 (끝날 때까지 기다림)
+            except phorce.MotionBusy:
+                pass                     # 지금 바쁨 — 다음 번에 다시 (기다리면 풀림)
+            except phorce.MotionRejected as e:
+                print(e.detail)          # 사람 조치 필요 (영점 버튼 등)
+                break                    # 계속 돌아 봐야 거절만 쌓임 — 루프 중단</code></pre>
+<div class="stop box"><b>왜 1kHz 콜백에서 <code>play()</code> 를 부르면 안 되나요?</b>
+로봇은 한 번에 동작 하나만 받습니다(대기줄 없음). 1초에 1000번 <code>play</code> 를 부르면
+거의 다 "바쁨(BUSY)"으로 버려집니다. <b>판단·전송은 느린 루프에서</b> 하세요.</div>
+<div class="tip box"><b>완성 예제:</b> <code>python3 "$EX/03_feedback_to_motion.py"</code> 가
+정확히 이 구조입니다. 이 파일을 복사해서 여러분 규칙만 바꾸면 프로젝트가 시작됩니다.</div>
+<div class="box"><b>Ctrl+C 로 멈출 때 메시지가 요란해도 정상입니다.</b> 위의 짧은 코드는
+종료 처리를 생략해서, 끝낼 때 스레드 관련 경고가 몇 줄 쏟아질 수 있습니다 — 오류가
+아닙니다. 깔끔하게 끝나는 종료 처리가 궁금하면 완성 예제 03 의 뒷부분을 보세요.</div>
+
+<h3>거절을 다루는 법</h3>
+<p><code>play()</code> 는 상황에 따라 거절될 수 있습니다. 세 가지만 구분하면 됩니다.</p>
+<table>
+  <tr><th>예외</th><th>뜻</th><th>대응</th></tr>
+  <tr><td><code>MotionBusy</code></td><td>지금 다른 동작 중</td><td><b>기다리면 풀림.</b> 다음 루프에 다시 시도</td></tr>
+  <tr><td><code>MotionRejected</code></td><td>준비 안 됨 / 복구 필요 등</td><td><b>사람이 개입.</b> 영점 버튼 또는 복구 버튼</td></tr>
+  <tr><td><code>MotionAborted</code></td><td>재생 중 중단됨</td><td>메시지의 복구 절차를 따름</td></tr>
+</table>
+
+<h2><span class="lesson">레슨 4</span> &nbsp;C++ 로도 (원한다면)</h2>
+<div class="goal box"><b>목표:</b> 같은 일을 C++ 로. 실시간 성능이 필요할 때.</div>
+<p>C++ 에서는 <code>phorce_cpp::motion_client</code> 를 씁니다. <code>CMakeLists.txt</code> 에:</p>
+<pre><code>find_package(phorce_cpp REQUIRED)
+target_link_libraries(내프로그램 phorce_cpp::motion_client)</code></pre>
+<pre><code>#include "phorce_cpp/motion_client.hpp"
+
+auto client = phorce::MotionClient::attach(node, phorce::Target::robot());
+auto op  = client-&gt;play_async(7);       // 7번 동작 요청 (기다리지 않음)
+auto fut = op-&gt;result();
+
+// 타이머/루프 안에서 논블로킹으로 확인 (콜백 안에서 fut.get() 로 막지 말 것)
+if (fut.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+    auto r = fut.get();
+    if (r.ok()) { /* 성공 */ }
+    else if (r.busy()) { /* 바쁨 — 나중에 다시 */ }
+    else if (r.needs_operator()) { /* 사람이 버튼 눌러야 */ }
+}</code></pre>
+<p>실행 예제: <code>ros2 run phorce_cpp phorce_example_01_first_motion 1</code>
+(<code>_02_read_feedback</code>, <code>_03_feedback_to_motion</code> 도 있음).</p>
+<div class="warn box"><b>재빌드하면 권한이 사라집니다.</b> C++ 프로그램을 <code>colcon build</code>
+로 다시 빌드하면 EtherCAT 권한(setcap)이 날아갑니다. 저수준 프로그램을 직접 돌린다면
+<code>sudo agr-setcap-ethercat &lt;실행파일&gt;</code> 를 다시 실행하세요. (모션 슬롯 API만 쓰면
+해당 없음 — 권한은 게이트웨이가 가짐)</div>
+
+<h2><span class="lesson">레슨 5</span> &nbsp;내 프로젝트로 확장하기</h2>
+<p>이제 재료가 다 모였습니다. 아이디어 몇 개:</p>
+<ul>
+  <li><b>규칙 기반:</b> "관절이 X 이상 꺾이면 인사 동작" 처럼 if 문으로 반응하는 로봇</li>
+  <li><b>센서 연동:</b> 여러분이 붙인 센서/카메라 값에 따라 다른 동작을 고르기</li>
+  <li><b>순서 재생:</b> 조건에 따라 여러 동작을 이어서 (단, 한 번에 하나씩, 이전 게 끝나면 다음)</li>
+  <li><b>AI 판단:</b> 피드백을 입력으로 받는 모델이 "몇 번 동작"을 출력하게</li>
+</ul>
+<p>핵심은 항상 같습니다: <b>피드백을 보고(⬆️) → 판단 → 동작 번호를 보낸다(⬇️).</b></p>
+
+<div class="goal box"><b>막히면?</b> 운영진에게 이 두 줄의 결과를 그대로 보여주세요:<br>
+<code>phorce doctor --json</code> 과 <code>phorce list --json</code></div>
+
+<p class="foot">phorce 해커톤 참가자 문서 ② 튜토리얼 — 함께 보기: ① 퀵 가이드 · ③ 매뉴얼(규칙·안전) ·
+<b>④ API 레퍼런스</b>(함수·필드 사전 — 코딩하다 막히면 여기) · ⑤ 시스템 안내</p>
+
+</body>
+</html>

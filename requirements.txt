@@ -1,0 +1,17 @@
+# Perception + decision layer -- laptop development dependencies.
+#
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+
+opencv-python>=4.8
+numpy>=1.24
+
+# Optional: only needed for `stimulus.py --backend pygame`, which gives nicer
+# fullscreen behaviour on a tablet. The default OpenCV backend needs nothing extra.
+#
+#   pip install "pygame>=2.5"
+
+# NOT listed on purpose:
+#   phorce, rclpy, agx_msgs  -- these ship with the Jetson golden image and are
+#   only imported by phorce_iface.py in real (non-mock) mode. Everything else in
+#   this project runs on a laptop with no ROS installed.

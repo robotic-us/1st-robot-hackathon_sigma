@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>phorce 운영 런북 — 10대 일괄 복구 &amp; 퀵스타트 진입</title>
+<style>
+  body { font-family: "Noto Sans CJK KR", "Malgun Gothic", sans-serif; font-size: 11pt; line-height: 1.7;
+         color: #1a1a1a; max-width: 760px; margin: 0 auto; padding: 24px 28px; }
+  h1 { font-size: 21pt; color: #b8430f; margin: 0 0 4px; border-bottom: 3px solid #b8430f; padding-bottom: 10px; }
+  h2 { font-size: 15pt; color: #b8430f; margin: 30px 0 8px; border-bottom: 1px solid #e0d5cc; padding-bottom: 5px; }
+  h3 { font-size: 12.5pt; color: #333; margin: 20px 0 6px; }
+  .lead { color: #555; font-size: 11.5pt; margin: 6px 0 18px; }
+  code { font-family: "Noto Sans Mono CJK KR", Consolas, monospace; font-size: 10pt;
+         background: #f2ede8; padding: 1px 5px; border-radius: 3px; color: #a03000; }
+  pre { font-family: "Noto Sans Mono CJK KR", Consolas, monospace; font-size: 9.5pt; background: #2b2b2b;
+        color: #eee; padding: 12px 14px; border-radius: 6px; line-height: 1.5; white-space: pre-wrap; }
+  pre code { background: none; color: #eee; padding: 0; }
+  .box { border: 1px solid #ddd; border-left: 5px solid #888; background: #faf9f7;
+         padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .tip { border-left-color: #2c8a4a; background: #f0f7f2; }
+  .warn { border-left-color: #d99000; background: #fdf7ea; }
+  .stop { border-left-color: #c0392b; background: #fbeeec; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; }
+  th, td { border: 1px solid #ccc; padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: #f2ede8; }
+  .step { background: #b8430f; color: #fff; border-radius: 50%; display: inline-block;
+          width: 22px; height: 22px; text-align: center; font-weight: bold; margin-right: 6px; }
+  .foot { margin-top: 34px; padding-top: 12px; border-top: 1px solid #ddd; color: #888; font-size: 9pt; }
+  ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>10대 일괄 복구 &amp; 퀵스타트 진입 런북</h1>
+<p class="lead">골든 이미지 10대가 전부 <b>순정 커널 부팅</b> 상태라는 전제
+(<a href="GOLDEN-IMAGE-INSPECTION-20260804.md">1호기 검수 리포트</a> D1)에서, 마스터 젯슨이 만든
+<b>USB 복구 페이로드</b>(<code>agr-rt-fix/fix-unit-rt.sh</code>)로 유닛을 하나씩 복구하고,
+각 유닛이 <b>참가자 퀵스타트로 이어지는 지점</b>까지를 한 장으로 정리한다. (2026-08-04)</p>
+
+<div class="box">역할 분담: USB 페이로드의 생성·내용은 <b>마스터 젯슨 세션</b> 산출물
+(커널 복구 + deb 정리, 이미 RT 인 보드에서는 커널을 건너뜀). 이 문서는 그것을
+<b>10대에 돌리는 절차와 판정 기준</b>이다.</div>
+
+<h2>0. 준비 — USB 복제 (병렬 작업용)</h2>
+<ul>
+  <li>복구 USB 는 <b>부팅 USB 가 아니라 그냥 파일</b>이다. 아무 PC 에서 <code>agr-rt-fix/</code>
+      폴더를 다른 USB 로 <b>복사만 하면 끝</b> (FAT32/exFAT 무관, 실행권한 무관 —
+      <code>sudo bash</code> 로 실행하므로).</li>
+  <li>USB 2~3개면 충분 — 보드당 USB 점유는 복구 실행 몇 분뿐이고, 재부팅·확인 중에는
+      다음 보드로 옮기면 된다.</li>
+</ul>
+
+<h2>1. 유닛당 절차 (보드 1대 기준 약 10~15분)</h2>
+
+<h3><span class="step">1</span>복구 실행</h3>
+<ol>
+  <li>USB 를 유닛에 꽂고 <code>phorce</code> 로 로그인
+    <ul><li>첫 로그인이면 초기 비밀번호 입력 → <b>새 비밀번호 강제 변경</b>(정상, 출하 밀봉 동작) → 유닛 라벨에 기록</li></ul></li>
+  <li>터미널:
+<pre><code>cd /media/phorce/*/agr-rt-fix
+sudo bash fix-unit-rt.sh</code></pre>
+  자동마운트가 안 되면:
+<pre><code>sudo mkdir -p /mnt/usb &amp;&amp; sudo mount /dev/sda1 /mnt/usb &amp;&amp; cd /mnt/usb/agr-rt-fix
+sudo bash fix-unit-rt.sh</code></pre></li>
+  <li>끝에 <code>[OK]</code> 줄들 확인 → <code>sudo reboot</code> (재부팅 들어가면 USB 뽑아 다음 보드로)</li>
+</ol>
+
+<div class="warn box"><b>재부팅은 생략 불가.</b> 커널은 부팅 때 한 번만 올라가서 실행 중 교체가
+원리적으로 불가능하다. 대신 <b>유닛당 1회로 끝</b>이고, 부팅을 기다리지 말고 그 시간에
+USB 를 다음 보드로 옮겨 겹치기 작업하면 전체 소요는 부팅 1~2회분으로 흡수된다.</div>
+
+<div class="stop box"><b>부팅이 안 끝나는 것 같으면 — 5분 규칙.</b> 이 이미지들은 첫부팅/네트워크
+서비스 타임아웃(90~120초) 때문에 2~4분 걸릴 수 있다. 화면 로그가 가끔이라도 넘어가면 대기.
+<b>같은 화면에서 5분 이상 무변화</b>면 전원 강제 리셋 OK (커널 파일 쓰기는 재부팅 전에 이미
+끝났으므로 손상 위험 낮음). 단 <b>리셋 후에도 매번 같은 지점에서 멈추면</b> 부팅 실패로 취급 —
+반복 리셋하지 말고 마지막 화면 내용을 들고 보고할 것.</div>
+
+<h3><span class="step">2</span>재부팅 후 커널 판정 (30초)</h3>
+<pre><code>uname -r                    # 5.15.148-rt-tegra 나와야 함
+cat /sys/kernel/realtime    # 1 나와야 함</code></pre>
+<p>둘 중 하나라도 아니면 <b>중단하고 그 보드 격리</b> — §3 문제 해결 참조.</p>
+
+<h3><span class="step">3</span>SDK 판정 — 시뮬레이터판 퀵스타트 (로봇 불필요, 3분)</h3>
+<p>여기서부터가 "퀵스타트로 이어지는" 구간이다. 로봇이 없는 유닛은 퀵스타트의 시뮬레이터
+버전(<code>--target sim:demo</code>)으로 판정한다:</p>
+<pre><code>ros2 launch agx_bringup motion.launch.py &amp;        # 가짜 로봇(sim) 켜기
+phorce doctor --target sim:demo                   # 창구 3종 OK / FRESH 확인
+phorce play 1 --target sim:demo &amp;&amp; echo UNIT-PASS # SUCCEEDED + UNIT-PASS = 판정 통과
+kill %1                                           # sim 정리</code></pre>
+<ul>
+  <li><code>phorce: command not found</code> → 재로그인 후 재시도. 그래도 없으면 보드 격리.</li>
+  <li>doctor 의 "카탈로그 NOT LOADED" 경고는 <b>정상</b> (모션 라이브러리 미적재 — D5, 별도 트랙).</li>
+  <li><code>play 1</code> SUCCEEDED 가 나오면 이 유닛은 <b>참가자에게 줄 수 있는 상태</b>다.</li>
+</ul>
+
+<h3><span class="step">4</span>기록</h3>
+<table>
+  <tr><th>유닛</th><th>라벨/위치</th><th>② 커널</th><th>③ sim PASS</th><th>비고</th></tr>
+  <tr><td>1호기 (angel-robotics)</td><td>검수 원본</td><td>✅ (복구 대상, 커널만)</td><td>✅ 2026-08-04 검수</td><td>현장조치 이력 있음 — USB 스크립트도 한 번 돌릴 것</td></tr>
+  <tr><td>2</td><td></td><td></td><td></td><td></td></tr>
+  <tr><td>3</td><td></td><td></td><td></td><td></td></tr>
+  <tr><td>4</td><td></td><td></td><td></td><td></td></tr>
+  <tr><td>5</td><td></td><td></td><td></td><td></td></tr>
+  <tr><td>6</td><td></td><td></td><td></td><td></td></tr>
+  <tr><td>7</td><td></td><td></td><td></td><td></td></tr>
+  <tr><td>8</td><td></td><td></td><td></td><td></td></tr>
+  <tr><td>9</td><td></td><td></td><td></td><td></td></tr>
+  <tr><td>10</td><td></td><td></td><td></td><td></td></tr>
+</table>
+
+<h2>2. 로봇 벤치 유닛 — 실물 퀵스타트 진입 (선택, 로봇 연결된 보드만)</h2>
+<p>퀵스타트 ①~⑤가 실물에서 돌려면 <b>운영자 단계가 먼저</b> 필요하다 (실물 게이트웨이는
+자동 기동이 없다 — 검수 리포트 I1). 이 두 프로세스는 참가자가 아니라 <b>운영진 몫</b>:</p>
+<pre><code># 터미널 A — EtherCAT 마스터 (preflight 13/13 PASS 가 1차 판정)
+ros2 run agx_phorce_bridge phorce_monitor --ros-args -p nic:=eno1 -p mode:=command -p axes:=2
+
+# 터미널 B — 모션 창구 (경고 배너 "실물 로봇이 움직입니다" 정상)
+ros2 run agx_motion_slot motion_action_server --ros-args -p backend:=ecat</code></pre>
+<p>그 다음이 참가자 퀵스타트 그대로: <code>phorce doctor</code> →
+<code>ros2 topic hz /phorce/feedback</code>(≈1000) → <code>phorce list</code>(pcm 적재 슬롯 —
+이름 없이 "슬롯 N" 표기 가능) → <b>영점 버튼(1번) 0.6초 + 3초 대기</b> → 주변 확인 후
+<code>phorce play 1</code>.</p>
+<div class="stop box">비상 정지는 <b>물리 E-Stop 버튼</b>뿐이다. play 전 항상 주변 확인.
+preflight 에서 RT 커널 외 항목이 FAIL 이면 그 보드 개별 진단 (NIC 링크·EEE·offload 등은
+케이블/포트 문제일 수 있음).</div>
+
+<h2>3. 문제 해결</h2>
+<table>
+  <tr><th>증상</th><th>원인/조치</th></tr>
+  <tr><td>② 에서 여전히 순정 커널</td><td>fix 스크립트가 멱등 마커 때문에 스킵했을 가능성 — 실행 로그에서 skip 문구 확인 후 마스터 세션 쪽에 보고</td></tr>
+  <tr><td>monitor: <code>libagx_console_msgs...not found</code></td><td>deb 정리 단계가 안 돌았음 — <code>ldconfig -p | grep agx_console_msgs</code> 로 확인, 없으면 USB 스크립트 재실행</td></tr>
+  <tr><td>monitor: <code>librclcpp.so</code> 로딩 오류</td><td>ld.so.conf 미등록 — <code>sudo agr-register-ldpath ros-humble /opt/ros/humble/lib</code></td></tr>
+  <tr><td><code>phorce doctor</code>(기본 target) 전부 MISSING</td><td>실물 스택 미기동 상태의 <b>정상 출력</b> — §2 의 2프로세스를 먼저</td></tr>
+  <tr><td>play 가 <code>REJECT_NOT_READY_FOR_MOTION</code></td><td>영점 버튼 안 눌림 — 사람이 눌러야 하며 기다려도 안 풀림</td></tr>
+  <tr><td><code>phorce list</code> 에 이름이 안 나옴</td><td>모션 라이브러리 미적재(D5, 행사 전 별도 적재 절차) — 재생 가능 여부는 pcm 슬롯이 정본이므로 판정에는 지장 없음</td></tr>
+  <tr><td>부팅이 비정상적으로 오래 걸림</td><td>부팅 후 <code>systemd-analyze blame | head</code> 로 범인 확인 — first-boot identity 실패(D4)나 네트워크 대기 서비스의 90~120초 타임아웃 가능성. 이미지 재작업 트랙에 보고 (이미지에서 고치면 10대 전부 빨라짐)</td></tr>
+</table>
+
+<h2>4. 관련 문서</h2>
+<ul>
+  <li>결함 상세·증거: <a href="GOLDEN-IMAGE-INSPECTION-20260804.md">GOLDEN-IMAGE-INSPECTION-20260804.md</a></li>
+  <li>참가자 퀵스타트(최종 사용자 경험 기준): <a href="../participant-guide/01-quickstart.html">participant-guide/01-quickstart.html</a></li>
+  <li>운영 런북 원문: <a href="../HACKATHON-GUIDE.md">HACKATHON-GUIDE.md</a></li>
+</ul>
+<div class="tip box">이미지 <b>근본 수정</b>(재작업)은 별도 트랙 — 이 런북은 현장 복구용이며,
+이미지 파이프라인이 고쳐지면 다음 배포부터는 §1 이 불필요해져야 한다.</div>
+
+<p class="foot">phorce 해커톤 준비 · 2026-08-04 · AGR_AM_SDK docs/verification · 원문(md):
+<code>RT-FIX-10UNIT-ROLLOUT.md</code></p>
+
+</body>
+</html>

@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pcm 보드 사용 가이드 — 해커톤 참가자용</title>
+<style>
+  /* ── phorce 브랜드 토큰 (studio 매뉴얼과 동일) ── */
+  :root {
+    --navy:    #08122E;
+    --blue:    #003F87;
+    --cyan:    #1FA6E8;
+    --cyan-tint: #E7F6FD;
+    --page:    #F5F7FA;
+    --card:    #FFFFFF;
+    --border:  #E2E8F0;
+    --border-strong: #CBD5E1;
+    --text:    #2D3748;
+    --dim:     #556278;
+    --invert:  #FFFFFF;
+    --invert-dim: #DDE6F5;
+    --success: #16A34A;
+    --success-text: #166534;
+    --success-tint: #E7F6EF;
+    --warning: #D97706;
+    --warning-text: #92400E;
+    --warning-tint: #FEF3C7;
+    --danger:  #DC2626;
+    --danger-text: #991B1B;
+    --danger-tint: #FDECEC;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  body {
+    font-family: "Pretendard Variable", "Pretendard", "Malgun Gothic", "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+
+  .sheet { max-width: 860px; margin: 0 auto; padding: 0 20px 56px; }
+
+  header.cover {
+    background: var(--navy);
+    color: var(--invert);
+    border-radius: 0 0 18px 18px;
+    padding: 40px 40px 34px;
+    margin-bottom: 32px;
+  }
+  header.cover .eyebrow {
+    color: var(--cyan);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  header.cover h1 { font-size: 30px; font-weight: 800; line-height: 1.25; margin-bottom: 12px; text-wrap: balance; }
+  header.cover .tagline { color: var(--invert-dim); font-size: 15.5px; max-width: 36em; }
+
+  section { margin-bottom: 36px; }
+  h2 {
+    font-size: 21px;
+    font-weight: 800;
+    color: var(--blue);
+    margin-bottom: 6px;
+    text-wrap: balance;
+  }
+  h2 .no {
+    display: inline-block;
+    min-width: 32px;
+    text-align: center;
+    background: var(--blue);
+    color: var(--invert);
+    border-radius: 8px;
+    font-size: 15px;
+    padding: 2px 8px;
+    margin-right: 10px;
+    vertical-align: 2px;
+  }
+  .lede { color: var(--dim); margin-bottom: 14px; max-width: 44em; }
+  h3 { font-size: 16px; font-weight: 700; margin: 16px 0 8px; }
+  p { margin-bottom: 10px; max-width: 46em; }
+  ul, ol { margin: 0 0 12px 22px; }
+  li { margin-bottom: 6px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 14px;
+  }
+  .card > h3:first-child { margin-top: 0; }
+
+  .safety {
+    background: var(--danger-tint);
+    border: 1px solid var(--danger);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 14px 0;
+    max-width: none;
+  }
+  .safety::before { content: "⚠ 안전 — "; font-weight: 800; color: var(--danger-text); }
+
+  .trap {
+    background: var(--warning-tint);
+    border: 1px solid var(--warning);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 14px 0;
+    max-width: none;
+  }
+  .trap::before { content: "🪤 함정 주의 — "; font-weight: 800; color: var(--warning-text); }
+
+  .tip {
+    background: var(--success-tint);
+    border: 1px solid var(--success);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 14px 0;
+    max-width: none;
+  }
+  .tip::before { content: "✔ 알아두면 좋아요 — "; font-weight: 800; color: var(--success-text); }
+
+  .table-wrap { overflow-x: auto; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 10px 0 14px;
+    font-size: 14.5px;
+    background: var(--card);
+  }
+  th {
+    text-align: left;
+    background: var(--page);
+    color: var(--dim);
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: .04em;
+  }
+  th, td { border: 1px solid var(--border); padding: 9px 12px; vertical-align: top; }
+
+  /* LED 색 칩 */
+  .led {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  .led .dot {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    border: 2px solid rgba(0,0,0,.15);
+    flex: 0 0 auto;
+  }
+  .dot.blue   { background: #2563EB; }
+  .dot.green  { background: #16A34A; }
+  .dot.yellow { background: #EAB308; }
+  .dot.white  { background: #FFFFFF; }
+  .dot.red    { background: #DC2626; }
+
+  .ui {
+    display: inline-block;
+    background: var(--blue);
+    color: var(--invert);
+    border-radius: 7px;
+    padding: 1px 9px 2px;
+    font-size: 13.5px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .ui.ghost { background: var(--card); color: var(--text); border: 1.5px solid var(--border-strong); }
+  .ui.danger { background: var(--danger); }
+
+  /* 3초 요약 그리드 */
+  .quick {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+  }
+  .quick .q {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .quick .q .k {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .1em;
+    color: var(--cyan);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .quick .q .v { font-weight: 700; font-size: 15px; line-height: 1.5; }
+
+  /* 켜기→끄기 단계 */
+  .steps { counter-reset: step; list-style: none; margin-left: 0; }
+  .steps > li {
+    counter-increment: step;
+    position: relative;
+    padding: 13px 18px 13px 56px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 10px;
+  }
+  .steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 15px; top: 15px;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--blue);
+    color: var(--invert);
+    font-weight: 800;
+    font-size: 15px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .steps .st { font-weight: 800; font-size: 15.5px; }
+  .steps p { margin: 4px 0 0; font-size: 14.5px; }
+
+  .finale {
+    background: var(--navy);
+    color: var(--invert);
+    border-radius: 14px;
+    padding: 24px 28px;
+  }
+  .finale h2 { color: var(--cyan); margin-bottom: 10px; }
+  .finale ul { margin-left: 20px; }
+  .finale li { margin-bottom: 7px; }
+
+  footer.doc {
+    color: var(--dim);
+    font-size: 12.5px;
+    text-align: center;
+    margin-top: 26px;
+  }
+
+  @page { size: A4; margin: 14mm 12mm; }
+  @media print {
+    body { background: #FFFFFF; font-size: 13px; }
+    .sheet { max-width: none; padding: 0; }
+    header.cover { border-radius: 12px; }
+    .card, .steps > li, .safety, .trap, .tip, .quick .q { break-inside: avoid; }
+    h2 { break-after: avoid; }
+    .page-break { break-before: page; }
+  }
+</style>
+</head>
+<body>
+
+<header class="cover">
+  <div class="eyebrow">phorce · hackathon guide</div>
+  <h1>pcm 보드 사용 가이드</h1>
+  <p class="tagline">
+    pcm은 로봇 몸속의 중앙 관리자 보드입니다.
+    화면이 없는 대신 <strong>불빛(LED)과 소리로 말하고, 버튼으로 듣습니다.</strong>
+    이 문서 한 장이면 충분합니다.
+  </p>
+</header>
+
+<div class="sheet">
+
+<!-- ═══════════ 1. 3초 요약 ═══════════ -->
+<section>
+  <h2><span class="no">1</span>3초 요약</h2>
+  <div class="quick">
+    <div class="q"><div class="k">켜기</div><div class="v">전원을 연결하면 저절로 켜집니다. 버튼 필요 없음.</div></div>
+    <div class="q"><div class="k">움직임 시작</div><div class="v">기능 버튼 <strong>1</strong>을 1초 꾹.</div></div>
+    <div class="q"><div class="k">끄기</div><div class="v">기능 버튼 <strong>2</strong>를 1초 꾹 → 다 끝나면 전원 분리.</div></div>
+    <div class="q"><div class="k">급할 때</div><div class="v"><strong>E-stop 스위치</strong>를 확실하게 누르세요.</div></div>
+    <div class="q"><div class="k">불빛</div><div class="v">초록 = 만져도 됨 · 노랑 = 물러서기 · 빨강 = 문제.</div></div>
+    <div class="q"><div class="k">"삑" 소리</div><div class="v">"지금 그 조작은 안 돼요"라는 뜻. 고장 아님.</div></div>
+  </div>
+</section>
+
+<!-- ═══════════ 2. LED ═══════════ -->
+<section>
+  <h2><span class="no">2</span>불빛(Status LED) — 로봇의 신호등</h2>
+  <p class="lede">한 가지 색 = 한 가지 뜻. 깜빡이지 않고 켜져만 있습니다.</p>
+
+  <div class="table-wrap">
+  <table>
+    <tr><th style="width:130px;">색</th><th>뜻</th><th style="width:230px;">여러분이 할 일</th></tr>
+    <tr>
+      <td><span class="led"><span class="dot blue"></span>파랑</span></td>
+      <td>부팅·준비 중입니다.</td>
+      <td>기다리세요. (안내 방송이 나오면 그대로 따라 하세요)</td>
+    </tr>
+    <tr>
+      <td><span class="led"><span class="dot green"></span>초록</span></td>
+      <td>안전한 대기 상태(파킹)입니다. 힘이 빠져 있습니다.</td>
+      <td>로봇을 만져도 됩니다. studio 연결·설정·교시는 지금 하세요.</td>
+    </tr>
+    <tr>
+      <td><span class="led"><span class="dot yellow"></span>노랑</span></td>
+      <td>로봇이 <strong>움직일 수 있는 상태</strong>입니다 (힘이 들어갔거나 동작 재생 중).</td>
+      <td><strong>물러서세요.</strong> 노랑이 유일한 "비켜라" 신호입니다.</td>
+    </tr>
+    <tr>
+      <td><span class="led"><span class="dot white"></span>흰색</span></td>
+      <td>끄는 중입니다.</td>
+      <td>다 꺼질 때까지 잠깐 기다리세요.</td>
+    </tr>
+    <tr>
+      <td><span class="led"><span class="dot red"></span>빨강</span></td>
+      <td>문제가 생겼습니다 (부팅 에러·E-stop 등).</td>
+      <td>원인은 불빛만으로는 알 수 없습니다 — 소리와 studio 화면을 확인하고, 기본 해결책은 <strong>전원을 껐다 켜기</strong>입니다.</td>
+    </tr>
+  </table>
+  </div>
+</section>
+
+<!-- ═══════════ 3. 버튼 ═══════════ -->
+<section class="page-break">
+  <h2><span class="no">3</span>버튼 — 눌러서 생기는 일</h2>
+  <p class="lede">버튼은 스치듯 누르면 안 먹습니다. <strong>1초쯤 꾹</strong> 눌러야 합니다 (실수 방지용).</p>
+
+  <div class="table-wrap">
+  <table>
+    <tr><th style="width:150px;">버튼</th><th>언제 · 어떻게</th><th>누르면 생기는 일</th></tr>
+    <tr>
+      <td><strong style="color:var(--danger-text);">E-stop 스위치</strong></td>
+      <td>위험할 때, 언제든. <strong>확실하게 꾹</strong> (살짝 스치면 안 걸릴 수 있음).</td>
+      <td>모터 전원이 즉시 끊기도록 설계돼 있습니다. 빨간불 + 경고음 반복.
+          <strong>한 번 걸리면 스위치를 되돌려도 풀리지 않습니다</strong> — 전원을 껐다 켜야 다시 쓸 수 있습니다.</td>
+    </tr>
+    <tr>
+      <td><strong>기능 버튼 1</strong><br>"움직임 시작"</td>
+      <td>초록불(파킹)일 때, 1초 꾹.</td>
+      <td>3초 경고 방송 후 힘이 들어가고, <strong>미리 설정해 둔 부팅 자세</strong>로 움직입니다 (불빛 노랑).
+          studio ① 설정의 "부팅 자세 옵션"이 바로 이때 쓰는 값입니다.</td>
+    </tr>
+    <tr>
+      <td><strong>기능 버튼 2</strong><br>"끄기"</td>
+      <td>운전 중일 때, 1초 꾹.</td>
+      <td>안내 방송 → 동작 정지 → 종료 자세 → 흰불. 다 끝나면 전원을 분리하세요.</td>
+    </tr>
+    <tr>
+      <td>기능 버튼 3 · 4</td>
+      <td>—</td>
+      <td>평소에는 아무 기능이 없습니다. 눌러도 아무 일도 일어나지 않습니다.</td>
+    </tr>
+    <tr>
+      <td>전원 버튼</td>
+      <td>—</td>
+      <td><strong>지금 버전에서는 눌러도 아무 일도 일어나지 않습니다.</strong>
+          켜기 = 전원 연결, 끄기 = 기능 버튼 2. 이 버튼이 아닙니다.</td>
+    </tr>
+  </table>
+  </div>
+
+  <div class="trap">
+    <strong>부팅 직후에 기능 버튼 1과 2를 동시에 누르고 있지 마세요.</strong>
+    공장 점검용 시험 모드로 빠져 버립니다 (LED·스피커 자가진단 화면). 이 모드는 나가는 길이 없어서
+    전원을 껐다 켜야 합니다. 만약 부팅이 이상하게 멈췄다면 이걸 의심하세요.
+  </div>
+
+  <div class="tip">
+    기능 버튼 1을 눌렀는데 <strong>"삑" 소리만 나고 안 움직이면</strong>, 둘 중 하나입니다:
+    ① studio에서 축 구성을 아직 저장하지 않았다 → ① 설정에서 저장.
+    ② PC가 SD 카드 드라이브를 잡고 있다 → 파일 탐색기에서 드라이브를 "안전하게 제거"한 뒤 다시 누르세요.
+  </div>
+</section>
+
+<!-- ═══════════ 4. 켜기→끄기 ═══════════ -->
+<section>
+  <h2><span class="no">4</span>켜기부터 끄기까지 — 한 사이클</h2>
+
+  <ol class="steps">
+    <li>
+      <span class="st">전원 연결 <span class="led" style="font-size:13px;"><span class="dot blue" style="width:14px;height:14px;"></span>파랑</span></span>
+      <p>"전원 켜짐" 방송이 나오고 스스로 부팅합니다. 그냥 기다리세요.</p>
+    </li>
+    <li>
+      <span class="st">안내 방송 따라 하기 <span class="led" style="font-size:13px;"><span class="dot blue" style="width:14px;height:14px;"></span>파랑</span></span>
+      <p>"관절을 살짝 움직여 주세요" 방송이 반복되면, 각 관절을 손으로 조금씩 움직여 주세요.
+         로봇이 자기 자세를 찾는 과정입니다. 끝나면 다음 단계로 넘어갑니다.</p>
+    </li>
+    <li>
+      <span class="st">준비 완료(파킹) <span class="led" style="font-size:13px;"><span class="dot green" style="width:14px;height:14px;"></span>초록</span></span>
+      <p>"시스템 준비" 방송과 함께 초록불. 여기가 <strong>기본 상태</strong>입니다 —
+         studio 연결, 설정 저장, 교시(가르치기)는 전부 이 상태에서 합니다.</p>
+    </li>
+    <li>
+      <span class="st">움직임 시작 (필요할 때만) <span class="led" style="font-size:13px;"><span class="dot yellow" style="width:14px;height:14px;"></span>노랑</span></span>
+      <p>기능 버튼 1을 1초 꾹 → "로봇이 움직입니다" 3초 경고 → 힘이 들어가고 부팅 자세로 이동.
+         <strong>노랑 불이면 물러서세요.</strong></p>
+    </li>
+    <li>
+      <span class="st">끄기 <span class="led" style="font-size:13px;"><span class="dot white" style="width:14px;height:14px;"></span>흰색</span></span>
+      <p>기능 버튼 2를 1초 꾹 → 안내 방송 → 정지·종료 자세 → 흰불. 그 다음 전원을 분리하세요.</p>
+    </li>
+  </ol>
+</section>
+
+<!-- ═══════════ 5. 소리 ═══════════ -->
+<section>
+  <h2><span class="no">5</span>소리의 뜻</h2>
+  <p class="lede">pcm은 화면이 없어서 소리로 말합니다. 세 종류만 구분하면 됩니다.</p>
+
+  <div class="table-wrap">
+  <table>
+    <tr><th style="width:240px;">이런 소리가 나면</th><th>이런 뜻입니다</th></tr>
+    <tr>
+      <td>짧은 <strong>"삑"</strong> 한 번</td>
+      <td>"지금 그 조작은 안 돼요." 고장이 아닙니다 — 위 3번 표의 팁을 확인하세요.</td>
+    </tr>
+    <tr>
+      <td>같은 <strong>안내 방송이 반복</strong></td>
+      <td>로봇이 뭔가를 기다리는 중입니다. 방송 내용대로 해 주면 진행됩니다 (예: "관절을 살짝 움직여 주세요").</td>
+    </tr>
+    <tr>
+      <td>빨간불 + <strong>에러 방송 반복</strong></td>
+      <td>부팅 에러입니다. 방송이 원인을 말해 줍니다. 기본 해결책은 전원 재투입.</td>
+    </tr>
+  </table>
+  </div>
+</section>
+
+<!-- ═══════════ 6. 곤란할 때 ═══════════ -->
+<section>
+  <h2><span class="no">6</span>곤란할 때 — 자주 있는 3가지</h2>
+
+  <div class="card">
+    <h3>① 빨간불이 켜졌어요</h3>
+    <p>가장 흔한 원인: <strong>저장해 둔 관절 개수와 실제로 연결된 개수가 다를 때</strong>
+       (예: 6축으로 저장했는데 4축만 연결하고 켬). 해결 두 가지:</p>
+    <ul>
+      <li>studio를 연결하면 복구 안내가 뜹니다 — ① 설정에서 축 구성만 다시 저장(또는 해제)하고 전원을 껐다 켜세요.</li>
+      <li>복구 화면이 잘 안 되면 그냥 전원을 껐다 켜고, 관절 연결부터 다시 확인하세요.</li>
+    </ul>
+
+    <h3>② studio 연결과 SD 드라이브가 동시에 사라졌어요</h3>
+    <p>알려진 문제이고 <strong>여러분 잘못이 아닙니다.</strong> USB 케이블을 뽑았다가 다시 꽂으면 돌아옵니다.
+       (긴 동작을 저장하는 중에 가끔 일어납니다.)</p>
+
+    <h3>③ 아무 반응이 없어요</h3>
+    <p>전원(배터리) 연결을 확인하고 전원을 껐다 켜세요. 부팅 직후 기능 버튼 1+2를 같이 누르고
+       있었다면 시험 모드에 빠진 것입니다 — 역시 전원 재투입.</p>
+  </div>
+
+  <div class="tip">
+    관절(phact)을 하나도 안 붙이고 pcm 보드만 켜도, 축 구성이 비어 있는 상태라면 정상 부팅됩니다.
+    로봇 없이 studio 연결·설정·SD 카드 연습을 할 수 있는 "벤치 모드"입니다.
+  </div>
+
+  <div class="safety">
+    SD 카드를 슬롯에서 물리적으로 빼는 것은 <strong>전원을 끈 뒤에만</strong> 하세요.
+    켜진 상태에서는 pcm이 카드를 쓰고 있을 수 있습니다.
+  </div>
+</section>
+
+<!-- ═══════════ 7. 마무리 ═══════════ -->
+<section>
+  <div class="finale">
+    <h2>딱 이것만 기억하세요</h2>
+    <ul>
+      <li><strong>초록에서 일하고, 노랑에서 물러서고, 빨강이면 전원 재투입.</strong></li>
+      <li>버튼 1 = 움직임 시작 · 버튼 2 = 끄기 · 나머지 버튼은 잊어도 됩니다.</li>
+      <li>급하면 E-stop — 단, 한 번 누르면 전원을 껐다 켜야 다시 씁니다.</li>
+      <li>pcm에 저장된 설정·동작은 전원을 꺼도 남습니다 — studio에서 미리 심어 둔 "사전 설정"이 이 보드의 기억입니다.</li>
+    </ul>
+  </div>
+</section>
+
+<footer class="doc">
+  pcm 보드 사용 가이드 · 해커톤 참가자용 · 2026-08-04 · phorce studio 매뉴얼과 함께 보세요.
+</footer>
+
+</div>
+</body>
+</html>

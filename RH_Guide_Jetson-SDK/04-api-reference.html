@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>phorce SDK — API 레퍼런스</title>
+<style>
+  body { font-family: "Noto Sans CJK KR", "Noto Sans KR", sans-serif;
+         max-width: 760px; margin: 2rem auto; padding: 0 1rem;
+         font-size: 10.5pt; line-height: 1.7; color: #222; }
+  h1 { color: #5e4b8b; border-bottom: 3px solid #5e4b8b; padding-bottom: .3rem; }
+  h2 { color: #5e4b8b; border-bottom: 1px solid #cfc6e2; padding-bottom: .2rem; margin-top: 2.2rem; }
+  h3 { color: #4a3a70; margin-top: 1.6rem; }
+  code { font-family: "Noto Sans Mono CJK KR", monospace; background: #f0edf6;
+         padding: .1rem .3rem; border-radius: 3px; font-size: 9.5pt; }
+  pre { background: #2b2b2b; color: #eee; padding: .8rem 1rem; border-radius: 6px;
+        overflow-x: auto; white-space: pre-wrap; font-size: 9pt; }
+  pre code { background: none; color: inherit; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: 9.5pt; }
+  th, td { border: 1px solid #ccc; padding: .35rem .55rem; text-align: left; vertical-align: top; }
+  th { background: #ece7f5; }
+  .box  { border-left: 5px solid #5e4b8b; background: #f6f4fa; padding: .6rem .9rem; margin: 1rem 0; }
+  .tip  { border-left: 5px solid #2c8a4a; background: #f0f8f2; padding: .6rem .9rem; margin: 1rem 0; }
+  .warn { border-left: 5px solid #d99000; background: #fdf7ea; padding: .6rem .9rem; margin: 1rem 0; }
+  .stop { border-left: 5px solid #c0392b; background: #fbeeec; padding: .6rem .9rem; margin: 1rem 0; }
+  .lead { font-size: 11.5pt; color: #444; }
+  .foot { color: #888; font-size: 8.5pt; margin-top: 3rem; border-top: 1px solid #ddd; padding-top: .5rem; }
+  .sig { font-family: "Noto Sans Mono CJK KR", monospace; font-size: 9pt;
+         background: #f0edf6; padding: .3rem .6rem; border-radius: 4px;
+         display: block; margin: .5rem 0 .3rem 0; }
+  /* ── 도식(구성도) ── */
+  table.diagram { border: none; border-collapse: separate; border-spacing: 0 3px; }
+  table.diagram td { border: none; padding: 0; }
+  table.diagram td.dbox { border: 2px solid; border-radius: 8px;
+                          padding: .5rem .8rem; text-align: center; }
+  .d-you   { border-color: #2c8a4a; background: #eaf5ee; }
+  .d-sdk   { border-color: #5e4b8b; background: #f0edf6; }
+  .d-gw    { border-color: #888;    background: #f2f2f2; }
+  .d-robot { border-color: #75552d; background: #faf6ee; }
+  .dchan { text-align: center; font-size: 9pt; color: #555; padding: .1rem 0; }
+  /* ── 탭 (버튼은 자바스크립트가 만든다 — 인쇄물에는 안 나온다) ── */
+  #tabbar-slot { position: sticky; top: 0; background: #fff; z-index: 5; }
+  .tabbtn { font: inherit; font-size: 9.5pt; padding: .35rem .9rem; margin: .15rem .15rem 0 0;
+            border: 1px solid #cfc6e2; border-bottom: none; border-radius: 8px 8px 0 0;
+            background: #f6f4fa; color: #4a3a70; cursor: pointer;
+            transition: background .15s, color .15s; }
+  .tabbtn:hover { background: #e5def2; }
+  .tabbtn.on { background: #5e4b8b; color: #fff; font-weight: bold; }
+  #tabbar-slot.filled { border-bottom: 2px solid #5e4b8b; padding-top: .3rem; }
+  /* 화면 전용 미화 — PDF 변환기는 아래를 무시한다 */
+  table:not(.diagram) tr:nth-child(even) td { background: #fbfafd; }
+  h2 { padding-left: .45rem; border-left: 4px solid #5e4b8b; }
+</style>
+</head>
+<body>
+
+<!-- 제목을 표로 감싼 이유: PDF 변환기(soffice)가 body 첫 블록 요소를 훼손하는
+     버그가 있는데, 표는 안전하게 렌더링된다 -->
+<table style="border:none;width:100%"><tr><td style="border:none;padding:0">
+<h1>phorce SDK — API 레퍼런스</h1>
+</td></tr></table>
+
+<p class="lead">이 문서는 SDK 가 여러분에게 열어 준 <b>모든 창구의 사전</b>입니다.
+앞부분(시스템 지도와 공통 규칙)만 읽고, 그 다음부터는 <b>여러분이 쓰는 언어의
+탭 하나만</b> 골라 보면 됩니다 — Python 만 쓸 거라면 Python 탭만 보면 충분합니다.</p>
+
+<h2 id="place">1. 여러분이 서 있는 곳 — 무엇을 만들고, 무엇은 맡기는가</h2>
+
+<p>phorce 시스템에서 Jetson 은 <b>로봇의 두뇌이자 여러분의 개발 컴퓨터</b>입니다.
+역할 분담은 이렇게 정해져 있습니다:</p>
+
+<table>
+<tr><th></th><th>누가</th><th>무엇을</th></tr>
+<tr><td>🧠 <b>판단</b></td><td><b>여러분의 코드</b></td><td>로봇의 상태를 보고 "언제, 몇 번 모션을 재생할지" 결정 — AI 정책, 제어 로직, 데모 시나리오 전부 여기</td></tr>
+<tr><td>⚙️ <b>실행</b></td><td>우리가 만든 시스템</td><td>1초에 1000번(1kHz) 로봇과 통신하며 모션을 실제로 재생하고, 매 순간 안전을 검사</td></tr>
+</table>
+
+<div class="box"><b>제약 조건 — 먼저 알고 시작하세요.</b><br>
+① <b>관절을 직접 실시간으로 조종하는 길은 막혀 있습니다.</b> "3번 관절을 0.5초 동안
+30도로" 같은 명령을 보내는 API 는 없습니다. 이것은 안전 설계입니다 — 빠른 제어
+루프는 검증된 시스템만 만질 수 있습니다.<br>
+② 로봇을 움직이는 방법은 <b>모션 번호(1~50) 전송, 단 하나</b>입니다. 로봇에 미리
+담겨 있는 모션(동작 파일)을 번호로 골라 재생하는 방식입니다 — 노래방에서 곡 번호를
+입력하는 것과 같습니다.<br>
+③ 대신 <b>관측은 활짝 열려 있습니다.</b> 모든 관절의 위치·속도·전류·온도가 1초에
+1000번 여러분에게 옵니다. 이 데이터로 판단하는 코드가 여러분의 작품입니다.</div>
+
+<h2 id="map">2. 시스템 지도</h2>
+
+<p>여러분의 명령이 로봇까지 내려가는 길(왼쪽 ▼)과, 로봇의 상태가 여러분에게
+올라오는 길(오른쪽 ▲)입니다. 초록 = 여러분의 영역, 보라 = SDK, 갈색 = 로봇.</p>
+
+<table class="diagram">
+<tr><td colspan="2" class="dbox d-you" style="border:2px solid #2c8a4a;background:#eaf5ee;border-radius:8px;padding:8px 12px;text-align:center"><b>여러분의 코드</b> — AI 정책 · 제어 로직 · 시나리오<br>
+<span style="font-size:9pt">어떤 언어든: 터미널(CLI) · Python · C++ · 화면(GUI) · ROS 2 직접</span></td></tr>
+<tr><td class="dchan" style="width:50%">▼ "3번 재생해" (모션 번호)</td>
+    <td class="dchan">▲ 관절 상태 1초에 1000번 (피드백)</td></tr>
+<tr><td colspan="2" class="dbox d-sdk" style="border:2px solid #5e4b8b;background:#f0edf6;border-radius:8px;padding:8px 12px;text-align:center"><b>SDK 공개 창구</b> (누구나 같은 규칙)<br>
+<span style="font-size:9pt">재생 액션 <code>PlayMotionSequence</code> 하나 + 관측 토픽 4개 + 목록 서비스 1개</span></td></tr>
+<tr><td class="dchan" colspan="2">▼ ▲</td></tr>
+<tr><td colspan="2" class="dbox d-gw" style="border:2px solid #888;background:#f2f2f2;border-radius:8px;padding:8px 12px;text-align:center"><b>게이트웨이</b> — 요청 검증 · 안전 검사 · 1kHz 통신 <span style="font-size:9pt">(SDK 가 운영 — 여러분이 만지지 않음)</span></td></tr>
+<tr><td class="dchan" colspan="2">▼ ▲ &nbsp;EtherCAT 케이블 (1kHz)</td></tr>
+<tr><td colspan="2" class="dbox d-robot" style="border:2px solid #75552d;background:#faf6ee;border-radius:8px;padding:8px 12px;text-align:center"><b>로봇</b> — <b>pcm</b>(모션 재생과 안전의 최종 결정권자) → <b>phact ×6</b>(관절 모터)</td></tr>
+</table>
+
+<div class="tip"><b>이 그림이 말해 주는 것:</b> 어느 문(언어)으로 들어가도 전부
+가운데의 <b>같은 공개 창구</b>로 모입니다. 그래서 CLI 로 되는 일은 Python 으로도,
+C++ 로도 똑같이 됩니다. 그리고 여러분의 코드에 실수가 있어도 게이트웨이와 pcm 이
+이상한 요청을 거절하므로 로봇은 다치지 않습니다.</div>
+
+<h2 id="words">3. 자주 나오는 낱말 6개 — 먼저 알아 두면 다 쉬워집니다</h2>
+
+<table>
+<tr><th>낱말</th><th>뜻</th></tr>
+<tr><td><b>토픽</b> (topic)</td><td>계속 흘러나오는 방송 채널. 구독하면 새 데이터가 올 때마다 받습니다 (예: 피드백)</td></tr>
+<tr><td><b>액션</b> (action)</td><td>"해 줘" 하고 부탁하면 → 진행 소식을 받다가 → 끝나면 결과를 받는 통신. 모션 재생이 액션입니다</td></tr>
+<tr><td><b>서비스</b> (service)</td><td>질문 하나, 답 하나 (예: "모션 목록 줘")</td></tr>
+<tr><td><b>네임스페이스</b></td><td>이름 앞에 붙는 주소. 이 행사 구성에서는 전부 최상위(빈 주소)라 신경 쓸 일 없습니다</td></tr>
+<tr><td><b>블로킹 / 논블로킹</b></td><td>끝날 때까지 기다리는 호출 / 바로 돌아오고 나중에 결과를 받는 호출</td></tr>
+<tr><td><b>콜백</b> (callback)</td><td>"데이터가 오면 이 함수를 불러 줘" 하고 맡겨 두는 함수</td></tr>
+</table>
+
+<h2 id="rules">4. 공통 규칙 — 어떤 언어를 쓰든 똑같습니다</h2>
+
+<h3>4-1. 대상(target) — 기본값 그대로 두면 실물 로봇입니다</h3>
+<p>CLI·Python·C++ 모두 <b>아무 설정 없이 실행하면 여러분의 실물 로봇에
+연결됩니다</b> (기본 대상 <code>robot</code>). 이 행사에서는 이 기본값만 쓰면 되고,
+대상을 바꿀 일이 없습니다.</p>
+<div class="box">참고: 여기저기서 <b>"시뮬레이터"</b>라는 선택지(<code>sim:이름</code>
+표기, GUI 의 대상 칸 등)를 보게 될 텐데, 이 행사에서는 <b>다루지 않습니다</b>.
+여러분에게는 실물 로봇이 있으니까요. 시뮬레이터 대상을 고르면 로봇이 안 움직일
+뿐입니다 — 실수로 실물이 움직이는 방향의 혼동은 없습니다.</div>
+
+<h3>4-2. 모션 번호</h3>
+<ul>
+<li>재생할 수 있는 번호는 <b>1 부터 50</b>. 어떤 번호가 실제로 채워져 있는지는
+로봇이 알고 있습니다 — <code>phorce list</code> 로 물어보세요.</li>
+<li><b>0 은 금지</b>입니다. "모션 없음"을 뜻하는 예약 번호라서 재생 요청에 넣으면
+거절됩니다.</li>
+<li><b>한 번에 하나만</b> 보냅니다. 두 개를 이어 보내고 싶으면, 첫 번째의
+<b>결과를 받은 뒤</b> 두 번째를 보내세요.</li>
+</ul>
+
+<h3>4-3. 거절 — 세 가지 경우, 세 가지 대응</h3>
+<p>요청이 거절되면 번호와 함께 이유가 옵니다. 딱 세 가지만 기억하세요:</p>
+<table>
+<tr><th>코드</th><th>이름</th><th>무슨 상황</th><th>여러분이 할 일</th></tr>
+<tr><td>5</td><td><code>QUEUE_FULL</code></td><td>다른 모션이 아직 재생 중</td><td><b>기다렸다가 다시 보내면 됩니다.</b> 재시도해도 되는 유일한 경우</td></tr>
+<tr><td>12</td><td><code>NOT_READY_FOR_MOTION</code></td><td>로봇이 모션 받을 준비가 안 됨</td><td>기다려도 안 풀립니다 — 로봇의 <b>영점 버튼(1번)을 0.6초</b> 누르면 약 3초 뒤 준비됩니다</td></tr>
+<tr><td>13</td><td><code>RECOVERY_REQUIRED</code></td><td>직전 동작이 실패해서 복구 필요</td><td><b>2번 버튼(파킹) → 영점 버튼</b> 순서로 사람이 복구합니다</td></tr>
+</table>
+<div class="warn"><b>가장 흔한 버그:</b> 12·13 까지 "바쁘니까 재시도"로 처리하면
+프로그램이 <b>영원히 재시도만 합니다</b>. "바쁨(busy)"은 코드 5 하나뿐입니다.
+전체 거절 코드 목록은 ROS 2 탭에 있습니다.</div>
+<p style="font-size:9pt;color:#666">표의 이름은 줄인 표기입니다 — 정식 상수와 Python
+<code>.reason</code> 문자열에는 <code>REJECT_</code> 접두사가 붙습니다
+(예: <code>REJECT_QUEUE_FULL</code>). 코드에서 비교할 때는 숫자(<code>.code</code>)가 안전합니다.</p>
+
+<h3>4-4. 성공 판정 — <code>ok</code> 하나만 보면 됩니다</h3>
+<p>"성공"은 생각보다 깐깐한 개념입니다. 요청이 끝났다고 다 성공이 아니라,
+<b>로봇이 이 요청을 진짜 받아서 · 끝까지 재생했고 · 지금 멈춰 있고 · 복구가
+필요 없는 상태</b>까지 전부 확인돼야 성공입니다. 이 판정을 SDK 가
+<code>ok</code> 하나로 합쳐 줍니다 — 직접 조립하지 마세요.</p>
+
+<h3>4-5. 멈추고 싶을 때</h3>
+<div class="stop"><b>즉시 정지는 물리 E-Stop 버튼뿐입니다.</b> 코드의
+<code>cancel()</code> 은 "아직 시작 안 한 것을 취소해 달라"는 부탁일 뿐이고,
+이미 시작된 동작은 끝까지 갑니다. 실물 로봇은 재생 중 취소 기능 자체가 없습니다.</div>
+
+<h3>4-6. 데이터를 믿어도 되는가 — 신선도</h3>
+<ul>
+<li>관절 데이터가 신선하다는 <b>유일한 증거는 <code>valid</code> 필드</b>입니다.
+"낡지 않았으니(<code>stale</code> 아님) 신선하겠지"는 틀립니다 — 데이터가 아예
+안 온 관절은 둘 다 false 라서요.</li>
+<li>모션 상태 정보는 나이가 <b>1500ms 에 도달하면</b>(<code>age_ms ≥ 1500</code>)
+"낡음(STALE)"으로 판정됩니다. "로봇이 지금 움직이고 있나?"는 이 값 말고
+<b>1kHz 피드백</b>으로 보세요.</li>
+</ul>
+
+<h2 id="doors">5. 이제 문을 고르세요</h2>
+
+<p>아래 다섯 부분은 각각 독립된 사용 설명서입니다. <b>화면으로 보고 있다면 아래
+버튼으로 원하는 것만 골라 볼 수 있습니다</b> (인쇄물에는 전부 순서대로 실려
+있습니다).</p>
+
+<table>
+<tr><th>문</th><th>이럴 때 고르세요</th></tr>
+<tr><td><b>CLI</b> — 터미널 명령 <code>phorce</code></td><td>일단 빨리 해 보고 싶다 / 셸 스크립트로 자동화하고 싶다</td></tr>
+<tr><td><b>Python</b></td><td>제일 편한 프로그래밍 경로 — 대부분의 참가자에게 추천</td></tr>
+<tr><td><b>C++</b></td><td>ROS 2 노드에 통합하거나 성능이 필요할 때</td></tr>
+<tr><td><b>ROS 2 직접</b></td><td>SDK 도우미 없이 통신 규약을 직접 쓰고 싶을 때 · 다른 언어를 쓸 때</td></tr>
+<tr><td><b>GUI</b> — 화면 <code>phorce-console</code></td><td>코드 없이 그래프를 보고 버튼으로 재생하고 싶을 때</td></tr>
+</table>
+
+<div id="tabbar-slot"></div>
+
+<!-- ═══════════════════════ CLI ═══════════════════════ -->
+<section class="tabpanel" id="tab-cli">
+
+<h2>CLI — 터미널 명령 <code>phorce</code></h2>
+
+<p>로그인만 하면 바로 쓸 수 있습니다. "서버를 찾지 못했습니다"가 나오면 로봇 스택이
+안 켜진 것입니다 — ① 퀵 가이드 3-2절(시동 걸기 — 터미널 2개)부터. 명령은 네 개뿐입니다:</p>
+
+<table>
+<tr><th>명령</th><th>하는 일</th><th>기다리는 시간(기본)</th></tr>
+<tr><td><code>phorce doctor</code></td><td>건강검진 — 연결이 되는지, 서버가 살아 있는지, 모션 목록이 준비됐는지 검사</td><td>2초</td></tr>
+<tr><td><code>phorce list</code></td><td>재생할 수 있는 모션 번호와 이름 목록</td><td>5초</td></tr>
+<tr><td><code>phorce play 번호</code></td><td>그 번호 모션을 재생하고 끝날 때까지 기다림</td><td>30초</td></tr>
+<tr><td><code>phorce status</code></td><td>로봇의 모션 상태 한 장 (보기만 — 아무 명령도 안 보냄)</td><td>2초</td></tr>
+</table>
+
+<p><b>모든 명령에 붙일 수 있는 옵션:</b></p>
+<table>
+<tr><th>옵션</th><th>뜻</th></tr>
+<tr><td><code>--timeout 초</code></td><td>기다리는 시간 바꾸기</td></tr>
+<tr><td><code>--json</code></td><td>사람용 출력 대신 기계용 JSON 한 줄 — 스크립트에서 파싱할 때</td></tr>
+<tr><td><code>--target</code> / <code>--namespace</code> / <code>--domain-id</code></td><td>대상·주소를 직접 지정 — 이 행사에서는 기본값(실물 로봇)이면 되므로 쓸 일 없음</td></tr>
+</table>
+
+<p><b>끝나고 남기는 번호(exit code)</b> — 스크립트에서 <code>$?</code> 로 확인합니다:</p>
+<table>
+<tr><th>번호</th><th>뜻</th></tr>
+<tr><td>0</td><td>성공</td></tr>
+<tr><td>1</td><td>거절되거나 실패 (화면의 안내문을 읽으세요 — 할 일이 적혀 있습니다)</td></tr>
+<tr><td>2</td><td>명령을 잘못 씀</td></tr>
+<tr><td>3</td><td>연결할 서버가 없음 (스택이 안 떠 있거나 target 오타)</td></tr>
+<tr><td>4</td><td>시간 초과 (재생 취소를 요청하고 끝나지만, <b>로봇 동작은 계속될 수 있음</b>)</td></tr>
+<tr><td>5</td><td>바쁨 — 요청은 버려졌으니 기다렸다 다시</td></tr>
+<tr><td>130</td><td>Ctrl+C 로 직접 끊음</td></tr>
+</table>
+
+<pre><code># 처음이라면 이 순서로 (전부 실물 로봇 대상)
+phorce doctor      # ① 로봇과 대화가 되나 (건강검진)
+phorce list        # ② 무슨 모션이 있나
+phorce play 1      # ③ 1번 재생! (로봇이 움직입니다 — 주변 확인)
+
+# 스크립트에서 쓸 때
+phorce list --json | python3 -m json.tool</code></pre>
+
+</section>
+
+<!-- ═══════════════════════ Python ═══════════════════════ -->
+<section class="tabpanel" id="tab-py">
+
+<h2>Python — <code>import phorce</code></h2>
+
+<p>가장 짧은 완전한 프로그램부터 보세요:</p>
+
+<pre><code>import phorce
+
+with phorce.connect() as robot:        # 실물 로봇에 연결 (with 를 쓰면 정리는 자동)
+    result = robot.play(1)             # 1번 재생, 끝날 때까지 기다림 — 로봇이 움직입니다!
+    print("성공!" if result.ok else result.detail)</code></pre>
+
+<h3>연결 만들기</h3>
+<span class="sig">phorce.connect(target="robot", *, timeout=10.0, namespace=None, domain_id=None, require_server=True) → Robot</span>
+<p>로봇과의 연결을 만듭니다. timeout 안에 서버가 안 보이면
+<code>PhorceUnavailable</code> 예외가 납니다. 여러분이 이미 ROS 2 코드를 쓰고
+있어도 안전합니다 — connect 는 자기만의 독립된 통신 문맥을 만들어서 여러분의
+<code>rclpy</code> 초기화와 충돌하지 않습니다.</p>
+
+<span class="sig">phorce.doctor(target="robot", *, timeout=2.0, namespace=None, domain_id=None) → DoctorReport</span>
+<p>건강검진만 합니다 — 모션은 보내지 않고, 서버가 없어도 동작합니다.
+<code>report.ok</code> 와 <code>report.issues</code>(문제 목록)를 보세요.</p>
+
+<h3>Robot — 연결의 중심</h3>
+<table>
+<tr><th>메서드</th><th>하는 일</th></tr>
+<tr><td><code>play(*ids, stop_on_error=True, timeout=None) → PlayResult</code></td><td><b>블로킹</b> 재생. 번호는 <b>괄호 안에 그냥</b> 넣으세요: <code>robot.play(3)</code>. <code>ms_id=3</code> 처럼 이름 붙여 넣는 형식은 없습니다. timeout 을 주면 그 시간 넘겼을 때 취소를 요청하고 <code>TimeoutError</code> (로봇 동작은 계속될 수 있음)</td></tr>
+<tr><td><code>play_async(*ids, stop_on_error=True, on_feedback=None) → PlayHandle</code></td><td><b>논블로킹</b> 재생 — 바로 돌아오고, 진행 소식은 <code>on_feedback</code> 콜백으로</td></tr>
+<tr><td><code>status(timeout=2.0) → Status</code></td><td>상태 한 장 읽기 (아무 명령도 안 보냄)</td></tr>
+<tr><td><code>motions() → Catalog</code></td><td>모션 목록. <code>for m in robot.motions():</code> 처럼 바로 순회</td></tr>
+<tr><td><code>doctor()</code> / <code>close()</code></td><td>진단 / 연결 닫기 (<code>with</code> 문이 자동으로 해 줌)</td></tr>
+</table>
+
+<h3>PlayResult — 재생이 끝나면 받는 것</h3>
+<table>
+<tr><th>속성</th><th>뜻</th></tr>
+<tr><td><code>ok</code></td><td>성공 여부. <b>괄호 없이</b> <code>result.ok</code> 입니다 (<code>result.ok()</code> 라고 쓰면 에러). 공통 규칙 4-4 의 깐깐한 판정을 다 합친 값</td></tr>
+<tr><td><code>status_name</code></td><td><code>"SUCCEEDED"</code> 또는 <code>"CANCELED"</code> <b>둘뿐</b>. 거절·중단은 결과로 돌아오지 않고 아래의 <b>예외로 던져집니다</b> — <code>status_name == "REJECTED"</code> 같은 분기는 절대 실행되지 않는 죽은 코드가 됩니다</td></tr>
+<tr><td><code>detail</code></td><td>사람이 읽는 한국어 설명 — 문제가 있으면 <b>할 일</b>이 적혀 있으니 사용자에게 그대로 보여 주세요</td></tr>
+<tr><td><code>completed_count</code></td><td>끝까지 재생된 개수 (0 또는 1)</td></tr>
+<tr><td>그 외</td><td><code>boot_id</code>·<code>request_id</code>·<code>primary_state</code>·<code>physical_idle</code>·<code>recovery_required</code> 등 로봇 쪽 문맥 — 궁금할 때만 보면 됩니다 (ROS 2 탭에 설명)</td></tr>
+</table>
+
+<h3>예외 — 오류는 타입으로 구분합니다</h3>
+<pre><code>PhorceError                  # 뿌리: "phorce 에서 난 문제" 전부
+├── PhorceUnavailable        # 연결이 안 됨 (서버 없음/사라짐)
+├── MotionRejected           # 거절됨 — .reason(이름), .code(번호), .detail(할 일)
+│   └── MotionBusy           # 거절 5(바쁨)만 따로 — 기다리면 풀리니까
+└── MotionAborted            # 시작은 했는데 중간에 중단됨</code></pre>
+<pre><code>try:
+    result = robot.play(3)
+except phorce.MotionBusy:
+    time.sleep(1)                 # 바쁨 — 기다렸다 다시 (이 경우만 재시도!)
+except phorce.MotionRejected as e:
+    print(e.detail)               # "영점 버튼을 누르세요" 같은 안내 — 사람이 할 차례
+except phorce.PhorceUnavailable:
+    print("연결 안 됨 — phorce doctor 로 확인하세요")</code></pre>
+
+<h3>PlayHandle — play_async 가 돌려주는 손잡이</h3>
+<table>
+<tr><th>멤버</th><th>뜻</th></tr>
+<tr><td><code>wait(timeout=None) → PlayResult</code></td><td>끝나기를 기다림. timeout 넘으면 <code>TimeoutError</code> — <b>재생은 계속됩니다</b></td></tr>
+<tr><td><code>cancel()</code></td><td>취소 부탁 (공통 규칙 4-5 — E-Stop 아님)</td></tr>
+<tr><td><code>done</code> / <code>last_feedback</code></td><td>끝났는지 / 마지막으로 받은 진행 소식</td></tr>
+</table>
+
+<h3>Status — 상태 한 장</h3>
+<p><code>st = robot.status()</code> 로 받습니다. 제일 유용한 것은
+<code>st.state_name</code> 입니다:</p>
+<table>
+<tr><th><code>state_name</code></th><th>뜻</th></tr>
+<tr><td><code>IDLE</code></td><td>진짜 쉬는 중 — 새 모션을 보내기 좋은 때</td></tr>
+<tr><td><code>EXECUTING</code> 등</td><td>재생 진행 중 (지금 보내면 바쁨 거절)</td></tr>
+<tr><td><code>RECOVERY_REQUIRED</code></td><td>사람 복구 필요 (거절 13 과 같은 상황)</td></tr>
+<tr><td><code>STALE</code></td><td>정보가 낡음 (1.5초 이상) — 판단에 쓰지 마세요</td></tr>
+<tr><td><code>CONTRACT_INACTIVE</code> / <code>UNKNOWN</code></td><td>로봇 창구가 안 열렸거나 문맥 미확보 — 이때 다른 필드로 "쉬는 중"을 추측하지 마세요</td></tr>
+</table>
+
+<h3>진행 소식 Feedback (on_feedback 콜백의 인자)</h3>
+<p><code>current_motion_id</code>(지금 재생 중인 번호, 0=없음)가 핵심입니다.
+<code>pvector_index</code> 는 내부 전송 진행일 뿐이라 <b>"끝났는지" 판정에 쓰면
+안 됩니다</b> — 완료는 반드시 결과(<code>wait()</code>)로 확인하세요.</p>
+
+<h3>상수 · 환경변수</h3>
+<p><code>MIN_MOTION_ID=1</code> · <code>MAX_MOTION_ID=50</code> ·
+<code>NO_MOTION_ID=0</code> · <code>MAX_SEQUENCE_LENGTH=1</code> ·
+<code>STATE_FRESH_LIMIT_MS=1500</code>. 환경변수(<code>PHORCE_ROBOT_NAMESPACE</code>
+등)는 기본값으로 두면 됩니다 — 운영진이 알려 줄 때만 바꾸세요.</p>
+
+<h3>Python 예제 (전부 설치돼 있음)</h3>
+<pre><code>EX="$(ros2 pkg prefix phorce)/share/phorce/examples"
+python3 "$EX/01_first_motion.py" 1</code></pre>
+<div class="warn"><b>예제도 실물 로봇에 연결됩니다</b> — 재생 예제를 실행하면 로봇이
+실제로 움직입니다. 실행 전 주변을 확인하세요.</div>
+<table>
+<tr><th>파일</th><th>보여주는 것</th></tr>
+<tr><td><code>01_first_motion.py</code></td><td>연결 → 재생 → 결과. 최소형</td></tr>
+<tr><td><code>02_read_feedback.py</code></td><td>1kHz 피드백 구독 (QoS 설정법 포함)과 <code>valid</code> 판정</td></tr>
+<tr><td><code>03_feedback_to_motion.py</code></td><td><b>보고(1kHz) 와 판단(2Hz) 의 속도 분리</b> — 여러분 프로젝트의 뼈대로 추천</td></tr>
+<tr><td><code>raw_action.py</code></td><td>SDK 도우미 없이 ROS 2 액션을 직접 부르는 법</td></tr>
+</table>
+
+</section>
+
+<!-- ═══════════════════════ C++ ═══════════════════════ -->
+<section class="tabpanel" id="tab-cpp">
+
+<h2>C++ — <code>phorce::MotionClient</code></h2>
+
+<h3>프로젝트에 연결하기</h3>
+<pre><code># package.xml 에 한 줄
+&lt;depend&gt;phorce_cpp&lt;/depend&gt;
+
+# CMakeLists.txt 에 두 줄
+find_package(phorce_cpp REQUIRED)
+target_link_libraries(my_node phorce_cpp::motion_client)
+
+// 코드에서
+#include "phorce_cpp/motion_client.hpp"
+// 패키지 이름은 phorce_cpp 지만, 클래스는 phorce:: 네임스페이스에 있습니다</code></pre>
+
+<div class="warn"><b>제일 중요한 규칙: 이 클라이언트는 스스로 돌지 않습니다.</b>
+<code>attach()</code> 는 여러분 노드에 얹힐 뿐이라서, 여러분이
+<code>rclcpp::spin(node)</code>(또는 executor)을 돌려야 콜백과 결과가 진행됩니다.
+"아무 일도 안 일어나요"의 원인 1위가 spin 누락입니다.</div>
+
+<h3>MotionClient</h3>
+<pre><code>auto client = phorce::MotionClient::attach(node);   // 실물 로봇 (기본 대상)
+
+auto op = client-&gt;play_async(3);          // 논블로킹 — 바로 돌아옴
+// ... spin 이 돌고 있는 동안 ...
+auto fut = op-&gt;result();                  // shared_future&lt;PlayResult&gt;
+if (fut.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+    auto r = fut.get();
+    if (r.ok()) { /* 성공 */ }
+}</code></pre>
+<table>
+<tr><th>멤버</th><th>뜻</th></tr>
+<tr><td><code>attach(node, Target = Target::robot())</code></td><td>클라이언트 생성 (정적 함수)</td></tr>
+<tr><td><code>play_async(번호, 콜백 = {})</code></td><td>재생 시작. 잘못된 번호는 서버에 보내지도 않고 즉시 거절로 완결</td></tr>
+<tr><td><code>motions_async()</code></td><td>모션 목록을 future 로</td></tr>
+<tr><td><code>latest_status()</code> / <code>set_status_callback(cb)</code></td><td>최신 상태 / 상태 콜백</td></tr>
+<tr><td><code>action_ready()</code> / <code>wait_for_action_server()</code></td><td>서버 준비 확인 / 대기</td></tr>
+</table>
+
+<h3>PlayOperation · PlayResult</h3>
+<table>
+<tr><th>멤버</th><th>뜻</th></tr>
+<tr><td><code>op-&gt;result()</code></td><td>결과 future. <b>콜백 안에서 <code>.get()</code> 으로 기다리면 멈춥니다(데드락)</b> — <code>wait_for(0ms)</code> 로 "됐나?"만 물어보세요</td></tr>
+<tr><td><code>op-&gt;cancel()</code> / <code>op-&gt;done()</code></td><td>취소 부탁 (E-Stop 아님) / 끝났는지</td></tr>
+<tr><td><code>r.ok()</code></td><td>성공 판정 (C++ 은 <b>메서드</b> — Python 과 달리 괄호 있음)</td></tr>
+<tr><td><code>r.busy()</code></td><td>거절 5(바쁨)<b>에서만</b> true — 이때만 재시도</td></tr>
+<tr><td><code>r.needs_operator()</code></td><td>거절 12·13 — 기다려도 안 풀리니 <code>detail</code> 을 사용자에게 보여 주세요</td></tr>
+<tr><td><code>r.status_name()</code> / <code>r.reject_name()</code></td><td>사람이 읽는 이름</td></tr>
+</table>
+<p>상수: <code>kMinMotionId=1</code> · <code>kMaxMotionId=50</code> ·
+<code>kNoMotionId=0</code> · <code>kMaxSequenceLength=1</code> ·
+<code>kStateFreshLimitMs=1500</code>. <code>Status</code> 구조체는 Python 탭의
+Status 와 같은 내용이고 판정 규칙(<code>is_fresh()</code>·<code>state_name()</code>)도
+같습니다.</p>
+
+<h3>C++ 예제 (전부 설치돼 있음)</h3>
+<table>
+<tr><th>실행 명령</th><th>보여주는 것</th></tr>
+<tr><td><code>ros2 run phorce_cpp phorce_example_01_first_motion 1</code></td><td>연결 → 재생 → 결과</td></tr>
+<tr><td><code>ros2 run phorce_cpp phorce_example_02_read_feedback</code></td><td>1kHz 피드백 구독</td></tr>
+<tr><td><code>ros2 run phorce_cpp phorce_example_03_feedback_to_motion</code></td><td>타이머로 판단 주기 분리 — 콜백에서 안 기다리는 법</td></tr>
+<tr><td><code>ros2 run phorce_cpp phorce_cpp_async_example 3</code></td><td>단일 executor 논블로킹 전체 흐름</td></tr>
+<tr><td><code>ros2 run phorce_cpp phorce_raw_action_cpp 1</code></td><td>SDK 도우미 없이 액션 직접 호출</td></tr>
+</table>
+
+</section>
+
+<!-- ═══════════════════════ ROS 2 ═══════════════════════ -->
+<section class="tabpanel" id="tab-ros">
+
+<h2>ROS 2 직접 — 통신 규약을 그대로 쓰기</h2>
+
+<p>SDK 도우미(Python/C++)는 결국 아래 규약을 대신 불러 주는 것뿐입니다.
+다른 언어를 쓰거나 기존 ROS 2 노드에 얹고 싶다면 직접 불러도 됩니다.</p>
+
+<h3>이름 지도</h3>
+<table>
+<tr><th>이름</th><th>종류</th><th>타입 (agx_msgs)</th><th>비고</th></tr>
+<tr><td><code>/motion_action_server/play_motion_sequence</code></td><td>액션</td><td><code>action/PlayMotionSequence</code></td><td><b>로봇을 움직이는 유일한 창구</b></td></tr>
+<tr><td><code>/phorce/feedback</code></td><td>토픽</td><td><code>msg/PhorceFeedback</code></td><td><b>1kHz</b> 관절 관측. 구독 QoS 를 반드시 SensorDataQoS(best-effort)로 — 기본값(reliable)으로 구독하면 <b>에러 없이 0건</b> 옵니다</td></tr>
+<tr><td><code>/phorce/status</code></td><td>토픽</td><td><code>msg/PhorceStatus</code></td><td>10Hz 통신 요약 (수신율·모드 등)</td></tr>
+<tr><td><code>/phorce/motion_window</code></td><td>토픽</td><td><code>msg/MotionWindowStatus</code></td><td>2Hz, 마지막 값 유지(latched)</td></tr>
+<tr><td><code>/motion_action_server/motion_slot_state</code></td><td>토픽</td><td><code>msg/MotionSlotState</code></td><td>모션 상태 (읽기 전용 — 이걸 폴링해서 발사 타이밍을 재는 루프는 금지)</td></tr>
+<tr><td><code>/motion_action_server/list_motion_slots</code></td><td>서비스</td><td><code>srv/ListMotionSlots</code></td><td>모션 목록</td></tr>
+</table>
+
+<pre><code># 터미널에서 액션 직접 호출
+ros2 action send_goal /motion_action_server/play_motion_sequence \
+  agx_msgs/action/PlayMotionSequence "{motion_ids: [1], stop_on_error: true}" -f</code></pre>
+
+<h3>PlayMotionSequence 액션의 세 부분</h3>
+<p><b>Goal (보내는 것)</b>: <code>motion_ids</code> — 배열이지만 <b>원소는 정확히
+1개</b>만 허용됩니다. <code>stop_on_error</code> 는 형식상 있는 필드라 신경 쓰지
+않아도 됩니다.</p>
+<p><b>Feedback (진행 소식)</b>: <code>current_motion_id</code>(0=재생 없음),
+<code>pvector_index</code>(내부 전송 진행 — 완료 판정 금지, 255=해당 없음) 등.</p>
+<p><b>Result (결과)</b>: <code>status</code>(0 SUCCEEDED / 1 REJECTED / 2 ABORTED /
+3 CANCELED), <code>completed_count</code>, <code>reject_reason</code>(아래 표),
+<code>detail</code>(한국어 안내), 그리고 문맥 필드들.</p>
+
+<h3>거절 코드 전체</h3>
+<table>
+<tr><th>코드</th><th>이름</th><th>뜻</th></tr>
+<tr><td>0</td><td><code>NONE</code></td><td>거절 아님</td></tr>
+<tr><td>1</td><td><code>EMPTY_SEQUENCE</code></td><td>번호를 안 넣음</td></tr>
+<tr><td>2</td><td><code>SEQUENCE_TOO_LONG</code></td><td>번호를 2개 이상 넣음</td></tr>
+<tr><td>3</td><td><code>MOTION_ID_RANGE</code></td><td>1~50 밖의 번호 (0 포함)</td></tr>
+<tr><td>4</td><td><code>MOTION_ID_NOT_LOADED</code></td><td>목록에 없는 번호</td></tr>
+<tr><td><b>5</b></td><td><code>QUEUE_FULL</code></td><td><b>다른 모션 재생 중 — 기다리면 풀림</b></td></tr>
+<tr><td>6</td><td><code>MASTER_NOT_OP</code></td><td>EtherCAT 버스가 운전(OP) 상태 아님</td></tr>
+<tr><td>7</td><td><code>COMMAND_SOURCE</code></td><td>명령 창구가 다른 주인에게 있음</td></tr>
+<tr><td>8</td><td><code>STATE_STALE</code></td><td>로봇 상태 정보가 너무 낡음</td></tr>
+<tr><td>9</td><td><code>SUPERVISOR_VETO</code></td><td>안전 감시자가 거부</td></tr>
+<tr><td>10</td><td><code>CONTRACT_NOT_ACTIVE</code></td><td>모션 창구가 안 열림</td></tr>
+<tr><td>11</td><td><code>AXIS_NOT_OPERATIONAL</code></td><td>관절이 운전 상태 아님</td></tr>
+<tr><td><b>12</b></td><td><code>NOT_READY_FOR_MOTION</code></td><td><b>영점 버튼 필요</b> (공통 규칙 4-3)</td></tr>
+<tr><td><b>13</b></td><td><code>RECOVERY_REQUIRED</code></td><td><b>사람 복구 필요</b> (공통 규칙 4-3)</td></tr>
+</table>
+<p style="font-size:9pt;color:#666">정식 상수 이름에는 <code>REJECT_</code> 접두사가
+붙습니다 (예: <code>REJECT_QUEUE_FULL</code>) — wire 메시지와 Python <code>.reason</code>
+문자열이 그 형태입니다. 코드 비교는 숫자가 안전합니다.</p>
+
+<h3>문맥 필드 — 읽기만 하세요</h3>
+<p>결과와 상태에 함께 실리는 <code>boot_id</code>(로봇의 부팅 세대 번호)와
+<code>request_id</code>(요청마다 발급되는 번호) 쌍이 "어느 요청 이야기인가"의
+신분증입니다. <b>여러분이 만들지 않습니다</b> — 시스템이 발급하고, 여러분은 결과
+대조에 읽기만 합니다. <code>physical_idle</code> 은 "로봇이 물리적으로 멈춰 있다"는
+로봇의 직접 확인입니다 — 다른 필드에서 멈춤을 추측하지 마세요. 이 대조를
+직접 하기 싫으면 Python/C++ 의 <code>ok</code> 를 쓰면 됩니다(그 일을 해 줍니다).</p>
+
+</section>
+
+<!-- ═══════════════════════ GUI ═══════════════════════ -->
+<section class="tabpanel" id="tab-gui">
+
+<h2>GUI — 화면 프로그램 <code>phorce-console</code></h2>
+
+<p>코드 없이 로봇을 보고 움직여 볼 수 있는 화면입니다. 터미널에
+<code>phorce-console</code> 이라고 치면 켜집니다.</p>
+
+<h3>화면 구성</h3>
+<table>
+<tr><th>부분</th><th>무엇</th></tr>
+<tr><td>상단 배지</td><td>연결 상태 · 수신 속도(Hz) · 활성 관절 수 · E-Stop 여부가 한눈에</td></tr>
+<tr><td>그래프</td><td>관절의 위치·속도·전류·온도 실시간 곡선. 일시정지와 확대 가능</td></tr>
+<tr><td>오른쪽 관절 목록</td><td>12개 관절 줄 — 줄을 클릭하면 그 관절이 그래프에 추가됩니다</td></tr>
+<tr><td>모션 패널</td><td>모션 번호를 골라 <b>버튼으로 재생</b>. 켜자마자 <b>대상 칸을
+"● 실물 로봇"으로 바꾸세요</b> — 테두리가 빨개지고 버튼이 [실물 전송]으로 바뀝니다.
+(기본값 "시뮬레이터"는 이 행사에서 쓰지 않습니다 — 그대로 두면 로봇이 안 움직입니다.)</td></tr>
+</table>
+
+<h3>실행 옵션</h3>
+<table>
+<tr><th>옵션</th><th>뜻</th></tr>
+<tr><td><code>--no-auto-connect</code></td><td>관측만 하고 재생 기능은 끔 (그래프 전용으로 쓸 때)</td></tr>
+</table>
+
+<div class="tip">화면의 재생 버튼에는 보호 장치가 있습니다 — 연타해도 0.5초에 한
+번만 나가고, 재생 중에는 새 요청을 만들지 않습니다.</div>
+
+</section>
+
+<!-- ═══════════════════ 공통 (탭 밖) ═══════════════════ -->
+
+<h2 id="data">6. 피드백 데이터 사전 — 1kHz 로 오는 것의 전부</h2>
+
+<p><code>/phorce/feedback</code> 한 건 = 그 순간의 로봇 스냅샷 한 장.
+공통 정보 + 관절 12칸(<code>axis[12]</code> — 현재 기체는 6칸 사용)으로 구성됩니다.</p>
+
+<h3>공통 정보</h3>
+<table>
+<tr><th>필드</th><th>뜻</th></tr>
+<tr><td><code>stamp</code> / <code>recv_monotonic_ns</code></td><td>발행 시각 / <b>취득 시각</b> — 그래프의 x축이나 시간 분석은 꼭 <code>recv_monotonic_ns</code> 로</td></tr>
+<tr><td><code>wkc</code></td><td>통신 정상 확인 숫자 (정상 3)</td></tr>
+<tr><td><code>tx_cycle_seq</code></td><td>로봇 쪽 사이클 번호 — 건너뛰면 유실이 있었다는 뜻</td></tr>
+<tr><td><code>am_rx_seq_echo</code> / <code>relay_seq_echo</code></td><td>로봇이 마지막으로 받아 준 명령 번호의 메아리</td></tr>
+<tr><td><code>axis_valid_mask</code> 등 4개 마스크</td><td>12관절의 valid/stale/운전중/결함을 비트로 요약 (bit N = 관절 N)</td></tr>
+<tr><td><code>am_rx_age_ms</code></td><td>로봇이 명령을 못 받은 지 얼마나 됐나 (65535 = 오래됨 고정)</td></tr>
+<tr><td><code>status_flags</code></td><td>로봇 안전 상태 비트</td></tr>
+</table>
+
+<h3>관절 한 칸 (<code>axis[i]</code>)</h3>
+<table>
+<tr><th>필드</th><th>단위</th><th>뜻</th></tr>
+<tr><td><code>position_rad</code></td><td>rad</td><td>관절 각도</td></tr>
+<tr><td><code>velocity_rad_s</code></td><td>rad/s</td><td>관절 속도</td></tr>
+<tr><td><code>current_a</code></td><td>A</td><td>모터 전류 — 힘(토크)에 비례합니다</td></tr>
+<tr><td><code>dob_a</code></td><td>A</td><td>바깥에서 미는 힘의 추정값 (외란 관측기)</td></tr>
+<tr><td><code>bus_v</code> / <code>temp_c</code></td><td>V / ℃</td><td>전압 / 온도</td></tr>
+<tr><td><code>pos_ref_echo_rad</code></td><td>rad</td><td>관절이 실제로 받은 목표 각도의 메아리</td></tr>
+<tr><td><code>kp_echo</code> / <code>kd_echo</code></td><td>A/rad · A/(rad/s)</td><td>적용 중인 제어 게인의 메아리</td></tr>
+<tr><td><code>abs_valid</code></td><td>0/1</td><td>절대 인코더(전원 꺼도 각도를 기억하는 센서) 정상 여부</td></tr>
+<tr><td><code>loop_cnt</code> / <code>axis_seq</code> / <code>age_ms</code></td><td>—</td><td>관절 내부 카운터 / 새 데이터마다 +1 / 데이터 나이(255=한참 됨·미수신)</td></tr>
+<tr><td><code>valid</code> · <code>stale</code> · <code>oper</code> · <code>fault</code></td><td>참/거짓</td><td>아래 표</td></tr>
+</table>
+
+<h3>믿어도 되나? — 진리표</h3>
+<table>
+<tr><th>상황</th><th><code>valid</code></th><th><code>stale</code></th><th>해석</th></tr>
+<tr><td>신선한 데이터 (0~4ms)</td><td>참</td><td>거짓</td><td>믿고 쓰세요</td></tr>
+<tr><td>낡은 데이터 (5ms 이상)</td><td>거짓</td><td>참</td><td>판단에 쓰지 마세요</td></tr>
+<tr><td>데이터가 아예 없음 (미장착 관절 등)</td><td>거짓</td><td>거짓</td><td><b>"stale 아니니까 괜찮네"가 틀리는 이유가 이 줄입니다</b> — 증거는 <code>valid</code> 하나뿐</td></tr>
+</table>
+
+<h2 id="traps">7. 함정 모음 — 전원이 한 번씩 밟습니다</h2>
+
+<table>
+<tr><th>함정</th><th>증상</th><th>바른 길</th></tr>
+<tr><td>피드백 구독 QoS 기본값</td><td>에러도 없이 <b>0건 수신</b></td><td>SensorDataQoS(best-effort)로 구독 — 예제 02 참고</td></tr>
+<tr><td>1kHz 콜백 안에서 <code>play()</code></td><td>거절 5 폭탄</td><td>콜백은 <b>저장만</b>, 판단·발사는 느린 주기(예: 2Hz)에서 — 예제 03 참고</td></tr>
+<tr><td><code>result.ok()</code> (Python)</td><td>에러 또는 오판</td><td>Python 은 괄호 없이 <code>result.ok</code>, C++ 만 <code>ok()</code></td></tr>
+<tr><td>거절 12·13 을 "바쁨" 취급</td><td>무한 재시도</td><td>재시도는 5 만. 12·13 은 사람이 할 차례</td></tr>
+<tr><td>C++ 콜백 안에서 <code>future.get()</code></td><td>프로그램 멈춤</td><td><code>wait_for(0ms)</code> 로 물어만 보기</td></tr>
+<tr><td><code>pvector_index</code> 로 완료 판정</td><td>영영 안 끝남</td><td>완료는 결과(result)로만</td></tr>
+<tr><td><code>!stale</code> 을 신선 증거로</td><td>빈 관절을 신선으로 오판</td><td>증거는 <code>valid</code> 하나뿐 (6장 진리표)</td></tr>
+<tr><td>cancel 직후 바로 다음 play</td><td>거절 5</td><td>cancel 은 즉시 정지가 아님 — <b>결과를 받고</b> 다음 요청</td></tr>
+</table>
+
+<h2 id="notyours">8. 보여도 만지면 안 되는 것</h2>
+
+<p>토픽 목록을 뒤지다 보면 아래가 보일 수 있습니다. 시스템 내부용이니 직접
+부르지 마세요 — 로봇을 움직이는 공식 창구는 <code>PlayMotionSequence</code> 액션
+하나입니다.</p>
+<table>
+<tr><th>이름</th><th>정체</th></tr>
+<tr><td><code>SubmitMotionRequest</code> 서비스</td><td>시스템 내부의 전달 통로</td></tr>
+<tr><td><code>/phorce/aperiodic</code> 토픽</td><td>정비용 진단 이벤트</td></tr>
+<tr><td><code>PhorceCommand</code> 메시지</td><td>내부 명령 형식 — 해커톤 범위 밖</td></tr>
+<tr><td><code>phorce_monitor</code> 실행 설정</td><td>로봇 통신 담당 프로그램의 설정 (운영자 영역)</td></tr>
+</table>
+
+<p class="foot">phorce 해커톤 참가자 문서 ④ API 레퍼런스 —
+함께 보기: ① 퀵 가이드 · ② 튜토리얼 · ③ 매뉴얼 · ⑤ 시스템 안내</p>
+
+<script>
+(function () {
+  var tabs = [
+    ["all", "전체 보기"], ["cli", "CLI"], ["py", "Python"],
+    ["cpp", "C++"], ["ros", "ROS 2"], ["gui", "GUI(화면)"]
+  ];
+  var slot = document.getElementById("tabbar-slot");
+  if (!slot) return;
+  slot.className = "filled";
+  var panels = document.querySelectorAll(".tabpanel");
+  function show(key) {
+    panels.forEach(function (p) {
+      p.style.display = (key === "all" || p.id === "tab-" + key) ? "" : "none";
+    });
+    slot.querySelectorAll(".tabbtn").forEach(function (b) {
+      b.classList.toggle("on", b.dataset.key === key);
+    });
+    // 탭 전환 시 화면을 움직이지 않는다 — 점프가 "느리고 덜컥거리는" 느낌을 준다
+  }
+  tabs.forEach(function (t) {
+    var b = document.createElement("button");
+    b.className = "tabbtn"; b.dataset.key = t[0]; b.textContent = t[1];
+    b.addEventListener("click", function () { show(t[0]); });
+    slot.appendChild(b);
+  });
+  var hash = (location.hash || "").replace("#", "");
+  var keys = tabs.map(function (t) { return t[0]; });
+  show(keys.indexOf(hash) >= 0 ? hash : "all");
+})();
+</script>
+
+</body>
+</html>
