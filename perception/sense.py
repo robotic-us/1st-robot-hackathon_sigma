@@ -46,9 +46,9 @@ if __package__ in (None, ""):   # direct run: put the repo root on sys.path
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from perception.listen import Microphone, Sound
-from sigma import config as face_config
-from sigma.draw import draw_result
-from sigma.pipeline import SigmaPipeline
+from perception.face import config as face_config
+from perception.face.draw import draw_result
+from perception.face.pipeline import SigmaPipeline
 
 LOGGER = logging.getLogger("sense")
 
@@ -164,7 +164,7 @@ class Sense:
 # Overlay
 # --------------------------------------------------------------------------- #
 def draw(frame: np.ndarray, reading: Reading, sense: Sense) -> np.ndarray:
-    """Boxes and labels from sigma.draw, plus the fused distress bar."""
+    """Boxes and labels from perception.face.draw, plus the fused distress bar."""
     canvas = frame.copy()
     for r in sense.results:
         draw_result(canvas, r)

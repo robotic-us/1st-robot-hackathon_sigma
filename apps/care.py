@@ -48,8 +48,8 @@ from core.slot_table import load_slot_table
 from perception.listen import Microphone
 from core.phorce_iface import PlayOutcome, make_robot
 from perception.sense import Reading, Sense, draw
-from sigma import config as face_config
-from sigma.pipeline import SigmaPipeline
+from perception.face import config as face_config
+from perception.face.pipeline import SigmaPipeline
 
 LOGGER = logging.getLogger("care")
 

@@ -27,7 +27,7 @@ The backing model (FER+) emits 8 classes. SIGMA sums their probabilities into 5:
 
 Fear folds into SURPRISE because both are high-arousal startle responses that FER+
 confuses heavily; disgust and contempt fold into ANGRY as negative-approach affects.
-Edit `FER_TO_EMOTION` in `sigma/config.py` to change the grouping — the fold matrix
+Edit `FER_TO_EMOTION` in `perception/face/config.py` to change the grouping — the fold matrix
 is rebuilt from that dict, so nothing else needs touching.
 
 ## Setup
@@ -35,24 +35,24 @@ is rebuilt from that dict, so nothing else needs touching.
 Models are already downloaded in `models/`. To re-fetch:
 
 ```bash
-python3 fetch_models.py
+python3 tools/fetch_models.py
 ```
 
 ## Use
 
 ```bash
-python3 enroll.py --name yourname     # capture ~12 embeddings from the webcam
-python3 run.py                        # live window
+python3 tools/enroll.py --name yourname     # capture ~12 embeddings from the webcam
+python3 apps/run.py                        # live window
 ```
 
 | | |
 |---|---|
-| `python3 run.py --headless` | terminal only, no X server needed |
-| `python3 run.py --source clip.mp4 --save out.mp4` | run on a file, write annotated video |
-| `python3 run.py --no-recognize` | emotion only, skip identity |
-| `python3 enroll.py --list` | show enrolled people |
-| `python3 enroll.py --delete NAME` | remove someone |
-| `python3 enroll.py --name bob --images ./photos` | enroll from a folder instead of the webcam |
+| `python3 apps/run.py --headless` | terminal only, no X server needed |
+| `python3 apps/run.py --source clip.mp4 --save out.mp4` | run on a file, write annotated video |
+| `python3 apps/run.py --no-recognize` | emotion only, skip identity |
+| `python3 tools/enroll.py --list` | show enrolled people |
+| `python3 tools/enroll.py --delete NAME` | remove someone |
+| `python3 tools/enroll.py --name bob --images ./photos` | enroll from a folder instead of the webcam |
 
 Keys in the live window: `e` enroll · `r` reset tracks · `b` toggle bars · `space` pause · `q` quit
 
@@ -94,13 +94,13 @@ lighting you'll actually run in matters much more than enrolling many samples.
 ## Layout
 
 ```
-sigma/config.py      thresholds, class mapping, paths — most tuning lives here
-sigma/detect.py      YuNet wrapper, bbox/IoU helpers
-sigma/emotion.py     eye-line alignment + FER+ 8→5 fold
-sigma/recognize.py   SFace embeddings + the enrolled-face database
-sigma/track.py       IoU tracker, identity voting, emotion smoothing
-sigma/pipeline.py    per-frame orchestration
-sigma/draw.py        overlay rendering
+perception/face/config.py      thresholds, class mapping, paths — most tuning lives here
+perception/face/detect.py      YuNet wrapper, bbox/IoU helpers
+perception/face/emotion.py     eye-line alignment + FER+ 8→5 fold
+perception/face/recognize.py   SFace embeddings + the enrolled-face database
+perception/face/track.py       IoU tracker, identity voting, emotion smoothing
+perception/face/pipeline.py    per-frame orchestration
+perception/face/draw.py        overlay rendering
 faces/faces.npz      enrolled embeddings (created on first enrol)
 ```
 

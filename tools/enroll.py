@@ -17,9 +17,9 @@ if __package__ in (None, ""):   # direct run: put the repo root on sys.path
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sigma import config, draw
-from sigma.detect import FaceDetector
-from sigma.recognize import FaceDB, FaceRecognizer
+from perception.face import config, draw
+from perception.face.detect import FaceDetector
+from perception.face.recognize import FaceDB, FaceRecognizer
 
 
 def open_camera(index):

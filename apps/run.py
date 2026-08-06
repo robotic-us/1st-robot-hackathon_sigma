@@ -19,9 +19,9 @@ if __package__ in (None, ""):   # direct run: put the repo root on sys.path
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sigma import config, draw
-from sigma.pipeline import SigmaPipeline
-from sigma.recognize import FaceDB
+from perception.face import config, draw
+from perception.face.pipeline import SigmaPipeline
+from perception.face.recognize import FaceDB
 
 
 def open_source(source, camera):

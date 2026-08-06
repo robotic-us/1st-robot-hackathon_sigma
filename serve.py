@@ -13,11 +13,19 @@ One stdlib HTTP server:
     /auto        the report's state machine on/off (?set=on|off)
 
 Motion behaviour follows docs/infant_robotic_cradle_evidence_report_ko.pdf
-(see cradle.py): the default is *not moving*.  The tag is a **state card**
-standing in for the infant sensors: WHICH tag you show is the state -- tag_0
-calm, tag_1 fussing, tag_2 crying (print them with ``python3 perception/tag.py --make``)
--- losing the tag is a safety-gate failure, and how the tag moves means
-nothing.  The CradleMachine runs the report's ladder over that state: gate
+(see core/cradle.py): the default is *not moving*.  Two sensing modes feed
+the CradleMachine's 0..1 distress input:
+
+* **State cards** (default, for the sim): WHICH tag is shown is the state --
+  tag_0 calm, tag_1 fussing, tag_2 crying (print them with
+  ``python3 perception/tag.py --make``).  Losing the tag is a safety-gate
+  failure, and how the tag moves means nothing.
+* **Real sensing** (``--sense``, for real testing): the face pipeline (YuNet
+  + FER+, perception/face/) fused with the microphone's cry band drives
+  distress; a lost face trips the same safety gate.  Needs the ONNX models
+  (``python3 tools/fetch_models.py``).
+
+Either way the CradleMachine runs the report's ladder over that state: gate
 first, sleep taper, quiet hold, 30 s sway trials with improvement checks and
 caregiver alerts.  The engine's plate offset drives the same joint angles the
 canvas and RViz already animate; serve.py itself stays 2D and leaves the 3D
@@ -30,6 +38,7 @@ stdlib server is enough.  Open it from any laptop on the same network.
 Run::
 
     python3 serve.py               # webcam + tag, http://<jetson-ip>:8080
+    python3 serve.py --sense       # webcam face+emotion + mic instead of tags
     python3 serve.py --fake        # no camera: a synthetic tag drives the loop
     python3 serve.py --research    # unlock the R-grade modes (sim only!)
     python3 tests.py               # all suites, incl. these endpoints
@@ -115,8 +124,13 @@ def slot_catalog(shared: Shared) -> list[dict]:
 TAG_LEVEL = {0: 0.0, 1: 0.30, 2: 0.60}   # calm / fussing / crying
 
 
-def tag_level(reading) -> float:
-    return TAG_LEVEL.get(reading.tag_id, 0.0) if reading.present else 0.0
+def infant_level(reading) -> float:
+    """The machine's 0..1 distress input, from either sensing mode."""
+    if not reading.present:
+        return 0.0
+    if hasattr(reading, "distress"):          # perception.sense.Reading
+        return float(reading.distress)
+    return TAG_LEVEL.get(reading.tag_id, 0.0)  # tag state card
 
 
 # The fake camera acts out a nursery shift with the cards: calm, a fuss the
@@ -140,9 +154,24 @@ def fake_frame(t: float):
                         cv2.COLOR_GRAY2BGR)
 
 
-def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros) -> None:
+def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
+                sense: bool = False, audio_device: str = "plughw:WEBCAM,0",
+                no_sound: bool = False) -> None:
     brain = shared.brain
-    tracker = TagTracker()
+    sensor = mic = None
+    if sense:
+        # Real sensing: the models only load in this mode.
+        from perception.face.pipeline import SigmaPipeline
+        from perception.listen import Microphone
+        from perception.sense import Sense
+        if not no_sound:
+            mic = Microphone(audio_device)
+            mic.start()
+        sensor = Sense(SigmaPipeline(), mic)
+        shared.log("real sensing: face+emotion"
+                   + ("" if no_sound else " + microphone"))
+    else:
+        tracker = TagTracker()
     cap = None
     if not fake:
         cap = cv2.VideoCapture(camera_index)
@@ -163,7 +192,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros) -> None:
                 shared.log("camera stream ended")
                 break
 
-        reading = tracker.update(frame, now)
+        reading = (sensor.update(frame, now) if sensor
+                   else tracker.update(frame, now))
         brain.tick(now)
 
         # Manual requests from the browser win over any automatic decision.
@@ -187,11 +217,12 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros) -> None:
                 shared.log(f"slot {slot} chosen (cost {top.total:.2f}, "
                            f"dob {brain.dob()[0]:.1f}A)")
 
-        # The evidence-report ladder: the tag's IDENTITY is the infant state
-        # (tag_0 calm, tag_1 fuss, tag_2 cry), a lost tag is a gate failure,
-        # and tag motion is deliberately ignored.  The engine's plate offset
-        # becomes the arm angle the canvas and RViz animate.
-        shared.machine.tick(now, reading.present, tag_level(reading), brain.jam)
+        # The evidence-report ladder.  State cards: the tag's IDENTITY is the
+        # infant state (tag_0 calm, tag_1 fuss, tag_2 cry) and its motion is
+        # deliberately ignored.  --sense: face+cry distress is the state.  In
+        # both modes a lost face/tag is a gate failure, and the engine's
+        # plate offset becomes the arm angle the canvas and RViz animate.
+        shared.machine.tick(now, reading.present, infant_level(reading), brain.jam)
         for line in shared.machine.events:
             shared.log(line)
         shared.machine.events.clear()
@@ -210,7 +241,11 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros) -> None:
         if ros is not None:
             ros.send_joints(brain.pose)
 
-        canvas = draw_overlay(frame, reading, tracker)
+        if sensor:
+            from perception.sense import draw as sense_draw
+            canvas = sense_draw(frame, reading, sensor)
+        else:
+            canvas = draw_overlay(frame, reading, tracker)
         ok, encoded = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, 70])
         state = build_state(shared, brain, reading, now)
         with shared.lock:
@@ -220,6 +255,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros) -> None:
 
     if cap is not None:
         cap.release()
+    if mic is not None:
+        mic.close()
 
 
 def force_play(brain: Brain, chunks, slot_id: int, now: float) -> Optional[int]:
@@ -272,9 +309,13 @@ def build_state(shared: Shared, brain: Brain, reading, now: float) -> dict:
     return {
         "t": round(now, 3),
         "pose": [round(v, 4) for v in brain.pose],
-        "tag": {"present": reading.present, "id": reading.tag_id,
-                "level": tag_level(reading), "x": round(reading.x, 3),
-                "motion": round(reading.motion, 3)},
+        "tag": {"present": reading.present,
+                "id": getattr(reading, "tag_id", -1),
+                "level": round(infant_level(reading), 3),
+                "x": round(reading.x, 3),
+                "motion": round(getattr(reading, "motion", 0.0), 3),
+                "emotion": getattr(reading, "emotion", ""),
+                "name": getattr(reading, "name", "")},
         "jam": brain.jam,
         "dob": brain.dob()[0],
         "playing": playing,
@@ -407,7 +448,9 @@ def lan_ip() -> str:
         return "127.0.0.1"
 
 
-def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: bool):
+def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: bool,
+          sense: bool = False, audio_device: str = "plughw:WEBCAM,0",
+          no_sound: bool = False):
     ros = None
     if use_ros:
         try:
@@ -416,7 +459,9 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
         except Exception as exc:   # ROS absent or misconfigured: not fatal
             shared.log(f"RViz mirroring off ({type(exc).__name__})")
     worker = threading.Thread(
-        target=sensor_loop, args=(shared, camera_index, fake, ros), daemon=True)
+        target=sensor_loop,
+        args=(shared, camera_index, fake, ros, sense, audio_device, no_sound),
+        daemon=True)
     worker.start()
     Handler.shared = shared
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
@@ -428,6 +473,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--fake", action="store_true",
                         help="no camera: a synthetic tag drives the loop")
+    parser.add_argument("--sense", action="store_true",
+                        help="real sensing: face+emotion (+mic) drives the "
+                             "machine instead of tag state cards")
+    parser.add_argument("--audio-device", default="plughw:WEBCAM,0",
+                        help="ALSA capture device for --sense")
+    parser.add_argument("--no-sound", action="store_true",
+                        help="with --sense: face only, no microphone")
     parser.add_argument("--no-ros", action="store_true",
                         help="do not mirror joints to RViz")
     parser.add_argument("--research", action="store_true",
@@ -436,15 +488,23 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="old autopilot: tag shake picks a DREAM slot "
                              "instead of the report's cradle machine")
     args = parser.parse_args(argv)
+    if args.sense and args.fake:
+        parser.error("--sense needs a real camera; it cannot run with --fake")
+    if args.sense and args.dream_auto:
+        parser.error("--dream-auto ranks tag shake; it cannot run with --sense")
 
     chunks = load_chunks()
     table = load_slot_table("slots.json")
     shared = Shared(Brain(chunks, table), chunks, table,
                     allow_research=args.research, dream_auto=args.dream_auto)
     server, worker, ros = start(shared, args.port, args.camera_index,
-                                args.fake, use_ros=not args.no_ros)
-    print(f"SIGMA dashboard:  http://{lan_ip()}:{args.port}   "
-          f"({'synthetic tag' if args.fake else f'camera {args.camera_index}'})")
+                                args.fake, use_ros=not args.no_ros,
+                                sense=args.sense, audio_device=args.audio_device,
+                                no_sound=args.no_sound)
+    source = ("synthetic tag" if args.fake
+              else "face+emotion sensing" if args.sense
+              else f"camera {args.camera_index}")
+    print(f"SIGMA dashboard:  http://{lan_ip()}:{args.port}   ({source})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

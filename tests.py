@@ -72,7 +72,7 @@ def test_sense() -> None:
     """Check the two bits of maths that decide how the robot behaves."""
     import numpy as np
     from perception.sense import DISTRESS_WEIGHT, emotion_distress, fuse
-    from sigma import config as face_config
+    from perception.face import config as face_config
 
     print("emotion -> distress")
     n = len(face_config.EMOTIONS)
@@ -110,6 +110,51 @@ def test_sense() -> None:
     print(f"  face only  0.80 + 0.00 -> {fuse(0.8, 0.0):.2f}")
     print(f"  sound only 0.00 + 0.80 -> {fuse(0.0, 0.8):.2f}")
     print(f"  both       0.50 + 0.50 -> {fuse(0.5, 0.5):.2f}")
+
+
+def test_models() -> None:
+    """The three ONNX models load and infer -- the real-testing stack, headless."""
+    import numpy as np
+    from perception.face import config
+    from perception.face.detect import FaceDetector
+    from perception.face.emotion import EmotionClassifier
+    from perception.face.recognize import FaceRecognizer
+
+    for path in (config.YUNET, config.SFACE, config.FERPLUS):
+        assert path.exists(), \
+            f"{path} missing -- run: python3 tools/fetch_models.py"
+    print("  files        all three ONNX models present  -- ok")
+
+    from perception.face.emotion import _softmax
+
+    detector = FaceDetector((config.FRAME_W, config.FRAME_H))
+    emotion = EmotionClassifier()
+    FaceRecognizer()   # loading IS the test: a bad file throws here
+    print("  load         YuNet + FER+ + SFace load under cv2  -- ok")
+
+    blank = np.full((config.FRAME_H, config.FRAME_W, 3), 110, np.uint8)
+    assert len(detector.detect(blank)) == 0, "a blank frame must contain no faces"
+    rng = np.random.default_rng(0)
+    crop = rng.integers(0, 255, (config.FER_INPUT, config.FER_INPUT), np.uint8)
+    blob = crop.astype(np.float32).reshape(1, 1, config.FER_INPUT, config.FER_INPUT)
+    emotion.net.setInput(blob)
+    probs5 = _softmax(emotion.net.forward().ravel()) @ emotion.fold
+    assert len(probs5) == len(config.EMOTIONS) and abs(float(probs5.sum()) - 1.0) < 1e-4
+    label, conf = EmotionClassifier.label(probs5)
+    assert label in config.EMOTIONS + ["?"] and 0.0 <= conf <= 1.0
+    print(f"  infer        blank frame -> 0 faces; FER+ -> {len(probs5)} probs "
+          f"summing to 1 ({label} {conf:.2f})  -- ok")
+
+    # The whole real-sensing stack, exactly as serve.py --sense drives it.
+    from perception.face.pipeline import SigmaPipeline
+    from perception.sense import Sense
+
+    sense = Sense(SigmaPipeline(), microphone=None)
+    reading = sense.update(blank, ts=0.0)
+    assert not reading.present and reading.distress < 0.05, \
+        f"an empty room must read absent and calm, got {reading}"
+    print(f"  sense        empty frame -> present={reading.present}, "
+          f"distress={reading.distress:.2f}  -- ok")
 
 
 def test_tag() -> None:
@@ -437,6 +482,56 @@ def test_cradle() -> None:
 # --------------------------------------------------------------------------- #
 # apps + server
 # --------------------------------------------------------------------------- #
+def test_m50() -> None:
+    """Compile M01-M50 to pcm slots, then dream every one back and check it."""
+    import contextlib
+    import io
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+    from apps.demo import AXIS0, PIVOT
+    from core.pvector import load_motion_map
+    from tools.make_motions import main as make_motions
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert make_motions(["--library", "--out", tmp]) == 0
+        files = sorted(Path(tmp).glob("motion_*.csv"))
+        assert len(files) == 50, f"expected 50 slot files, got {len(files)}"
+        chunks: dict = {}
+        for f in files:
+            chunks.update(load_motion_map(str(f)))
+    assert sorted(chunks) == list(range(1, 51)), "slot ids must be 1..50"
+    print("  compile      50 files, MS ID 1..50, 4 axes each  -- ok")
+
+    lever = float(PIVOT[2] - AXIS0[2])
+    theta10 = 0.010 / lever          # one-way A=10 mm as arm radians
+
+    m12 = chunks[12]
+    assert m12.name == "ML_SINE_0.5HZ_A10" and len(m12.programs) == 4
+    _, y = m12.dream([0.0] * 4, dt=0.02)
+    peak = float(np.abs(y[:, 0]).max())
+    assert abs(peak - theta10) < 0.05 * theta10, \
+        f"M12 must sway {theta10:.4f} rad, dreams {peak:.4f}"
+    assert np.allclose(y[:, 0], y[:, 1]), "the parallelogram: all axes equal"
+    early = float(np.abs(y[: len(y) // 5, 0]).max())
+    assert early < 0.75 * peak, "the 5 s soft start must show in the dream"
+    _, y16 = chunks[16].dream([0.0] * 4, dt=0.02)
+    assert abs(float(np.abs(y16[:, 0]).max()) - 2 * theta10) < 0.1 * theta10
+    print(f"  M12          peak {peak:.4f} rad (= 10 mm), ramped, M16 doubles it  -- ok")
+
+    hard = 0.030 / lever             # the report's 30 mm hard amplitude cap
+    for slot_id, chunk in chunks.items():
+        _, yy = chunk.dream([0.0] * 4, dt=0.05)
+        assert float(np.abs(yy).max()) <= hard + 1e-6, f"slot {slot_id} over envelope"
+        assert abs(float(yy[-1, 0])) < 1e-3, f"slot {slot_id} must end parked"
+    _, y01 = chunks[1].dream([0.0] * 4, dt=0.05)
+    assert float(np.abs(y01).max()) < 1e-9, "M01 STATIC_SAFE must stay flat"
+    assert chunks[7].duration_s > 120, "M07 must carry its 120 s taper"
+    print("  envelope     every slot under the 30 mm cap, ends at rest  -- ok")
+
+
 def test_demo() -> None:
     """The whole decision/jam/preempt cycle, no hardware anywhere."""
     from apps.demo import PLAY_DT, Brain, load_chunks
@@ -616,10 +711,12 @@ def test_serve() -> None:
 SUITES = {
     "listen": test_listen,
     "sense": test_sense,
+    "models": test_models,
     "tag": test_tag,
     "pvector": test_pvector,
     "dream": test_dream,
     "cradle": test_cradle,
+    "m50": test_m50,
     "demo": test_demo,
     "serve": test_serve,
 }

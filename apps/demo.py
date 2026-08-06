@@ -53,9 +53,9 @@ from core.slot_table import AMPLITUDE_VALUE, load_slot_table
 from perception.tag import TagReading, TagTracker, draw_overlay
 
 # --- the cradle's geometry, from make_urdf's output (metres) ---------------- #
-AXIS0 = np.array([0.060, 0.037, 0.050])     # axis_0 joint centre
-PIVOT = np.array([0.0536, 0.008, 0.3308])   # platform bearing at rest
-PLATE = np.array([0.141, 0.092, 0.392])     # plate centre at rest
+AXIS0 = np.array([0.0600, 0.1070, 0.0560])  # axis_0 joint centre
+PIVOT = np.array([0.0355, 0.0748, 0.2829])  # platform bearing (upper_0 lap)
+PLATE = np.array([0.1292, 0.1610, 0.3123])  # platform centre at rest
 
 # --- behaviour -------------------------------------------------------------- #
 CALM_FLOOR = 0.12      # shake below this: nobody needs soothing

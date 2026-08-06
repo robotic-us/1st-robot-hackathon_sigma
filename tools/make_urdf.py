@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""assembly.stl -> per-part meshes + a URDF we can show in RViz.
+"""One assembly STL -> per-part meshes + a URDF we can show in RViz.
 
 Fusion exported the whole robot as one STL: 188k triangles, no joints, no part
 names, no kinematics.  A URDF needs the opposite -- separate meshes per link and
@@ -19,27 +19,18 @@ What it can work out on its own:
   bearings; they get merged into whichever large body they sit nearest so they
   do not become links of their own.
 
-What geometry *cannot* tell us, and what you must confirm:
+What geometry *cannot* tell us on its own is which touching part moves the
+other, so the roles are classified from the contact graph plus two anchors:
+the base sits on the ground, and the platform is the one large body the arm
+tops all meet.  Each arm is then actuator -> lower link -> upper link, paired
+by contact and assigned to the actuator column it stands on.
 
-* **The parent/child chain.**  Two touching parts do not say which one moves
-  the other.  PARENT below encodes it, derived from the contact graph (parts
-  touching within 2 mm) plus the rule that the base sits on the ground.
-
-One more thing this file does, because the CAD needs it: **the right half of
-the assembly is synthesised.**  The exported model only has the x=60 linkage
-built out; the x=260 actuators are placed but nothing connects them, and the
-two hanger plates it does contain sit ~40 mm off any position a closed
-parallelogram could reach (unfinished, confirmed by the team).  The left half
-plus the equal actuator spacing pin the design down completely, so the honest
-reconstruction is the parallelogram itself: every right-side link is its left
-twin translated by exactly the actuator spacing (+200 mm in x).  Synthesised
-links carry an `r` suffix; the CAD's two misplaced hangers are dropped.
-
-The mechanism, which the 6807ZZ bearings in the parts list confirm: each arm
-(actuator + lower + upper link) is rigid; the plate plus its four hangers is
-one rigid coupler; the bearings sit in the upper-link/hanger laps at z~300.
-The coupler counter-rotates the arm angle, so it translates while staying
-level -- a classic parallelogram rocker.
+Built for the complete export (docs/udrf_assembly.stl): all four arms exist
+as real bodies, and the platform IS the coupler -- the upper links lap it
+directly, which is where the 6807ZZ bearings sit.  The coupler
+counter-rotates the arm angle, so it translates while staying level -- a
+classic parallelogram rocker.  (The earlier half-built export needed its
+right side synthesised; that code is gone, see git history if it returns.)
 """
 
 from __future__ import annotations
@@ -58,41 +49,30 @@ ACTUATOR_SIZE_MM = (85.0, 85.0)   # phact-401 face, Phi85 (the 3rd dim is depth)
 ACTUATOR_TOL_MM = 6.0
 FASTENER_VOL_CM3 = 15.0           # below this it is a bolt/bearing/washer, not a link
 
-# The kinematic tree.  Arms are rigid; the coupler (plate + all four hangers)
-# is rigid; one passive bearing joint connects them.
+# The kinematic tree, filled in by build() from the contact graph:
 #
-#   base_link ─┬─ axis_0 → part_3  → part_1  ─(bearing: joint_platform)─┐
-#              ├─ axis_1 → part_4  → part_2                             │
-#              ├─ axis_2 → part_3r → part_1r          coupler: part_7 → part_0
-#              └─ axis_3 → part_4r → part_2r → part_9    → part_8, part_7r, part_8r
+#   base_link ─┬─ axis_0 → lower_0 → upper_0 ─(bearing: joint_platform)─ platform
+#              ├─ axis_1 → lower_1 → upper_1
+#              ├─ axis_2 → lower_2 → upper_2   (+ disc_N mounting plates,
+#              └─ axis_3 → lower_3 → upper_3      fixed to their actuator)
 #
 # Only ONE bearing can be an explicit joint (URDF is a tree); the other three
 # laps stay closed because the linkage is a true parallelogram: with equal
 # actuator angles and the coupler counter-rotated, every arm top tracks its
-# hanger exactly, at any angle.  Unequal angles split the laps -- which is
-# also what they would do to the real hardware.
-PARENT: dict[str, str] = {
-    "axis_0": "base_link", "axis_1": "base_link",
-    "axis_2": "base_link", "axis_3": "base_link",
-    "part_3": "axis_0", "part_1": "part_3",
-    "part_4": "axis_1", "part_2": "part_4",
-    "part_3r": "axis_2", "part_1r": "part_3r",
-    "part_4r": "axis_3", "part_2r": "part_4r",
-    "part_9": "axis_3",
-    "part_7": "part_1",     # <- the passive bearing (joint_platform)
-    "part_0": "part_7",
-    "part_8": "part_0", "part_7r": "part_0", "part_8r": "part_0",
-}
+# lap exactly, at any angle.  Unequal angles split the laps -- which is also
+# what they would do to the real hardware.
+PARENT: dict[str, str] = {}
 
 # Links that rotate. The joint sits at the actuator's centre, about its thin axis.
 REVOLUTE = {"axis_0", "axis_1", "axis_2", "axis_3"}
-PLATFORM = "part_7"   # the coupler enters the tree through this hanger
+PLATFORM = "platform"   # the coupler enters the tree through the axis_0 lap
 PLATFORM_JOINT = "joint_platform"
 FRAME_OVERRIDE: dict[str, "np.ndarray"] = {}   # filled in build(): bearing centre
 
 # file:// keeps RViz working with no ROS package to install. Swap for
 # package://sigma_description/meshes when this becomes a real package.
-MESH_URI = f"file://{Path(__file__).resolve().parent / 'cad' / 'meshes'}"
+# Set in build() from --out, so it survives this script moving around.
+MESH_URI = ""
 
 
 def read_stl(path: Path) -> np.ndarray:
@@ -164,40 +144,21 @@ class Part:
         self.name = ""
 
 
-# Synthesised right half: new link -> (left link to copy, left/right anchors).
-# The anchors define the registration: the left actuator must map onto the
-# right one, and the top of the left chain onto the right-side platform link.
-# The CAD's two right-side hanger plates, identified by where they sit; they
-# are replaced by translated copies of the left hangers (see module docstring).
-MISPLACED_HANGERS = ("part_5", "part_6")
+DISC_VOL_CM3 = 40.0   # below this an actuator-face body is a mounting disc
 
 
-def synthesise_right_half(by_name, combined_tri):
-    """Build the right half as an exact translation of the left half."""
-    pairs = [
-        # left source -> right copy, shifted by (right axis - left axis)
-        ("part_3", "part_3r", "axis_0", "axis_2"),
-        ("part_1", "part_1r", "axis_0", "axis_2"),
-        ("part_7", "part_7r", "axis_0", "axis_2"),
-        ("part_4", "part_4r", "axis_1", "axis_3"),
-        ("part_2", "part_2r", "axis_1", "axis_3"),
-        ("part_8", "part_8r", "axis_1", "axis_3"),
-    ]
-    made = []
-    for src, dst, al, ar in pairs:
-        if src not in combined_tri or al not in by_name or ar not in by_name:
-            print(f"  ! cannot synthesise {dst}: {src}/{al}/{ar} missing")
-            continue
-        offset = by_name[ar].centre - by_name[al].centre
-        tri = combined_tri[src] + offset
-        part = Part(index=1000 + len(made), tri=tri)
-        part.name = dst
-        combined_tri[dst] = tri
-        made.append(part)
-    return made
+def contact_points(a_tri: np.ndarray, b_tri: np.ndarray, slack_mm: float = 3.0):
+    """Points of A near B: the lap where two parts meet (or None if apart)."""
+    a = np.unique(np.round(a_tri.reshape(-1, 3), 2), axis=0)
+    b = np.unique(np.round(b_tri.reshape(-1, 3), 2), axis=0)
+    dist, _ = cKDTree(b).query(a)
+    near = a[dist < float(dist.min()) + slack_mm]
+    return near if dist.min() < 2.5 else None
 
 
 def build(stl: Path, out_dir: Path, report_only: bool) -> int:
+    global MESH_URI
+    MESH_URI = f"file://{(out_dir / 'meshes').resolve()}"
     tri = read_stl(stl)
     labels = split_bodies(tri)
     parts = [Part(c, tri[labels == c]) for c in range(labels.max() + 1)]
@@ -212,41 +173,62 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
         nearest = min(big, key=lambda p: np.linalg.norm(p.centre - s.centre))
         merged[nearest.index].append(s)
 
-    # Name parts: the base is the lowest-sitting large body, actuators are axis_N.
+    # Anchors: actuators are axis_N by (x, y); the base is whatever sits on
+    # the ground plane (break ties by bulk -- the top face would pick a
+    # bearing, because bearings are short); the platform is the biggest body
+    # left, riding on top of the arms.
     actuators = sorted([p for p in big if p.actuator], key=lambda p: (p.centre[0], p.centre[1]))
     for i, p in enumerate(actuators):
         p.name = f"axis_{i}"
-    # The base is whatever sits on the ground plane; break ties by bulk. Using
-    # the top face instead picks a bearing, because bearings are short.
     base = min((p for p in big if not p.actuator),
                key=lambda p: (round(float(p.lo[2]), 1), -p.volume))
     base.name = "base_link"
-    for i, p in enumerate(p for p in big if not p.name):
-        p.name = f"part_{i}"
+    rest = [p for p in big if not p.name]
+    plate = max(rest, key=lambda p: p.volume)
+    plate.name = PLATFORM
 
-    # Everything each link owns (its own shell + merged fasteners), then the
-    # synthesised right-side links built out of those combined meshes.
+    # Roles from contact: uppers lap the platform, each lower laps its upper,
+    # small leftovers are the actuator-face mounting discs.
+    uppers = [p for p in rest if p is not plate
+              and contact_points(p.tri, plate.tri) is not None]
+    others = [p for p in rest if p is not plate and p not in uppers]
+    discs = [p for p in others if p.volume < DISC_VOL_CM3]
+    lowers = [p for p in others if p not in discs]
+    assert len(uppers) == 4 and len(lowers) == 4, \
+        f"expected 4 arms, found {len(uppers)} uppers / {len(lowers)} lowers"
+
+    PARENT.clear()
+    for i in range(4):
+        PARENT[f"axis_{i}"] = "base_link"
+    for lower in lowers:
+        upper = next(u for u in uppers
+                     if contact_points(lower.tri, u.tri) is not None)
+        # The arm stands on the actuator column it is nearest in plan view.
+        axis = min(actuators,
+                   key=lambda a: np.linalg.norm(a.centre[:2] - lower.centre[:2]))
+        i = axis.name[-1]
+        lower.name, upper.name = f"lower_{i}", f"upper_{i}"
+        PARENT[lower.name] = axis.name
+        PARENT[upper.name] = lower.name
+    for disc in discs:
+        axis = min(actuators,
+                   key=lambda a: np.linalg.norm(a.centre - disc.centre))
+        disc.name = f"disc_{axis.name[-1]}"
+        PARENT[disc.name] = axis.name
+    PARENT[PLATFORM] = "upper_0"   # <- the passive bearing (joint_platform)
+
+    # Everything each link owns: its own shell + merged fasteners.
     by_name = {p.name: p for p in big}
     combined_tri = {p.name: np.concatenate([p.tri] + [s.tri for s in merged[p.index]])
                     for p in big}
-    big = big + synthesise_right_half(by_name, combined_tri)
 
-    # The CAD's misplaced right-side hangers are superseded by part_7r/part_8r.
-    big = [p for p in big if p.name not in MISPLACED_HANGERS]
-    for name in MISPLACED_HANGERS:
-        combined_tri.pop(name, None)
-
-    # The bearing: it sits in the lap between the upper link (part_1) and the
-    # hanger (part_7) -- that is where the CAD's 6807ZZ bodies were found.
-    # Pivot = the lap's contact centroid, computed from the meshes.
-    if "part_1" in combined_tri and "part_7" in combined_tri:
-        arm = combined_tri["part_1"].reshape(-1, 3)
-        hanger = combined_tri["part_7"].reshape(-1, 3)
-        dist, _ = cKDTree(hanger).query(arm)
-        near = arm[dist < float(dist.min()) + 3.0]
-        FRAME_OVERRIDE[PLATFORM] = near.mean(axis=0)
-        print(f"bearing (upper link / hanger lap) at "
-              f"{np.round(FRAME_OVERRIDE[PLATFORM], 1)} mm\n")
+    # The bearing: the 6807ZZ sits in the lap where upper_0 meets the
+    # platform.  Pivot = that lap's contact centroid, computed from the mesh.
+    near = contact_points(combined_tri["upper_0"], combined_tri[PLATFORM])
+    assert near is not None, "upper_0 must lap the platform"
+    FRAME_OVERRIDE[PLATFORM] = near.mean(axis=0)
+    print(f"bearing (upper_0 / platform lap) at "
+          f"{np.round(FRAME_OVERRIDE[PLATFORM], 1)} mm\n")
 
     print(f"{len(parts)} rigid bodies -> {len(big)} links "
           f"({len(small)} fasteners merged in)\n")
@@ -270,10 +252,14 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
     urdf = out_dir / "sigma.urdf"
     urdf.write_text(render_urdf(big, base), encoding="utf-8")
     print(f"\nwrote {urdf} and {len(big)} meshes in {meshes}/")
-    if False:
-        print("\nNOTE: CHAIN is empty, so every link is FIXED to the base. The model\n"
-              "      renders in its assembled pose but nothing rotates. Fill in CHAIN\n"
-              "      (parent, child per joint) and re-run for revolute joints.")
+
+    # apps/demo.py carries these three as its geometry constants -- paste
+    # them there whenever the CAD changes.
+    metres = lambda v: ", ".join(f"{x * MM_TO_M:.4f}" for x in v)
+    print("\ngeometry for apps/demo.py (metres):")
+    print(f"  AXIS0 = np.array([{metres(by_name['axis_0'].centre)}])")
+    print(f"  PIVOT = np.array([{metres(FRAME_OVERRIDE[PLATFORM])}])")
+    print(f"  PLATE = np.array([{metres(plate.centre)}])")
     return 0
 
 
@@ -354,7 +340,7 @@ def render_urdf(parts: list[Part], base: Part) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--stl", default="docs/assembly.stl")
+    parser.add_argument("--stl", default="docs/udrf_assembly.stl")
     parser.add_argument("--out", default="cad")
     parser.add_argument("--report", action="store_true", help="print parts, write nothing")
     args = parser.parse_args(argv)

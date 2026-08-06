@@ -6,79 +6,61 @@
 - 팀원: 백시은 · 김정환 · 이진명
 - 대회: https://robotic-us.com
 
-사람의 **표정과 목소리**를 보고 스스로 반응하는 돌봄 로봇입니다.
+영아의 **상태를 보고 스스로 반응하는 로봇 요람**입니다. 모션의 근거와 안전
+규칙은 `docs/infant_robotic_cradle_evidence_report_ko.pdf`(M01–M50 모션
+라이브러리 + 안전 사다리)를 따르고, 전체 구조는
+[docs/ARCHITECTURE.md](ARCHITECTURE.md)에 있습니다.
 
 ```
-webcam ─┬─► YuNet → FER+ → 감정 확률 5종 ─┐
-        │                                  ├─► distress 0..1 ─► 모션 슬롯 ─► play()
-        └─► mic → RMS + 음성대역 비율 ──────┘
+상태 카드(태그) 또는 얼굴+울음 ─► CradleMachine(안전 사다리) ─► MotionEngine(M01-M50)
+                                                                │
+                                              웹 대시보드 · RViz · phorce 시뮬레이터
 ```
-
-한 사람이 어디에 있는지가 **방향**(left/center/right)을, 얼마나 힘든 상태인지가
-**크기**(small/medium/large)를 정하고, 그 두 좌표가 `slots.json`의 3×3 그리드에서
-재생할 모션 하나를 고릅니다.
 
 ## 빠른 시작
 
 ```bash
-python3 fetch_models.py                  # ONNX 모델 3종 내려받기 (최초 1회)
-python3 listen.py                        # 마이크 확인 — 소리 미터
-python3 sense.py                         # 카메라 확인 — 얼굴·감정·distress 창
-python3 care.py --mock --no-window       # 전체 루프 (로봇 없이)
+python3 tests.py                         # 전체 셀프테스트 (10개 스위트, ~30초)
+python3 serve.py --fake                  # 카메라 없이: 합성 상태 카드 시나리오
+python3 serve.py                         # 웹캠 + 태그 상태 카드 (tag_0/1/2)
+python3 serve.py --sense                 # 실전: 얼굴 감정 + 마이크가 상태를 판정
+python3 tools/fetch_models.py            # --sense용 ONNX 모델 3종 (최초 1회)
 ```
 
 로봇/시뮬레이터와 함께:
 
 ```bash
-python3 make_motions.py                  # slots.json → motions/motion_NN.csv
-ros2 launch agx_bringup motion.launch.py motion_dir:=$PWD/motions   # 터미널 1
-phorce list --target sim:demo            # 10개 슬롯이 보여야 정상
-python3 care.py --target sim:demo        # 시뮬레이터로 재생
+python3 tools/make_motions.py --library  # M01-M50 → motions_m50/motion_NN.csv
+./sim.sh                                 # phorce 시뮬레이터 (50개 슬롯)
+phorce play 12 --target sim:demo         # M12 = ML 0.5 Hz A10 재생
+./cad/view.sh                            # RViz (터미널 분리)
 ```
 
 ## 파일 지도
 
-**메인 경로** — 이 5개만 읽으면 제품 전체입니다.
-
-| 파일 | 역할 |
+| 경로 | 역할 |
 |---|---|
-| `care.py` | ★ 진입점. 카메라 → 판단 → `play()` 루프 하나 |
-| `sense.py` | 프레임 + 소리 → `Reading(x, distress, emotion, name)` |
-| `listen.py` | 웹캠 내장 마이크. `arecord` 기반, 추가 설치 없음 |
-| `sigma/` | 얼굴 검출(YuNet) · 인식(SFace) · 감정(FER+) |
-| `slot_table.py` | `slots.json` 읽기·검증 |
-
-**로봇 계층**
-
-| 파일 | 역할 |
-|---|---|
-| `phorce_iface.py` | phorce/ROS 2를 아는 유일한 파일. `MockRobot` + `PhorceRobot` |
-| `pvector.py` | P-Vector 파싱 + 5차 다항식 월드 모델 |
-| `dream.py` | DREAM-Chunk — 후보 순위(`ChunkMatcher`), 이탈 감시(`DreamMonitor`) |
-
-**도구**
-
-| 파일 | 역할 |
-|---|---|
-| `make_motions.py` | `slots.json` → `motions/motion_NN.csv` (pcm·시뮬레이터가 읽는 포맷) |
-| `enroll.py` | 얼굴 등록 → `faces/faces.npz` |
-| `fetch_models.py` | ONNX 모델 내려받기 |
-
-**`prototype/`** — 초기 프로토타입(색 원 자극). 지금 경로에서는 쓰지 않지만
-DREAM-Chunk 전체 루프가 유일하게 다 도는 곳이라 회귀 테스트용으로 남겨 뒀습니다.
-
-```bash
-python3 prototype/stimulus.py --scenario demo --record prototype/demo.mp4
-python3 prototype/main.py --mock --video prototype/demo.mp4 --once --dream
-```
+| `serve.py` | ★ 진입점. 센싱 → 상태기계 → 모션 → 웹 대시보드 한 프로세스 |
+| `tests.py` | 유일한 테스트 명령. 모든 스위트가 여기 있음 |
+| `core/cradle.py` | 근거 보고서의 M01–M50 라이브러리 · MotionEngine · CradleMachine |
+| `core/dream.py` · `core/pvector.py` | DREAM-Chunk 매처/모니터 + P-Vector 월드 모델 |
+| `core/slot_table.py` · `core/phorce_iface.py` | 슬롯 표 · phorce/ROS 2 어댑터 |
+| `perception/tag.py` | AprilTag **상태 카드** (tag_0 평온 / tag_1 칭얼 / tag_2 울음) |
+| `perception/sense.py` · `perception/listen.py` | 얼굴+소리 → distress 0..1 |
+| `perception/face/` | 얼굴 검출(YuNet) · 인식(SFace) · 감정(FER+) |
+| `apps/` | demo(DREAM 시연) · care(구 진입점) · run(얼굴 데모) · animate(RViz) |
+| `tools/` | make_motions(--library) · make_urdf · fetch_models · enroll |
+| `motions_m50/` | M01–M50을 pcm 슬롯으로 컴파일한 것 (`./sim.sh`가 기본 사용) |
+| `web/` · `cad/` | 대시보드 · URDF/메시(RViz) |
 
 **`docs/`** — 대회 제공 자료(`RH_Guide*`)와 우리 설계 문서.
 
 | 문서 | 내용 |
 |---|---|
-| [docs/dream-chunk.md](docs/dream-chunk.md) | DREAM-Chunk 설계와 **테스트 절차 5단계** |
-| [docs/face-recognition.md](docs/face-recognition.md) | 얼굴 인식 + 5분류 감정 파이프라인 상세 |
-| [docs/hackathon.md](docs/hackathon.md) | 대회 정보 · 지적재산권 |
+| [docs/ARCHITECTURE.md](ARCHITECTURE.md) | 전체 구조 · 근거 보고서 ↔ 코드 대응표 |
+| `docs/infant_robotic_cradle_evidence_report_ko.pdf` | **모션 명세의 원전** |
+| [docs/dream-chunk.md](dream-chunk.md) | DREAM-Chunk 설계 |
+| [docs/face-recognition.md](face-recognition.md) | 얼굴 인식 + 5분류 감정 파이프라인 |
 | `docs/RH_Guide/` | 논문 3종 · OT 자료 · P-Vector · phact · 배선 |
 | `docs/RH_Guide_Jetson-SDK/` | phorce SDK 공식 문서 5종 (**이쪽이 최신**) |
 | `docs/RH_Guide_Angel/` | 구버전 SDK 문서 + Studio·pcm 매뉴얼 |
@@ -89,29 +71,27 @@ python3 prototype/main.py --mock --video prototype/demo.mp4 --once --dream
 
 ## 셀프테스트
 
-전부 로봇 없이, ROS 없이 돕니다.
+전부 로봇 없이, 카메라 없이, ROS 없이 돕니다.
 
 ```bash
-python3 listen.py --selftest     # 소리 특징 (톤/노이즈/무음)
-python3 sense.py --selftest      # 감정→distress 가중, noisy-OR 융합
-python3 pvector.py --selftest    # 5차 다항식 경계조건, CSV 파싱
-python3 dream.py --selftest      # 매처 순위, 이탈 감지
-python3 prototype/perception.py --selftest
+python3 tests.py             # 전체 (listen sense models tag pvector dream cradle m50 demo serve)
+python3 tests.py cradle m50  # 골라서
+python3 tests.py --list      # 목록
 ```
 
 ## 알려진 제약
 
 - **모션 슬롯이 아직 실물 로봇에 없습니다.** `phorce list`가 비어 있으면
-  phorce Studio에서 교시하거나(①설정 영점 → ②교시), `make_motions.py`로 만든
+  phorce Studio에서 교시하거나, `tools/make_motions.py --library`로 만든
   파일을 시뮬레이터에 물려 쓰세요.
-- `slots.json`의 자세는 전부 `"placeholder": true`입니다. 교시 후 실제 각도로
-  교체해야 `start_pose` 매칭이 의미를 갖습니다.
+- `slots.json`의 자세는 전부 `"placeholder": true`입니다(DREAM 데모용 10슬롯).
 - 시뮬레이터는 **모션 계약만** 흉내 냅니다. `/phorce/feedback`(1 kHz)은 나오지
-  않으므로 DREAM-Chunk의 이탈 감시는 sim에서 동작하지 않습니다 —
-  `--mock` 또는 실물에서 확인하세요.
+  않으므로 DREAM-Chunk의 이탈 감시는 sim에서 동작하지 않습니다.
 - `pvector.UNITS_PER_DEG`는 실제 피드백으로 보정이 필요합니다.
+- 이 기구는 수평 1자유도입니다 — ML/AP 모션이 같은 축에 실리고, Z 모드는
+  재생할 자유도가 없습니다.
 
 ## 라이선스
 
-MIT. [LICENSE](LICENSE) 참고. 본 프로젝트의 지적재산권은 SIGMA 팀 전원에게 있으며,
+MIT. [LICENSE](../LICENSE) 참고. 본 프로젝트의 지적재산권은 SIGMA 팀 전원에게 있으며,
 주최 측은 아카이브·홍보 목적으로만 활용합니다.

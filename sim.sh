@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Start the phorce simulator with this project's motion library.
 #
-#   ./sim.sh            # start (stops any previous one first)
-#   ./sim.sh --stop     # just stop
+#   ./sim.sh                  # start (stops any previous one first)
+#   ./sim.sh <motions_dir>    # a specific library (default: motions_m50
+#                             #   if compiled, else the 10 DREAM slots)
+#   ./sim.sh --stop           # just stop
 #
 # Resolves its own absolute path, so it does not matter which directory you run
 # it from -- passing motion_dir:=$PWD/motions from the wrong cwd is the single
@@ -10,7 +12,13 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MOTIONS="$ROOT/motions"
+if [ -n "${1:-}" ] && [ "$1" != "--stop" ]; then
+    MOTIONS="$(cd "$1" 2>/dev/null && pwd)" || { echo "no such dir: $1"; exit 1; }
+elif [ -d "$ROOT/motions_m50" ]; then
+    MOTIONS="$ROOT/motions_m50"   # the full M01-M50 library, when compiled
+else
+    MOTIONS="$ROOT/motions"
+fi
 
 # Stop any running simulator. Matched on the installed binary path rather than
 # with `pkill -f motion_action_server`, which also matches the shell running
@@ -29,9 +37,9 @@ stop() {
 
 [ "${1:-}" = "--stop" ] && { stop; echo "stopped."; exit 0; }
 
-[ -d "$MOTIONS" ] || { echo "no $MOTIONS -- run: python3 tools/make_motions.py"; exit 1; }
+[ -d "$MOTIONS" ] || { echo "no $MOTIONS -- run: python3 tools/make_motions.py --library"; exit 1; }
 count=$(ls "$MOTIONS"/motion_*.csv 2>/dev/null | wc -l)
-[ "$count" -gt 0 ] || { echo "no motion_*.csv in $MOTIONS -- run: python3 tools/make_motions.py"; exit 1; }
+[ "$count" -gt 0 ] || { echo "no motion_*.csv in $MOTIONS -- run: python3 tools/make_motions.py --library"; exit 1; }
 
 stop
 echo "starting simulator with $count motions from $MOTIONS"
