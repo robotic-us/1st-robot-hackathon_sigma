@@ -32,143 +32,27 @@ from perception + pose to a slot number, which is what makes it testable:
 
 from __future__ import annotations
 
+import sys as _sys, pathlib as _pathlib
+# This module lives in prototype/ but imports the shared robot layer from the
+# project root (dream, pvector, phorce_iface, slot_table).
+_sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent.parent))
+
 import argparse
 import csv
-import json
 import logging
 import math
 import time
 from dataclasses import dataclass
-from enum import Enum
 from typing import Optional, Sequence
 
+from dream import ChunkMatcher, DivergenceReport
 from perception import Perception, clamp01
-from phorce_iface import MAX_MOTION_ID, MIN_MOTION_ID, JointState
+from phorce_iface import JointState
+from slot_table import (
+    AMPLITUDE_VALUE, Amplitude, Direction, Slot, SlotTable, load_slot_table,
+)
 
 LOGGER = logging.getLogger("decider")
-
-
-# --------------------------------------------------------------------------- #
-# Buckets
-# --------------------------------------------------------------------------- #
-class Direction(str, Enum):
-    LEFT = "left"
-    CENTER = "center"
-    RIGHT = "right"
-
-
-class Amplitude(str, Enum):
-    SMALL = "small"
-    MEDIUM = "medium"
-    LARGE = "large"
-    SETTLE = "settle"   # not produced by bucketing; only the wind-down uses it
-
-
-# Where each amplitude bucket sits on the 0..1 motion scale.  Used by the scoring
-# function to measure "how well does this slot's size match what we're seeing".
-AMPLITUDE_VALUE: dict[Amplitude, float] = {
-    Amplitude.SMALL: 0.15,
-    Amplitude.MEDIUM: 0.45,
-    Amplitude.LARGE: 0.85,
-    Amplitude.SETTLE: 0.0,
-}
-
-
-# --------------------------------------------------------------------------- #
-# Slot table
-# --------------------------------------------------------------------------- #
-@dataclass(frozen=True)
-class Slot:
-    """Our description of one pre-recorded motion (see slots.json)."""
-
-    slot_id: int
-    desc: str
-    direction: Direction
-    amplitude: Amplitude
-    start_pose: tuple[float, ...]
-    end_pose: tuple[float, ...]
-    placeholder: bool = False
-
-
-@dataclass(frozen=True)
-class SlotTable:
-    axes: tuple[int, ...]
-    slots: dict[int, Slot]
-
-    def cell(self, direction: Direction, amplitude: Amplitude) -> list[Slot]:
-        """Every slot in one grid cell (usually one, but more is fine)."""
-        return [
-            s for s in self.slots.values()
-            if s.direction is direction and s.amplitude is amplitude
-        ]
-
-    def with_amplitude(self, amplitude: Amplitude) -> list[Slot]:
-        return [s for s in self.slots.values() if s.amplitude is amplitude]
-
-
-def load_slot_table(path: str) -> SlotTable:
-    """Read and validate slots.json.
-
-    Validation is strict and happens at startup: a typo here would otherwise
-    surface as a mysterious "no candidates" at demo time.
-    """
-    with open(path, encoding="utf-8") as handle:
-        raw = json.load(handle)
-
-    axes = tuple(int(a) for a in raw.get("axes", (0, 1, 2, 3)))
-    slots: dict[int, Slot] = {}
-    placeholders: list[int] = []
-
-    for key, entry in raw.get("slots", {}).items():
-        try:
-            slot_id = int(key)
-        except ValueError as exc:
-            raise ValueError(f"slot key {key!r} is not an integer") from exc
-        if not (MIN_MOTION_ID <= slot_id <= MAX_MOTION_ID):
-            raise ValueError(
-                f"slot {slot_id} is outside the contract range "
-                f"{MIN_MOTION_ID}..{MAX_MOTION_ID} (0 is the no-motion sentinel)"
-            )
-
-        try:
-            direction = Direction(entry["direction"])
-            amplitude = Amplitude(entry["amplitude"])
-        except (KeyError, ValueError) as exc:
-            raise ValueError(f"slot {slot_id}: bad direction/amplitude ({exc})") from exc
-
-        start = tuple(float(v) for v in entry.get("start_pose", ()))
-        end = tuple(float(v) for v in entry.get("end_pose", ()))
-        for name, pose in (("start_pose", start), ("end_pose", end)):
-            if len(pose) != len(axes):
-                raise ValueError(
-                    f"slot {slot_id}: {name} has {len(pose)} values but "
-                    f"axes has {len(axes)}"
-                )
-
-        slot = Slot(
-            slot_id=slot_id,
-            desc=str(entry.get("desc", "")),
-            direction=direction,
-            amplitude=amplitude,
-            start_pose=start,
-            end_pose=end,
-            placeholder=bool(entry.get("placeholder", False)),
-        )
-        slots[slot_id] = slot
-        if slot.placeholder:
-            placeholders.append(slot_id)
-
-    if not slots:
-        raise ValueError(f"{path} defines no slots")
-
-    LOGGER.info("loaded %d slots from %s (axes=%s)", len(slots), path, list(axes))
-    if placeholders:
-        LOGGER.warning(
-            "slots %s still have PLACEHOLDER poses -- start_pose matching is "
-            "guesswork until you teach the motions and fill them in",
-            sorted(placeholders),
-        )
-    return SlotTable(axes=axes, slots=slots)
 
 
 # --------------------------------------------------------------------------- #
@@ -340,6 +224,12 @@ class Decision:
     stirring: bool = False
     settling: bool = False
     have_joints: bool = False
+    # --- DREAM-Chunk ------------------------------------------------------- #
+    dreamed: bool = False       # the chunk matcher, not score_slot(), ranked this
+    preempted: bool = False     # dwell cut short because the dream diverged
+    dream_error: float = 0.0    # last chunk's measured-vs-dreamed error, rad
+    external_force: float = 0.0 # worst-axis |dob_a| at decision time, amps
+    vetoed: tuple[int, ...] = ()  # candidates the excursion guard rejected
 
     def describe(self) -> str:
         """One line explaining the decision, for the log."""
@@ -357,6 +247,13 @@ class Decision:
             flags.append("cell empty -> nearest amplitude")
         if not self.have_joints:
             flags.append("no joint data, pose term inactive")
+        if self.dreamed:
+            flags.append(f"dream-matched (err {self.dream_error:.3f} rad, "
+                         f"dob {self.external_force:.2f}A)")
+        if self.preempted:
+            flags.append("DWELL PRE-EMPTED: dream diverged")
+        if self.vetoed:
+            flags.append(f"vetoed {list(self.vetoed)}")
         suffix = f" ({', '.join(flags)})" if flags else ""
 
         body = f"dir={self.direction.value.upper()} amp={self.amplitude.value.upper()}{suffix}"
@@ -381,9 +278,19 @@ class Decider:
     testable.
     """
 
-    def __init__(self, table: SlotTable, config: Optional[DeciderConfig] = None) -> None:
+    def __init__(
+        self,
+        table: SlotTable,
+        config: Optional[DeciderConfig] = None,
+        matcher: Optional[ChunkMatcher] = None,
+    ) -> None:
         self.table = table
         self.cfg = config or DeciderConfig()
+        # When a matcher is supplied, candidate ranking moves from the static
+        # score_slot() heuristic to DREAM-Chunk's dreamed-state matching. The
+        # bucketing above it is unchanged -- direction/amplitude still choose
+        # *which* chunks are candidates; the dream chooses between them.
+        self.matcher = matcher
         self.settle_ramp = self._derive_settle_ramp()
 
         self._direction = Direction.CENTER
@@ -405,6 +312,7 @@ class Decider:
         perc: Perception,
         joint_state: Optional[JointState],
         now: Optional[float] = None,
+        divergence: Optional[DivergenceReport] = None,
     ) -> Optional[int]:
         """Which slot to play, or ``None`` when no action is warranted."""
         now = time.monotonic() if now is None else now
@@ -413,6 +321,16 @@ class Decider:
         # Positions come back as None if ANY axis we need is flagged invalid --
         # the manual is explicit that valid is the only trustworthy evidence.
         joints = joint_state.positions(self.table.axes) if joint_state is not None else None
+        forces = (joint_state.external_force(self.table.axes)
+                  if joint_state is not None else None)
+
+        # DREAM-Chunk's reactive trigger. The robot cannot be interrupted
+        # mid-motion, so a diverged dream cannot stop what is playing -- but it
+        # can and does collapse the dwell, so the switch happens at the first
+        # boundary the hardware permits instead of one full dwell later.
+        diverged = bool(divergence is not None and divergence.diverged)
+        dream_error = float(divergence.error_rad) if divergence is not None else 0.0
+        worst_force = max((abs(f) for f in forces), default=0.0) if forces else 0.0
 
         if not perc.present:
             # Nothing to react to. Keep the latches as they are; the circle may
@@ -485,6 +403,8 @@ class Decider:
             candidates = (slot_id,)
             cost = pose_term = amp_term = None
             fallback = False
+            dreamed = False
+            vetoed: tuple[int, ...] = ()
         else:
             matches, fallback = self._candidates(direction, amplitude)
             if not matches:
@@ -493,29 +413,68 @@ class Decider:
                     direction=direction, amplitude=amplitude,
                     motion=perc.motion, x=x_avg, x_raw=perc.x, distance=perc.distance,
                     stirring=stirring, have_joints=joints is not None,
+                    dream_error=dream_error, external_force=worst_force,
                 ))
-            # Sort by (cost, slot_id): the id keeps ties deterministic, which
-            # matters because placeholder poses make ties common.
-            scored = sorted(
-                ((score_slot(s, joints, perc.motion, cfg), s) for s in matches),
-                key=lambda pair: (pair[0][0], pair[1].slot_id),
-            )
-            (cost, pose_term, amp_term), slot = scored[0]
-            slot_id = slot.slot_id
-            candidates = tuple(s.slot_id for _, s in scored)
+
+            if self.matcher is not None:
+                # --- DREAM-Chunk: rank by dreaming each candidate from here --
+                ranked = self.matcher.rank(
+                    [s.slot_id for s in matches],
+                    joints,
+                    external_force_a=forces,
+                    target_amplitude=perc.motion,
+                    amplitude_of={s.slot_id: AMPLITUDE_VALUE[s.amplitude] for s in matches},
+                    recent_error_rad=dream_error,
+                )
+                vetoed = tuple(s.slot_id for s in ranked if s.vetoed)
+                survivors = [s for s in ranked if not s.vetoed]
+                if not survivors:
+                    return self._record(Decision(
+                        None, "every candidate vetoed by the excursion guard",
+                        direction=direction, amplitude=amplitude,
+                        motion=perc.motion, x=x_avg, x_raw=perc.x, distance=perc.distance,
+                        stirring=stirring, have_joints=joints is not None,
+                        dreamed=True, dream_error=dream_error,
+                        external_force=worst_force, vetoed=vetoed,
+                    ))
+                pick = survivors[0]
+                slot_id = pick.slot_id
+                candidates = tuple(s.slot_id for s in survivors)
+                cost, pose_term, amp_term = pick.total, pick.resistance, pick.task
+                dreamed = True
+            else:
+                # Sort by (cost, slot_id): the id keeps ties deterministic, which
+                # matters because placeholder poses make ties common.
+                scored = sorted(
+                    ((score_slot(s, joints, perc.motion, cfg), s) for s in matches),
+                    key=lambda pair: (pair[0][0], pair[1].slot_id),
+                )
+                (cost, pose_term, amp_term), slot = scored[0]
+                slot_id = slot.slot_id
+                candidates = tuple(s.slot_id for _, s in scored)
+                dreamed = False
+                vetoed = ()
 
         # --- 4. anti-thrash: dwell ------------------------------------------ #
         required = cfg.repeat_dwell_s if slot_id == self._last_slot else cfg.min_dwell_s
         if stirring:
             required *= cfg.urgent_scale
         waited = now - self._last_play_ts
+        preempted = False
+        if diverged:
+            # The dream broke: something is physically in the way. Waiting out
+            # the anti-thrash dwell would mean ignoring a live contact for
+            # seconds, which is the opposite of reactive.
+            preempted = True
+            required = 0.0
         if waited < required:
             return self._record(Decision(
                 None, f"dwell: {required - waited:.1f}s to go (need {required:.1f}s)",
                 direction=direction, amplitude=amplitude,
                 motion=perc.motion, x=x_avg, x_raw=perc.x, distance=perc.distance,
                 candidates=candidates, stirring=stirring, settling=settling,
-                have_joints=joints is not None,
+                have_joints=joints is not None, dreamed=dreamed,
+                dream_error=dream_error, external_force=worst_force, vetoed=vetoed,
             ))
 
         # --- 5. commit ------------------------------------------------------ #
@@ -528,13 +487,17 @@ class Decider:
         self._last_play_ts = now
         self._last_slot = slot_id
 
+        if preempted:
+            reason = f"{reason} (reacting to a diverged dream)"
+
         return self._record(Decision(
             slot_id, reason,
             direction=direction, amplitude=amplitude,
             motion=perc.motion, x=x_avg, x_raw=perc.x, distance=perc.distance,
             candidates=candidates, cost=cost, pose_term=pose_term, amp_term=amp_term,
             fallback=fallback, stirring=stirring, settling=settling,
-            have_joints=joints is not None,
+            have_joints=joints is not None, dreamed=dreamed, preempted=preempted,
+            dream_error=dream_error, external_force=worst_force, vetoed=vetoed,
         ))
 
     def explain(self) -> Decision:
@@ -705,6 +668,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--decide-hz", type=float, default=2.0)
     parser.add_argument("--distance", type=float, default=0.35,
                         help="apparent distance to assume during replay")
+    parser.add_argument("--dream", action="store_true",
+                        help="rank candidates with DREAM-Chunk instead of score_slot()")
+    parser.add_argument("--motion-map", help="the robot's MotionMap.csv (implies --dream)")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
 
@@ -715,7 +681,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
 
     table = load_slot_table(args.slot_table)
-    decider = Decider(table)
+    matcher = None
+    if args.dream or args.motion_map:
+        from dream import DreamConfig
+        from pvector import load_chunk_dictionary
+        matcher = ChunkMatcher(
+            load_chunk_dictionary(motion_map=args.motion_map,
+                                  slot_table=args.slot_table, axes=table.axes),
+            DreamConfig(),
+        )
+    decider = Decider(table, matcher=matcher)
 
     if args.replay:
         return replay(args.replay, decider, args.decide_hz, args.distance)

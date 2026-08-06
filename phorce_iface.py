@@ -41,7 +41,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Optional, Sequence
+from typing import Callable, Optional, Protocol, Sequence
 
 LOGGER = logging.getLogger("phorce_iface")
 
@@ -99,6 +99,27 @@ class JointState:
             out.append(axis.position_rad)
         return out
 
+    def velocities(self, indices: Sequence[int]) -> Optional[list[float]]:
+        """Velocities for ``indices``, or ``None`` if any is untrustworthy."""
+        return self._gather(indices, "velocity_rad_s")
+
+    def external_force(self, indices: Sequence[int]) -> Optional[list[float]]:
+        """Disturbance-observer estimate per axis -- "what is pushing on me".
+
+        DREAM-Chunk's collision-resistance term is built on this: it is the only
+        contact signal the participant API exposes, and it needs no extra sensor.
+        """
+        return self._gather(indices, "dob_a")
+
+    def _gather(self, indices: Sequence[int], attribute: str) -> Optional[list[float]]:
+        out: list[float] = []
+        for index in indices:
+            axis = self.by_index(index)
+            if axis is None or not axis.valid:
+                return None
+            out.append(float(getattr(axis, attribute)))
+        return out
+
     def age_s(self, now: Optional[float] = None) -> float:
         return (time.monotonic() if now is None else now) - self.ts
 
@@ -118,6 +139,26 @@ class PlayOutcome(Enum):
 
 
 PlayCallback = Callable[[int, PlayOutcome], None]
+
+
+class MockMotionModel(Protocol):
+    """How the mock robot should move while a slot is playing.
+
+    Supplied from outside so this module stays ignorant of the motion format:
+    ``phorce_iface`` is the hardware boundary, and teaching it about P-Vectors
+    would put the world model on the wrong side of that line.  ``main.py``
+    hands in an adapter over the chunk dictionary (see dream.ChunkMockModel).
+
+    Without one the mock free-runs on a synthetic drift, which is fine for
+    smoke-testing plumbing but useless for testing DREAM-Chunk -- the dream
+    would diverge constantly because nothing is following it.
+    """
+
+    def duration_s(self, slot_id: int) -> float: ...
+
+    def pose_at(
+        self, slot_id: int, start_rad: Sequence[float], elapsed_s: float
+    ) -> Optional[list[float]]: ...
 
 
 # --------------------------------------------------------------------------- #
@@ -256,6 +297,9 @@ class MockRobot(RobotInterface):
         reject_rate: float = 0.0,
         seed: int = 20260805,
         on_play_result: Optional[PlayCallback] = None,
+        jam_after_s: float = 0.0,
+        jam_axis: int = 0,
+        motion_model: Optional[MockMotionModel] = None,
     ) -> None:
         super().__init__(on_play_result)
         # 200 Hz, not 1 kHz: a mock does not need to burn a core to be useful.
@@ -263,9 +307,21 @@ class MockRobot(RobotInterface):
         self.feedback_hz = feedback_hz
         self.motion_duration_s = motion_duration_s
         self.reject_rate = reject_rate
+        # Obstacle simulation, for testing DREAM-Chunk with no robot: after
+        # jam_after_s, one axis stops moving and its disturbance observer reads
+        # a large external force -- exactly what a hand on the arm looks like.
+        self.jam_after_s = jam_after_s
+        self.jam_axis = jam_axis
+        self._jam_hold: Optional[float] = None
+        self.motion_model = motion_model
         self._rng = random.Random(seed)   # seeded -> reproducible runs
         self._thread: Optional[threading.Thread] = None
         self._t0 = 0.0
+        # What the mock is currently "executing", for motion_model playback.
+        self._active_slot: Optional[int] = None
+        self._active_t0: float = 0.0
+        self._active_start: Optional[list[float]] = None
+        self._drift: Optional[list[float]] = None  # last pose, for continuity
 
     def start(self) -> None:
         self._t0 = time.monotonic()
@@ -287,28 +343,60 @@ class MockRobot(RobotInterface):
             t = now - self._t0
             active = self.is_motion_active()
 
+            # With a motion model the mock is a digital twin: while a slot is
+            # playing it tracks that slot's real trajectory, so a dream of the
+            # same slot matches and only a genuine fault makes it diverge.
+            commanded: Optional[list[float]] = None
+            if self.motion_model is not None and active and self._active_slot is not None:
+                if self._active_start is not None:
+                    commanded = self.motion_model.pose_at(
+                        self._active_slot, self._active_start, now - self._active_t0,
+                    )
+
             states = []
             for slot, index in enumerate(self.axes):
-                # Slow drift per axis, phase-shifted so the axes are not clones.
-                phase = 0.7 * slot
-                base = 0.30 * math.sin(2.0 * math.pi * 0.05 * t + phase)
-                velocity = 0.30 * 2.0 * math.pi * 0.05 * math.cos(2.0 * math.pi * 0.05 * t + phase)
-                if active:
-                    # While "playing", the joints actually move a bit more.
-                    base += 0.15 * math.sin(2.0 * math.pi * 0.8 * t + phase)
-                    velocity += 0.15 * 2.0 * math.pi * 0.8 * math.cos(2.0 * math.pi * 0.8 * t + phase)
+                if commanded is not None and slot < len(commanded):
+                    base = commanded[slot]
+                    previous = self._drift[slot] if self._drift else base
+                    velocity = (base - previous) * self.feedback_hz
+                else:
+                    # Free-run: slow drift per axis, phase-shifted so the axes
+                    # are not clones.
+                    phase = 0.7 * slot
+                    base = 0.30 * math.sin(2.0 * math.pi * 0.05 * t + phase)
+                    velocity = 0.30 * 2.0 * math.pi * 0.05 * math.cos(
+                        2.0 * math.pi * 0.05 * t + phase)
+                    if active and self.motion_model is None:
+                        # While "playing", the joints actually move a bit more.
+                        base += 0.15 * math.sin(2.0 * math.pi * 0.8 * t + phase)
+                        velocity += 0.15 * 2.0 * math.pi * 0.8 * math.cos(
+                            2.0 * math.pi * 0.8 * t + phase)
                 noise = self._rng.gauss(0.0, 0.002)
+                position = base + noise
+                dob = self._rng.gauss(0.0, 0.03)
+
+                jammed = self.jam_after_s > 0.0 and t >= self.jam_after_s and index == self.jam_axis
+                if jammed:
+                    # Freeze where the obstacle caught it and report the force
+                    # the servo is now fighting.
+                    if self._jam_hold is None:
+                        self._jam_hold = position
+                    position = self._jam_hold + noise
+                    velocity = 0.0
+                    dob = 2.5 + self._rng.gauss(0.0, 0.05)
+
                 states.append(
                     AxisState(
                         index=index,
-                        position_rad=base + noise,
+                        position_rad=position,
                         velocity_rad_s=velocity,
                         current_a=0.4 + 0.2 * abs(velocity) + self._rng.gauss(0.0, 0.01),
-                        dob_a=self._rng.gauss(0.0, 0.03),
+                        dob_a=dob,
                         temp_c=35.0 + 2.0 * math.sin(2.0 * math.pi * 0.01 * t) + slot,
                         valid=True,
                     )
                 )
+            self._drift = [s.position_rad for s in states]
             self._store(JointState(axes=tuple(states), ts=now))
             time.sleep(period)
 
@@ -317,12 +405,28 @@ class MockRobot(RobotInterface):
             LOGGER.info("MOCK play(%d) -> rejected (simulated NOT_READY)", slot_id)
             return PlayOutcome.NEEDS_OPERATOR
 
-        LOGGER.info("MOCK play(%d) -> running for %.1fs", slot_id, self.motion_duration_s)
-        deadline = time.monotonic() + self.motion_duration_s
-        while time.monotonic() < deadline:
-            if self._closing.is_set():
-                return PlayOutcome.ERROR
-            time.sleep(0.02)
+        duration = self.motion_duration_s
+        if self.motion_model is not None:
+            duration = self.motion_model.duration_s(slot_id) or duration
+            # Launch from wherever the mock currently is, exactly as the real
+            # robot would -- that is what the dream is anchored on too.
+            state = self.latest()
+            self._active_start = (
+                state.positions(self.axes) if state is not None else [0.0] * len(self.axes)
+            ) or [0.0] * len(self.axes)
+            self._active_t0 = time.monotonic()
+            self._active_slot = slot_id
+
+        LOGGER.info("MOCK play(%d) -> running for %.1fs", slot_id, duration)
+        deadline = time.monotonic() + duration
+        try:
+            while time.monotonic() < deadline:
+                if self._closing.is_set():
+                    return PlayOutcome.ERROR
+                time.sleep(0.02)
+        finally:
+            self._active_slot = None
+            self._active_start = None
         return PlayOutcome.OK
 
 
@@ -340,7 +444,12 @@ class PhorceRobot(RobotInterface):
         self,
         target: str = "robot",
         axes: Sequence[int] = DEFAULT_AXES,
-        feedback_source: str = "facade",
+        # "rclpy", not "facade": the installed SDK's Robot exposes only
+        # close/doctor/play/play_async/status/motions.  robot.watch() appears in
+        # the older (RH_Guide_Angel) tutorial but does not exist in the shipped
+        # package -- calling it is an AttributeError at start().  Verified with
+        # `python3 -c "import phorce; print(dir(phorce.Robot))"` on the golden image.
+        feedback_source: str = "rclpy",
         on_play_result: Optional[PlayCallback] = None,
     ) -> None:
         super().__init__(on_play_result)
@@ -365,20 +474,30 @@ class PhorceRobot(RobotInterface):
         LOGGER.info("connected to phorce target=%s", self.target)
 
         try:
+            # Real Status fields (checked against the installed SDK): state_name,
+            # primary_state, physical_idle, recovery_required, contract_active,
+            # age_ms, is_fresh().  There is no ethercat_operational/estop_active
+            # here -- that spelling is from the older guide generation.
             status = self._robot.status()
-            LOGGER.info("ethercat_operational=%s estop_active=%s",
-                        status.ethercat_operational, status.estop_active)
-            if status.estop_active:
-                LOGGER.warning("E-Stop is ACTIVE -- nothing will move until it is released")
+            LOGGER.info("state=%s fresh=%s physical_idle=%s recovery_required=%s",
+                        status.state_name, status.is_fresh(),
+                        status.physical_idle, status.recovery_required)
+            if status.recovery_required:
+                LOGGER.warning("robot needs RECOVERY -- park with button 2, then hold "
+                               "the zero button (button 1) for 0.6s")
+            if not status.contract_active:
+                LOGGER.warning("motion contract is not active -- the robot will reject plays")
         except Exception:  # pragma: no cover - diagnostics only
             LOGGER.exception("status() failed (continuing anyway)")
 
-        if self.feedback_source == "rclpy":
-            self._start_rclpy_feedback()
-        else:
-            # The facade handles the QoS trap for us.
-            self._robot.watch(self._on_feedback)
-            LOGGER.info("feedback via phorce facade (robot.watch)")
+        if self.feedback_source == "facade":
+            # Kept only for a future SDK that grows a push API. Today there is
+            # none, so refuse loudly instead of dying on an AttributeError.
+            raise RuntimeError(
+                "feedback_source='facade' needs robot.watch(), which the installed "
+                "phorce SDK does not provide. Use feedback_source='rclpy'."
+            )
+        self._start_rclpy_feedback()
 
     def close(self) -> None:
         super().close()
@@ -496,7 +615,8 @@ def make_robot(mock: bool = True, **kwargs: object) -> RobotInterface:
     """
     if mock:
         allowed = {"axes", "feedback_hz", "motion_duration_s", "reject_rate",
-                   "seed", "on_play_result"}
+                   "seed", "on_play_result", "jam_after_s", "jam_axis",
+                   "motion_model"}
         return MockRobot(**{k: v for k, v in kwargs.items() if k in allowed})  # type: ignore[arg-type]
     allowed = {"target", "axes", "feedback_source", "on_play_result"}
     return PhorceRobot(**{k: v for k, v in kwargs.items() if k in allowed})  # type: ignore[arg-type]
