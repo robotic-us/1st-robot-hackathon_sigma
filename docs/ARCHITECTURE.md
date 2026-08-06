@@ -9,14 +9,16 @@ reversibly, when that default may be broken.
 ## The live loop
 
 ```
-                 SENSING (one of two modes)
-  ┌──────────────────────────────┬──────────────────────────────┐
-  │ state cards (default/sim)    │ --sense (real testing)       │
-  │ perception/tag.py            │ perception/face/ + listen.py │
-  │ tag_0 calm · tag_1 fuss ·    │ YuNet→FER+ face distress     │
-  │ tag_2 cry; motion ignored    │ ⊕ mic cry-band (noisy-OR)    │
-  └──────────────┬───────────────┴──────────────┬───────────────┘
-                 └────────── present, level 0..1┘
+                 SENSING (one of three modes)
+  ┌──────────────────────┬──────────────────────┬──────────────────────┐
+  │ state cards          │ --sense (real)       │ --baby (closed loop) │
+  │ perception/tag.py    │ face/ + listen.py    │ perception/baby.py   │
+  │ tag_0 calm · tag_1   │ YuNet→FER+ distress  │ random infant state; │
+  │ fuss · tag_2 cry;    │ ⊕ mic cry-band       │ the engine's sway    │
+  │ motion ignored       │ (noisy-OR)           │ feeds back as        │
+  │                      │                      │ soothing             │
+  └──────────┬───────────┴──────────┬───────────┴──────────┬───────────┘
+             └───────────── present, level 0..1 ───────────┘
                                 │
                     CradleMachine  (core/cradle.py, report §5)
         gate_fail > pain > stable_sleep > quiet_awake > cry trial
@@ -111,6 +113,7 @@ monitoring substrate; the report's machine owns default automatic behaviour.
 | pvector | quintic boundary conditions, MotionMap parsing |
 | dream | matcher ranking, veto, divergence monitor |
 | cradle | library gate, engine ramps, the whole safety ladder on a fake clock |
+| baby | virtual infant dynamics; 20 sim-minutes of closed loop baby↔machine↔engine |
 | m50 | 50 compiled slots round-trip within envelope, end at rest |
 | demo | DREAM decide/jam/preempt cycle |
 | serve | every HTTP endpoint against a live server, card→trial end-to-end |

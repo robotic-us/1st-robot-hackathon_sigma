@@ -22,6 +22,7 @@
 ```bash
 python3 tests.py                         # 전체 셀프테스트 (10개 스위트, ~30초)
 python3 serve.py --fake                  # 카메라 없이: 합성 상태 카드 시나리오
+python3 serve.py --baby                  # 카메라 없이: 가상 영아 폐루프 (원 = 상태)
 python3 serve.py                         # 웹캠 + 태그 상태 카드 (tag_0/1/2)
 python3 serve.py --sense                 # 실전: 얼굴 감정 + 마이크가 상태를 판정
 python3 tools/fetch_models.py            # --sense용 ONNX 모델 3종 (최초 1회)
@@ -47,11 +48,13 @@ phorce play 12 --target sim:demo         # M12 = ML 0.5 Hz A10 재생
 | `core/slot_table.py` · `core/phorce_iface.py` | 슬롯 표 · phorce/ROS 2 어댑터 |
 | `perception/tag.py` | AprilTag **상태 카드** (tag_0 평온 / tag_1 칭얼 / tag_2 울음) |
 | `perception/sense.py` · `perception/listen.py` | 얼굴+소리 → distress 0..1 |
+| `perception/baby.py` | 가상 영아: 랜덤 상태 프로세스, 흔들림에 실제로 달래짐 |
 | `perception/face/` | 얼굴 검출(YuNet) · 인식(SFace) · 감정(FER+) |
-| `apps/` | demo(DREAM 시연) · care(구 진입점) · run(얼굴 데모) · animate(RViz) |
+| `apps/` | demo(DREAM 시연) · care(구 진입점) · run(얼굴 데모) · animate(RViz 재생, `--tour`가 M 라이브러리를 실제로 돌림) |
 | `tools/` | make_motions(--library) · make_urdf · fetch_models · enroll |
 | `motions_m50/` | M01–M50을 pcm 슬롯으로 컴파일한 것 (`./sim.sh`가 기본 사용) |
 | `web/` · `cad/` | 대시보드 · URDF/메시(RViz) |
+| `webapp/` | 같은 대시보드의 Next.js 판. `serve.py`의 **클라이언트**일 뿐, 대체가 아님(Node 필요) |
 
 **`docs/`** — 대회 제공 자료(`RH_Guide*`)와 우리 설계 문서.
 

@@ -482,6 +482,56 @@ def test_cradle() -> None:
 # --------------------------------------------------------------------------- #
 # apps + server
 # --------------------------------------------------------------------------- #
+def test_baby() -> None:
+    """The virtual infant: seeded dynamics, soothing response, closed loop."""
+    from core.cradle import CradleMachine, MotionEngine
+    from perception.baby import BabyReading, VirtualBaby, baby_frame
+
+    baby = VirtualBaby(seed=7)
+    reading = baby.update(0.0)
+    frame = baby_frame(reading, (0.0, 5.0, 0.0))
+    assert frame.shape == (480, 640, 3) and reading.emotion in (
+        "SLEEP", "CALM", "FUSS", "CRY")
+    hidden = baby_frame(BabyReading(False, 0, 0, 0, 0.5, "CRY"))
+    assert hidden.shape == (480, 640, 3)
+    print(f"  render       circle frame draws, starts {reading.emotion}  -- ok")
+
+    # A soothable cry yields to full sway; a hunger cry never does.
+    def cry_under_sway(soothable: bool, seconds: float) -> str:
+        b = VirtualBaby(seed=11)
+        b.state, b.soothable, b._until = "CRY", soothable, 1e9
+        t = 0.0
+        while t < seconds and b.state == "CRY":
+            t += 1.0 / 30.0
+            b.update(t, soothing=1.0)
+        return b.state
+
+    assert cry_under_sway(True, 90.0) != "CRY", "a soothable cry must step down"
+    assert cry_under_sway(False, 120.0) == "CRY", "a hunger cry must not"
+    print("  soothing     soothable cry steps down under sway, hunger holds  -- ok")
+
+    # Closed loop, 20 simulated minutes: baby -> machine -> engine -> baby.
+    engine = MotionEngine()
+    box = CradleMachine(engine)
+    baby = VirtualBaby(seed=3)
+    events, t = [], 0.0
+    while t < 1200.0:
+        t += 1.0 / 15.0
+        r = baby.update(t, soothing=engine.env * engine.amp_scale)
+        box.tick(t, r.present, r.distress, jam=False)
+        engine.tick(t)
+        events += box.events
+        box.events.clear()
+        if engine.active:
+            snap = engine.snapshot()
+            assert snap["a_peak_g"] <= 0.051, "envelope must hold under the baby"
+    trials = sum("cry trial" in e for e in events)
+    assert trials >= 1, f"20 min of infant life must open a trial: {events[:5]}"
+    assert box.state in ("quiet", "trial", "settling", "gate_fail")
+    print(f"  closed loop  20 sim-minutes: {trials} trials, "
+          f"{sum('ALERT' in e for e in events)} alerts, ends {box.state}  -- ok")
+
+
 def test_m50() -> None:
     """Compile M01-M50 to pcm slots, then dream every one back and check it."""
     import contextlib
@@ -505,23 +555,31 @@ def test_m50() -> None:
     assert sorted(chunks) == list(range(1, 51)), "slot ids must be 1..50"
     print("  compile      50 files, MS ID 1..50, 4 axes each  -- ok")
 
-    lever = float(PIVOT[2] - AXIS0[2])
-    theta10 = 0.010 / lever          # one-way A=10 mm as arm radians
+    # The four cranks do NOT share a magnitude: the linkage is asymmetric, so
+    # 10 mm of sway costs each one a different angle.  Check the compiled slot
+    # against the kinematics rather than against a single-lever approximation.
+    from apps.demo import axis_angles
+
+    want10 = [abs(v) for v in axis_angles(sway_mm=10.0)]
+    hard = max(abs(v)
+               for chan in ("sway_mm", "heave_mm", "pitch_mm")
+               for v in axis_angles(**{chan: 30.0}))   # report's 30 mm cap
 
     m12 = chunks[12]
     assert m12.name == "ML_SINE_0.5HZ_A10" and len(m12.programs) == 4
     _, y = m12.dream([0.0] * 4, dt=0.02)
-    peak = float(np.abs(y[:, 0]).max())
-    assert abs(peak - theta10) < 0.05 * theta10, \
-        f"M12 must sway {theta10:.4f} rad, dreams {peak:.4f}"
-    assert np.allclose(y[:, 0], y[:, 1]), "the parallelogram: all axes equal"
+    peaks = [float(np.abs(y[:, i]).max()) for i in range(4)]
+    for i, (got, exp) in enumerate(zip(peaks, want10)):
+        assert abs(got - exp) < 0.06 * max(exp, 1e-9), \
+            f"M12 crank {i}: expected {exp:.4f} rad for 10 mm of sway, got {got:.4f}"
+    assert y[:, 0].dot(y[:, 1]) > 0, "ML sways: the pair turns the same way"
     early = float(np.abs(y[: len(y) // 5, 0]).max())
-    assert early < 0.75 * peak, "the 5 s soft start must show in the dream"
+    assert early < 0.75 * peaks[0], "the 5 s soft start must show in the dream"
     _, y16 = chunks[16].dream([0.0] * 4, dt=0.02)
-    assert abs(float(np.abs(y16[:, 0]).max()) - 2 * theta10) < 0.1 * theta10
-    print(f"  M12          peak {peak:.4f} rad (= 10 mm), ramped, M16 doubles it  -- ok")
+    assert abs(float(np.abs(y16[:, 0]).max()) - 2 * peaks[0]) < 0.12 * peaks[0]
+    print(f"  M12          cranks {[round(math.degrees(v),2) for v in peaks]} deg "
+          f"for 10 mm, ramped, M16 doubles it  -- ok")
 
-    hard = 0.030 / lever             # the report's 30 mm hard amplitude cap
     for slot_id, chunk in chunks.items():
         _, yy = chunk.dream([0.0] * 4, dt=0.05)
         assert float(np.abs(yy).max()) <= hard + 1e-6, f"slot {slot_id} over envelope"
@@ -530,6 +588,56 @@ def test_m50() -> None:
     assert float(np.abs(y01).max()) < 1e-9, "M01 STATIC_SAFE must stay flat"
     assert chunks[7].duration_s > 120, "M07 must carry its 120 s taper"
     print("  envelope     every slot under the 30 mm cap, ends at rest  -- ok")
+
+    # -- the three channels --------------------------------------------------- #
+    # The rig is two five-bar linkages (see apps/demo.py): all four cranks the
+    # same way sways the plate, a pair's two cranks opposed lifts it, and pair
+    # against pair pitches it.  Every slot used to write one command to all four
+    # rows, which made M19-M28 byte-identical to M09-M18 and compiled the Z modes
+    # to flat zeros on the false premise that the rig has no vertical DOF.
+    from apps.demo import PAIR_A, PAIR_B
+
+    def signs(chunk):
+        _, yy = chunk.dream([0.0] * 4, dt=0.05)
+        j = int(np.abs(yy).sum(axis=1).argmax())      # the instant of most travel
+        return yy[j], yy
+
+    # ML sways: within a pair the two cranks turn the SAME way.  They do not
+    # share a magnitude -- the linkage is not symmetric -- so this checks sign,
+    # which is what "the arms swing together" actually means.
+    for ml_id in range(9, 19):
+        row, _ = signs(chunks[ml_id])
+        assert row[PAIR_A[0]] * row[PAIR_A[1]] > 0 and row[PAIR_B[0]] * row[PAIR_B[1]] > 0, \
+            f"M{ml_id:02d} is ML: each pair must turn the same way"
+
+    # AP has no axis to translate on, so it rides pitch: each pair opposes itself.
+    for ap_id in range(19, 29):
+        row, yy = signs(chunks[ap_id])
+        assert row[PAIR_A[0]] * row[PAIR_A[1]] < 0, \
+            f"M{ap_id:02d} is AP: pair A must counter-rotate, not copy ML"
+        assert float(np.abs(yy).max()) > 1e-3, f"M{ap_id:02d} must actually move"
+    print("  channels     M09-M18 sway together, M19-M28 counter-rotate  -- ok")
+
+    # The regression that mattered most: Z is real on this rig, and M48-M50 used
+    # to compile to a single flat zero cell.
+    for z_id in (48, 49, 50):
+        row, yy = signs(chunks[z_id])
+        assert float(np.abs(yy).max()) > 1e-3, \
+            f"M{z_id} is a Z mode and must move -- the rig does have a vertical DOF"
+        assert row[PAIR_A[0]] * row[PAIR_A[1]] < 0 and row[PAIR_B[0]] * row[PAIR_B[1]] < 0, \
+            f"M{z_id}: heave is both pairs counter-rotating"
+    print("  vertical     M48-M50 lift the plate (pairs opposed), not flat  -- ok")
+
+    flat = [sid for sid, c in chunks.items()
+            if float(np.abs(c.dream([0.0] * 4, dt=0.05)[1]).max()) < 1e-9]
+    assert flat == [1, 2], f"only STATIC and PAUSE should be flat, got {flat}"
+    # "Opposed at any instant", which is what using the channel means -- at a
+    # zero crossing both cranks read ~0 and the peak-instant sign says nothing.
+    opposed = sum(1 for c in chunks.values()
+                  if float((signs(c)[1][:, PAIR_A[0]]
+                            * signs(c)[1][:, PAIR_A[1]]).min()) < -1e-12)
+    assert opposed >= 17, f"only {opposed} slots use the opposed channel"
+    print(f"  coverage     {opposed}/50 slots counter-rotate, only M01/M02 flat  -- ok")
 
 
 def test_demo() -> None:
@@ -620,7 +728,12 @@ def test_serve() -> None:
     try:
         page = urlopen(base + "/", timeout=5).read()
         assert b"DREAM-Chunk" in page, "dashboard page must serve"
-        print(f"  GET /        {len(page)} bytes  -- ok")
+        # The library selector is built from /motions at runtime, so the page
+        # can only be checked for its mount points and its one fetch.
+        for hook in (b'id="motions"', b'id="mfilter"', b'id="mmsg"',
+                     b'fetch("/motions")', b'"/motion?id=" + cell.dataset.id'):
+            assert hook in page, f"the M01-M50 selector lost {hook!r}"
+        print(f"  GET /        {len(page)} bytes, library selector wired  -- ok")
 
         slots = json.loads(urlopen(base + "/slots", timeout=5).read())
         assert len(slots) == 10 and slots[0]["id"] == 1, f"expected 10 slots, got {len(slots)}"
@@ -707,6 +820,227 @@ def test_serve() -> None:
         server.shutdown()
 
 
+def test_animate() -> None:
+    """The RViz player's rocking motion: one DOF, honest rate, capped angle."""
+    import apps.animate as animate
+    from apps.animate import MM_PER_DEG, ROCK_DEG, ROCK_HZ, sway_state
+    from apps.demo import JOINT_NAMES, RosSide, joint_state
+    from core.cradle import LIBRARY
+
+    # Both publishers must share the one JOINT_NAMES list and it must name the
+    # URDF's revolute joints exactly.  A stale local copy is how RViz broke
+    # after the tree was re-rooted: joint_axis_1/2/3 were published (they no
+    # longer exist) and joint_bearing_1/2/3 never were, so three arms had no TF.
+    import xml.etree.ElementTree as ET
+    urdf_rev = {j.get("name")
+                for j in ET.parse("cad/sigma.urdf").getroot().findall("joint")
+                if j.get("type") == "revolute"}
+    assert set(JOINT_NAMES) == urdf_rev, (
+        f"publishers and URDF disagree: only in code {set(JOINT_NAMES) - urdf_rev}, "
+        f"only in URDF {urdf_rev - set(JOINT_NAMES)}")
+    assert animate.JOINTS is JOINT_NAMES and RosSide.JOINTS is JOINT_NAMES, \
+        "both publishers must share apps.demo.JOINT_NAMES, not carry copies"
+    print(f"  publishers     one JOINT_NAMES list, matches the URDF's "
+          f"{len(urdf_rev)} revolute joints  -- ok")
+
+    # --rock is a screen sine on the sway channel, solved through the linkage
+    # so even the exaggerated modes keep every arm on the holder.
+    assert sway_state(ROCK_DEG, 0.0) == joint_state(), "must start at rest"
+    want = joint_state(sway_mm=ROCK_DEG * MM_PER_DEG)
+    got = sway_state(ROCK_DEG, math.pi / 2.0)
+    assert all(abs(a - b) < 1e-12 for a, b in zip(got, want)), \
+        "the rock peak must be the solved sway pose, not scaled joints"
+    assert len(got) == len(JOINT_NAMES), "rock must publish every joint"
+    print(f"  --rock         {ROCK_HZ} Hz sine over the sway channel, "
+          f"all {len(got)} joints  -- ok")
+
+    # The default rate must stay inside what the real library can actually do.
+    # Amplitude is deliberately exaggerated for the screen; rate is not.
+    # --rock is a screen animation and is allowed to outrun the hardware; what
+    # must hold is that it stays a screen animation.  The library-driven modes
+    # are where the real rates live, and those are checked below.
+    fastest = max(m.f_hz for m in LIBRARY if m.f_hz)
+    assert 0 < ROCK_HZ and 0 < ROCK_DEG <= 45.0, \
+        f"--rock defaults out of display range: {ROCK_HZ} Hz, {ROCK_DEG} deg"
+    print(f"  rate           {ROCK_HZ} Hz display-only (hardware tops at "
+          f"{fastest} Hz)  -- ok")
+
+    # -- the --tour script, walked through the real engine, no ROS ---------- #
+    from apps.animate import (LEVER_M, TOUR, TOUR_DWELL_S, TOUR_END,
+                              TOUR_RESEARCH, VIZ_GAIN, library_angles)
+    from core.cradle import LIBRARY_BY_ID, MotionEngine
+
+    every = TOUR + TOUR_RESEARCH + (TOUR_END,)
+    unknown = [mid for mid in every if mid not in LIBRARY_BY_ID]
+    assert not unknown, f"--tour names motions that do not exist: {unknown}"
+    research = [mid for mid in TOUR + (TOUR_END,)
+                if LIBRARY_BY_ID[mid].grade == "R"]
+    assert not research, f"--tour must not default to R-grade entries: {research}"
+    assert all(LIBRARY_BY_ID[mid].grade == "R" for mid in TOUR_RESEARCH), \
+        "TOUR_RESEARCH should hold only the entries that need --research"
+
+    default_ids = TOUR + (TOUR_END,)
+    script = tuple((mid, TOUR_DWELL_S) for mid in default_ids)
+    engine = MotionEngine()
+    seen, angles = [], []
+    peaks: dict[str, float] = {}
+    # library_angles yields a full URDF joint state -- 4 cranks, 4 knees, the
+    # bearing -- measured from the *export* pose, which is not the neutral one.
+    # Amplitude therefore means the crank's travel away from neutral, not its
+    # raw joint value, and the passive knees are not what the envelope bounds.
+    from apps.demo import cradle_cranks, joint_state
+    for motion_id, arms, note in library_angles(engine, script,
+                                                solve=cradle_cranks):
+        widest = max(abs(v) for v in arms)
+        angles.append(widest)
+        peaks[motion_id] = max(peaks.get(motion_id, 0.0), widest)
+        if note:
+            seen.append(motion_id)
+    assert seen == list(default_ids), f"every entry must be commanded, got {seen}"
+
+    # Amplitude is exaggerated by the display gain and by nothing else.  Gain
+    # multiplies the *plate travel*, so the ceiling has to be solved at the
+    # exaggerated travel -- 5x of 20 mm is not 5x the crank angle, because the
+    # linkage is nonlinear.  Taken over every channel the tour uses and both
+    # directions: pitch costs more angle per millimetre than sway, and -20 mm
+    # costs more than +20 mm.
+    from apps.demo import axis_angles as _aa
+    ceiling = max(abs(v)
+                  for chan in ("sway_mm", "heave_mm", "pitch_mm")
+                  for sgn in (+1.0, -1.0)
+                  for v in _aa(**{chan: sgn * VIZ_GAIN * 20.0}))
+    peak = max(abs(a) for a in angles)
+    assert peak <= ceiling + 1e-6, \
+        f"tour peaks at {math.degrees(peak):.1f} deg, over {math.degrees(ceiling):.1f}"
+    assert abs(angles[-1]) < math.radians(0.5), \
+        f"the tour must end at rest, ended at {math.degrees(angles[-1]):.2f} deg"
+    print(f"  tour           {len(default_ids)} entries, peak "
+          f"{math.degrees(peak):.1f} deg, ends at rest  -- ok")
+
+    # What the player publishes has to use the real channels, or RViz and the
+    # rig show the same sway for everything.  This is the regression that
+    # survived the compiler fix twice: the CSVs were right while the live path
+    # still summed the offsets into one angle for all four cranks.
+    from apps.demo import PAIR_A, PAIR_B
+
+    def walk(mid: str) -> list[list[float]]:
+        """The four crank angles -- joint_state interleaves knees and bearings,
+        so its first four entries are not the cranks."""
+        eng = MotionEngine(allow_research=True)
+        return [arms for _, arms, _ in library_angles(eng, ((mid, 14.0),), 1.0,
+                                                      solve=cradle_cranks)]
+
+    for _, arms, _ in library_angles(MotionEngine(), (("M12", 1.0),), 1.0):
+        assert len(arms) == 9, \
+            f"the publisher must emit all 9 URDF joints, got {len(arms)}"
+        break
+    ml = walk("M12")
+    assert all(a[PAIR_A[0]] * a[PAIR_A[1]] >= -1e-12 for a in ml), \
+        "M12 is ML: pair A must sway together"
+    ap = walk("M22")
+    assert min(a[PAIR_A[0]] * a[PAIR_A[1]] for a in ap) < -1e-9, \
+        "M22 is AP: pair A must counter-rotate, not copy ML"
+    assert max(abs(a[PAIR_A[0]]) for a in ap) > math.radians(1.0), \
+        "M22 must actually move"
+    # Z is real on this rig and used to publish nothing at all.
+    z = walk("M49")
+    assert max(abs(v) for a in z for v in a) > math.radians(0.3), \
+        "M49 is a Z mode: the live path must lift the plate, not sit still"
+    assert min(a[PAIR_B[0]] * a[PAIR_B[1]] for a in z) < -1e-9, \
+        "heave is the pair counter-rotating"
+    print("  channels       ML sways, AP pitches, Z lifts -- all four cranks  -- ok")
+
+    # The bug this suite missed for four rounds.  Every upper arm carries the
+    # holder in hardware, but the URDF joined only upper_0 to it and welded the
+    # knees, so three arms hung off nothing.  The tree now runs
+    # base -> axis_0 -> lower_0 -> upper_0 -> platform -> upper_1/2/3 -> ...,
+    # which puts every upper arm on the holder and moves the open end to the
+    # actuators -- and those are bolted down, so closure means each one lands
+    # back on its own pivot.  Walk the published joints through the real URDF,
+    # exactly as robot_state_publisher does, and check that.
+    import xml.etree.ElementTree as ET
+
+    import numpy as np
+
+    from apps.demo import JOINT_NAMES, joint_state
+
+    tree = ET.parse("cad/sigma.urdf").getroot()
+    chain = {}
+    for j in tree.findall("joint"):
+        xyz = [float(v) * 1000.0 for v in j.find("origin").get("xyz").split()]
+        chain[j.find("child").get("link")] = (j.get("name"),
+                                              j.find("parent").get("link"), xyz)
+
+    def world(link, vals):
+        """Frame of `link` in the XZ plane -- every joint on this rig is about Y."""
+        if link == "base_link":
+            return np.eye(3)
+        name, parent, o = chain[link]
+        a = vals.get(name, 0.0)
+        c, s = math.cos(a), math.sin(a)
+        return world(parent, vals) @ np.array([[c, s, o[0]], [-s, c, o[2]], [0, 0, 1]])
+
+    pivots = {1: (60.0, 56.0), 2: (260.0, 56.0), 3: (260.0, 56.0)}
+    worst = 0.0
+    for sway, heave, pitch in ((0, 0, 0), (15, 0, 0), (-12, 0, 0), (0, 10, 0),
+                               (0, -8, 0), (0, 0, 8), (0, 0, -6), (6, -5, 4)):
+        vals = dict(zip(JOINT_NAMES,
+                        joint_state(sway_mm=sway, heave_mm=heave, pitch_mm=pitch)))
+        assert len(vals) == 9, "every joint must be published, or an arm detaches"
+        for leg, pivot in pivots.items():
+            m = world(f"axis_{leg}", vals)
+            off = math.dist((m[0, 2], m[1, 2]), pivot)
+            worst = max(worst, off)
+            assert off < 0.05, (
+                f"leg {leg}'s actuator is {off:.3f} mm off its pivot at "
+                f"sway={sway} heave={heave} pitch={pitch} -- the linkage has "
+                "come apart; every upper arm must stay on the holder")
+    print(f"  linkage       every arm on the holder, actuators home to "
+          f"{worst:.3f} mm  -- ok")
+
+    # The point of --tour is variety, so prove it is not one sine relabelled:
+    # the entries must differ in rate and in reach, not merely in name.
+    rates = {LIBRARY_BY_ID[mid].f_hz for mid in TOUR if LIBRARY_BY_ID[mid].f_hz}
+    # whole degrees: 25.1 and 25.3 are one amplitude sampled at two phases,
+    # not two levels, and counting them separately would flatter the tour
+    reach = {round(math.degrees(v)) for v in peaks.values() if v > 1e-3}
+    assert len(rates) >= 7, f"only {len(rates)} distinct rates in the tour: {rates}"
+    assert len(reach) >= 3, f"only {len(reach)} distinct amplitudes: {sorted(reach)}"
+    print(f"  variety        {len(rates)} rates {min(rates)}-{max(rates)} Hz, "
+          f"{len(reach)} reaches {sorted(reach)} deg  -- ok")
+
+    # The complaint that produced this tour was dead air between entries, so
+    # guard against it coming back: everything except a deliberate taper has to
+    # visibly move inside its slot.  4 deg is the bar because M08's half
+    # amplitude lands at ~6 deg and must pass, while M03 -- whose ramp the
+    # library fixes at 30 s -- only reaches ~3.3 deg in a 10 s dwell, which is
+    # exactly why it is not in the tour.
+    quiet = {"taper", "pause", "static"}
+    floor = math.radians(4.0)
+    dead = [mid for mid in TOUR
+            if LIBRARY_BY_ID[mid].kind not in quiet and peaks.get(mid, 0) < floor]
+    assert not dead, f"entries that barely move in a {TOUR_DWELL_S:.0f} s slot: {dead}"
+    print(f"  no dead air    every moving entry clears 4 deg in "
+          f"{TOUR_DWELL_S:.0f} s  -- ok")
+
+    # --research adds shapes, not duplicates: on one horizontal DOF several
+    # library entries render as a flat zero or as a copy of another, so the
+    # research list must earn its place by actually moving and by reaching
+    # somewhere the default tour does not.
+    reng = MotionEngine(allow_research=True)
+    rpeaks: dict[str, float] = {}
+    for motion_id, arms, _ in library_angles(
+            reng, tuple((mid, TOUR_DWELL_S) for mid in TOUR_RESEARCH)):
+        rpeaks[motion_id] = max(rpeaks.get(motion_id, 0.0),
+                                max(abs(v) for v in arms))
+    flat = [mid for mid, v in rpeaks.items() if v < floor]
+    assert not flat, f"research entries that render as nothing: {flat}"
+    fresh = {round(math.degrees(v)) for v in rpeaks.values()} - reach
+    assert len(fresh) >= 3, f"research adds too few new reaches: {sorted(fresh)}"
+    print(f"  --research     {len(TOUR_RESEARCH)} shapes, all move, "
+          f"{len(fresh)} new reaches  -- ok")
+
+
 # --------------------------------------------------------------------------- #
 SUITES = {
     "listen": test_listen,
@@ -716,8 +1050,10 @@ SUITES = {
     "pvector": test_pvector,
     "dream": test_dream,
     "cradle": test_cradle,
+    "baby": test_baby,
     "m50": test_m50,
     "demo": test_demo,
+    "animate": test_animate,
     "serve": test_serve,
 }
 

@@ -64,8 +64,25 @@ FASTENER_VOL_CM3 = 15.0           # below this it is a bolt/bearing/washer, not 
 PARENT: dict[str, str] = {}
 
 # Links that rotate. The joint sits at the actuator's centre, about its thin axis.
-REVOLUTE = {"axis_0", "axis_1", "axis_2", "axis_3"}
-PLATFORM = "platform"   # the coupler enters the tree through the axis_0 lap
+# Every joint on this rig turns about Y.  The table below is keyed by CHILD
+# link and gives the joint name -- which also decides revolute vs fixed: a link
+# absent from it gets a fixed joint.
+#
+# The knee (crank meets rod) used to be welded, and only upper_0 reached the
+# holder, so each leg was one rigid arm and three of the four top bearings
+# joined nothing.  Both are real pins, and both are joints now.
+JOINT_NAME = {
+    "axis_0": "joint_axis_0",            # the only actuator still on the base
+    "upper_0": "joint_knee_0",           # leg 0 runs UP to the holder
+    "platform": "joint_platform",        # ...and carries it
+    "upper_1": "joint_bearing_1",        # legs 1-3 hang DOWN from the holder,
+    "upper_2": "joint_bearing_2",        # so every upper arm is joined to it
+    "upper_3": "joint_bearing_3",
+    "lower_1": "joint_knee_1",
+    "lower_2": "joint_knee_2",
+    "lower_3": "joint_knee_3",
+}
+PLATFORM = "platform"
 PLATFORM_JOINT = "joint_platform"
 FRAME_OVERRIDE: dict[str, "np.ndarray"] = {}   # filled in build(): bearing centre
 
@@ -197,38 +214,77 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
     assert len(uppers) == 4 and len(lowers) == 4, \
         f"expected 4 arms, found {len(uppers)} uppers / {len(lowers)} lowers"
 
-    PARENT.clear()
-    for i in range(4):
-        PARENT[f"axis_{i}"] = "base_link"
+    # Name the arms first: each lower laps exactly one upper, and stands on the
+    # actuator column nearest it in plan view.
     for lower in lowers:
         upper = next(u for u in uppers
                      if contact_points(lower.tri, u.tri) is not None)
-        # The arm stands on the actuator column it is nearest in plan view.
         axis = min(actuators,
                    key=lambda a: np.linalg.norm(a.centre[:2] - lower.centre[:2]))
         i = axis.name[-1]
         lower.name, upper.name = f"lower_{i}", f"upper_{i}"
-        PARENT[lower.name] = axis.name
-        PARENT[upper.name] = lower.name
     for disc in discs:
         axis = min(actuators,
                    key=lambda a: np.linalg.norm(a.centre - disc.centre))
         disc.name = f"disc_{axis.name[-1]}"
-        PARENT[disc.name] = axis.name
-    PARENT[PLATFORM] = "upper_0"   # <- the passive bearing (joint_platform)
+
+    # The tree.  A URDF is a tree, so the holder can have exactly one parent --
+    # but every upper arm carries it in hardware, and a model where three of
+    # them join nothing is not the machine.  So leg 0 runs up to the holder and
+    # legs 1-3 hang DOWN from it:
+    #
+    #   base_link - axis_0 - lower_0 - upper_0 -+
+    #                                           +- platform (the holder)
+    #               axis_1 - lower_1 - upper_1 -+
+    #               axis_2 - lower_2 - upper_2 -+
+    #               axis_3 - lower_3 - upper_3 -+
+    #
+    # Every upper arm is now joined to the holder, which is the connection that
+    # has to hold. The open end moves to the actuators -- and those are bolted
+    # to the base, so with the angles solved they land back on their pivots.
+    PARENT.clear()
+    PARENT["axis_0"] = "base_link"
+    PARENT["lower_0"] = "axis_0"
+    PARENT["upper_0"] = "lower_0"
+    PARENT[PLATFORM] = "upper_0"
+    for i in (1, 2, 3):
+        PARENT[f"upper_{i}"] = PLATFORM        # <- joined to the holder
+        PARENT[f"lower_{i}"] = f"upper_{i}"
+        PARENT[f"axis_{i}"] = f"lower_{i}"
+    for disc in discs:
+        PARENT[disc.name] = f"axis_{disc.name[-1]}"
 
     # Everything each link owns: its own shell + merged fasteners.
     by_name = {p.name: p for p in big}
     combined_tri = {p.name: np.concatenate([p.tri] + [s.tri for s in merged[p.index]])
                     for p in big}
 
-    # The bearing: the 6807ZZ sits in the lap where upper_0 meets the
-    # platform.  Pivot = that lap's contact centroid, computed from the mesh.
-    near = contact_points(combined_tri["upper_0"], combined_tri[PLATFORM])
-    assert near is not None, "upper_0 must lap the platform"
-    FRAME_OVERRIDE[PLATFORM] = near.mean(axis=0)
-    print(f"bearing (upper_0 / platform lap) at "
-          f"{np.round(FRAME_OVERRIDE[PLATFORM], 1)} mm\n")
+    # Every pin, measured from the meshes.  Each link's frame sits on the joint
+    # that attaches it to its parent, which is what makes the tree above work:
+    # leg 0's rod is framed on its knee (it hangs off the crank), while legs
+    # 1-3's rods are framed on their bearings (they hang off the holder).
+    knee, bearing = {}, {}
+    for i in range(4):
+        lap = contact_points(combined_tri[f"lower_{i}"], combined_tri[f"upper_{i}"])
+        assert lap is not None, f"lower_{i} must lap upper_{i}"
+        knee[i] = lap.mean(axis=0)
+        lap = contact_points(combined_tri[f"upper_{i}"], combined_tri[PLATFORM])
+        assert lap is not None, f"upper_{i} must lap the platform"
+        bearing[i] = lap.mean(axis=0)
+        print(f"leg {i}: knee {np.round(knee[i], 1)}  "
+              f"bearing {np.round(bearing[i], 1)} mm")
+
+    # Every actuator is framed on its own axis of rotation, including the three
+    # that now hang off the holder -- otherwise they inherit the knee's frame,
+    # which sits a whole crank length away and makes any closure check nonsense.
+    for i in range(4):
+        FRAME_OVERRIDE[f"axis_{i}"] = by_name[f"axis_{i}"].centre
+    FRAME_OVERRIDE["upper_0"] = knee[0]        # leg 0 runs up: framed on the knee
+    FRAME_OVERRIDE[PLATFORM] = bearing[0]      # the holder enters through leg 0
+    for i in (1, 2, 3):
+        FRAME_OVERRIDE[f"upper_{i}"] = bearing[i]   # framed where it meets the holder
+        FRAME_OVERRIDE[f"lower_{i}"] = knee[i]
+    print()
 
     print(f"{len(parts)} rigid bodies -> {len(big)} links "
           f"({len(small)} fasteners merged in)\n")
@@ -273,8 +329,6 @@ def frame_origin(part, by_name):
     """
     if part.name in FRAME_OVERRIDE:
         return FRAME_OVERRIDE[part.name]
-    if part.name in REVOLUTE:
-        return part.centre
     parent = PARENT.get(part.name)
     return frame_origin(by_name[parent], by_name) if parent else np.zeros(3)
 
@@ -309,13 +363,9 @@ def render_urdf(parts: list[Part], base: Part) -> str:
         origin = (frame_origin(p, by_name) - frame_origin(parent, by_name)) * MM_TO_M
         xyz = f'{origin[0]:.6f} {origin[1]:.6f} {origin[2]:.6f}'
 
-        if p.name in REVOLUTE or p.name == PLATFORM:
-            if p.name == PLATFORM:
-                jname, axis = PLATFORM_JOINT, np.array([0.0, 1.0, 0.0])
-            else:
-                jname = f"joint_{p.name}"
-                axis = np.zeros(3)
-                axis[thin_axis(p.size)] = 1.0
+        if p.name in JOINT_NAME:
+            jname = JOINT_NAME[p.name]
+            axis = np.array([0.0, 1.0, 0.0])   # every pin on this rig is about Y
             out += [
                 f'  <joint name="{jname}" type="revolute">',
                 f'    <parent link="{parent_name}"/>',

@@ -26,7 +26,7 @@
 
   <link name="upper_2">
     <visual>
-      <origin xyz="-0.260000 -0.107000 -0.056000" rpy="0 0 0"/>
+      <origin xyz="-0.233039 -0.074737 -0.316583" rpy="0 0 0"/>
       <geometry>
         <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/upper_2.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -36,7 +36,7 @@
 
   <link name="upper_1">
     <visual>
-      <origin xyz="-0.060000 -0.183000 -0.056000" rpy="0 0 0"/>
+      <origin xyz="-0.039480 -0.215154 -0.283366" rpy="0 0 0"/>
       <geometry>
         <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/upper_1.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -46,7 +46,7 @@
 
   <link name="upper_0">
     <visual>
-      <origin xyz="-0.060000 -0.107000 -0.056000" rpy="0 0 0"/>
+      <origin xyz="-0.148333 -0.075667 -0.180080" rpy="0 0 0"/>
       <geometry>
         <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/upper_0.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -56,7 +56,7 @@
 
   <link name="upper_3">
     <visual>
-      <origin xyz="-0.260000 -0.183000 -0.056000" rpy="0 0 0"/>
+      <origin xyz="-0.236279 -0.215226 -0.316929" rpy="0 0 0"/>
       <geometry>
         <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/upper_3.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -76,7 +76,7 @@
 
   <link name="lower_2">
     <visual>
-      <origin xyz="-0.260000 -0.107000 -0.056000" rpy="0 0 0"/>
+      <origin xyz="-0.322809 -0.074896 -0.194101" rpy="0 0 0"/>
       <geometry>
         <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/lower_2.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -86,7 +86,7 @@
 
   <link name="lower_3">
     <visual>
-      <origin xyz="-0.260000 -0.183000 -0.056000" rpy="0 0 0"/>
+      <origin xyz="-0.171661 -0.215104 -0.179340" rpy="0 0 0"/>
       <geometry>
         <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/lower_3.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -96,7 +96,7 @@
 
   <link name="lower_1">
     <visual>
-      <origin xyz="-0.060000 -0.183000 -0.056000" rpy="0 0 0"/>
+      <origin xyz="0.051543 -0.215018 -0.159942" rpy="0 0 0"/>
       <geometry>
         <mesh filename="file:///home/phorce/Desktop/SIGMA/cad/meshes/lower_1.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -167,33 +167,41 @@
   <joint name="joint_platform" type="revolute">
     <parent link="upper_0"/>
     <child link="platform"/>
-    <origin xyz="-0.024522 -0.032190 0.226933" rpy="0 0 0"/>
+    <origin xyz="-0.112854 -0.000856 0.102854" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
   </joint>
 
-  <joint name="fix_upper_2" type="fixed">
-    <parent link="lower_2"/>
+  <joint name="joint_bearing_2" type="revolute">
+    <parent link="platform"/>
     <child link="upper_2"/>
-    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+    <origin xyz="0.197561 -0.000074 0.033650" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
   </joint>
 
-  <joint name="fix_upper_1" type="fixed">
-    <parent link="lower_1"/>
+  <joint name="joint_bearing_1" type="revolute">
+    <parent link="platform"/>
     <child link="upper_1"/>
-    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+    <origin xyz="0.004001 0.140344 0.000433" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
   </joint>
 
-  <joint name="fix_upper_0" type="fixed">
+  <joint name="joint_knee_0" type="revolute">
     <parent link="lower_0"/>
     <child link="upper_0"/>
-    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+    <origin xyz="0.088333 -0.031333 0.124080" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
   </joint>
 
-  <joint name="fix_upper_3" type="fixed">
-    <parent link="lower_3"/>
+  <joint name="joint_bearing_3" type="revolute">
+    <parent link="platform"/>
     <child link="upper_3"/>
-    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+    <origin xyz="0.200801 0.140416 0.033996" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
   </joint>
 
   <joint name="fix_lower_0" type="fixed">
@@ -202,22 +210,28 @@
     <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
   </joint>
 
-  <joint name="fix_lower_2" type="fixed">
-    <parent link="axis_2"/>
+  <joint name="joint_knee_2" type="revolute">
+    <parent link="upper_2"/>
     <child link="lower_2"/>
-    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+    <origin xyz="0.089769 0.000159 -0.122482" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
   </joint>
 
-  <joint name="fix_lower_3" type="fixed">
-    <parent link="axis_3"/>
+  <joint name="joint_knee_3" type="revolute">
+    <parent link="upper_3"/>
     <child link="lower_3"/>
-    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+    <origin xyz="-0.064619 -0.000122 -0.137589" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
   </joint>
 
-  <joint name="fix_lower_1" type="fixed">
-    <parent link="axis_1"/>
+  <joint name="joint_knee_1" type="revolute">
+    <parent link="upper_1"/>
     <child link="lower_1"/>
-    <origin xyz="0.000000 0.000000 0.000000" rpy="0 0 0"/>
+    <origin xyz="-0.091022 -0.000135 -0.123424" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
   </joint>
 
   <joint name="joint_axis_0" type="revolute">
@@ -228,28 +242,22 @@
     <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
   </joint>
 
-  <joint name="joint_axis_1" type="revolute">
-    <parent link="base_link"/>
+  <joint name="fix_axis_1" type="fixed">
+    <parent link="lower_1"/>
     <child link="axis_1"/>
-    <origin xyz="0.060000 0.183000 0.056000" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
+    <origin xyz="0.111543 -0.032018 -0.103942" rpy="0 0 0"/>
   </joint>
 
-  <joint name="joint_axis_2" type="revolute">
-    <parent link="base_link"/>
+  <joint name="fix_axis_2" type="fixed">
+    <parent link="lower_2"/>
     <child link="axis_2"/>
-    <origin xyz="0.260000 0.107000 0.056000" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
+    <origin xyz="-0.062809 0.032104 -0.138101" rpy="0 0 0"/>
   </joint>
 
-  <joint name="joint_axis_3" type="revolute">
-    <parent link="base_link"/>
+  <joint name="fix_axis_3" type="fixed">
+    <parent link="lower_3"/>
     <child link="axis_3"/>
-    <origin xyz="0.260000 0.183000 0.056000" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="7.2" velocity="15.7"/>
+    <origin xyz="0.088339 -0.032104 -0.123340" rpy="0 0 0"/>
   </joint>
 
   <joint name="fix_disc_3" type="fixed">

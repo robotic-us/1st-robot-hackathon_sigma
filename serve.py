@@ -24,6 +24,11 @@ the CradleMachine's 0..1 distress input:
   + FER+, perception/face/) fused with the microphone's cry band drives
   distress; a lost face trips the same safety gate.  Needs the ONNX models
   (``python3 tools/fetch_models.py``).
+* **Virtual infant** (``--baby``, closed-loop sim): a random state process
+  (perception/baby.py) that the sway genuinely soothes -- or, for hunger
+  cries, does not.  The camera panel shows it as a circle (colour = state,
+  size = distress) riding the plate offset, and RViz (./cad/view.sh) shows
+  the cradle answering.
 
 Either way the CradleMachine runs the report's ladder over that state: gate
 first, sleep taper, quiet hold, 30 s sway trials with improvement checks and
@@ -40,6 +45,7 @@ Run::
     python3 serve.py               # webcam + tag, http://<jetson-ip>:8080
     python3 serve.py --sense       # webcam face+emotion + mic instead of tags
     python3 serve.py --fake        # no camera: a synthetic tag drives the loop
+    python3 serve.py --baby        # no camera: a virtual infant, closed loop
     python3 serve.py --research    # unlock the R-grade modes (sim only!)
     python3 tests.py               # all suites, incl. these endpoints
 """
@@ -61,7 +67,8 @@ from urllib.parse import parse_qs, urlparse
 import cv2
 
 from core.cradle import LIBRARY_BY_ID, CradleMachine, MotionEngine, catalog
-from apps.demo import AXIS0, PIVOT, PLAY_DT, Brain, load_chunks, plate_point
+from apps.demo import (AXIS0, PIVOT, PLAY_DT, Brain, cradle_angles,
+                       cradle_joint_state, load_chunks, plate_point)
 from core.slot_table import load_slot_table
 from perception.tag import TagTracker, draw_overlay, synthetic_frame
 
@@ -94,6 +101,8 @@ class Shared:
         self.decision: Optional[dict] = None
         self.play_request: Optional[int] = None
         self.motion_request: Optional[str] = None
+        self.viz_gain = 1.0     # RViz display exaggeration; 1.0 = honest
+        self.offsets = (0.0, 0.0, 0.0)   # last (ap, ml, z) the engine produced
         self.stop = threading.Event()
 
     def log(self, text: str) -> None:
@@ -156,10 +165,16 @@ def fake_frame(t: float):
 
 def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                 sense: bool = False, audio_device: str = "plughw:WEBCAM,0",
-                no_sound: bool = False) -> None:
+                no_sound: bool = False, baby_seed: int | None = None,
+                baby: bool = False) -> None:
     brain = shared.brain
-    sensor = mic = None
-    if sense:
+    sensor = mic = infant = None
+    if baby:
+        from perception.baby import VirtualBaby
+        infant = VirtualBaby(seed=baby_seed)
+        shared.log("virtual infant awake"
+                   + (f" (seed {baby_seed})" if baby_seed is not None else ""))
+    elif sense:
         # Real sensing: the models only load in this mode.
         from perception.face.pipeline import SigmaPipeline
         from perception.listen import Microphone
@@ -173,7 +188,7 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
     else:
         tracker = TagTracker()
     cap = None
-    if not fake:
+    if not fake and not baby:
         cap = cv2.VideoCapture(camera_index)
         if not cap.isOpened():
             shared.log(f"camera {camera_index} failed -- falling back to --fake")
@@ -183,17 +198,25 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
     was_diverged = False
     while not shared.stop.is_set():
         now = time.monotonic()
-        if fake:
-            frame = fake_frame(now - t0)
+        if infant is not None:
+            # Closed loop: the engine's live amplitude is the soothing input,
+            # and the frame IS the baby -- a circle riding the plate offset.
+            from perception.baby import baby_frame
             time.sleep(1.0 / 30.0)
+            reading = infant.update(
+                now, soothing=shared.engine.env * shared.engine.amp_scale)
+            frame = baby_frame(reading, shared.engine.offsets_mm())
         else:
-            ok, frame = cap.read()
-            if not ok:
-                shared.log("camera stream ended")
-                break
-
-        reading = (sensor.update(frame, now) if sensor
-                   else tracker.update(frame, now))
+            if fake:
+                frame = fake_frame(now - t0)
+                time.sleep(1.0 / 30.0)
+            else:
+                ok, frame = cap.read()
+                if not ok:
+                    shared.log("camera stream ended")
+                    break
+            reading = (sensor.update(frame, now) if sensor
+                       else tracker.update(frame, now))
         brain.tick(now)
 
         # Manual requests from the browser win over any automatic decision.
@@ -228,9 +251,13 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
         shared.machine.events.clear()
         shared.engine.tick(now)
         if brain.playing is None and not brain.jam and shared.engine.active:
-            ap_mm, ml_mm, _ = shared.engine.offsets_mm()
-            theta = (ap_mm + ml_mm) / 1000.0 / LEVER_M
-            brain.pose = [theta] * 4
+            ap_mm, ml_mm, z_mm = shared.engine.offsets_mm()
+            shared.offsets = (ap_mm, ml_mm, z_mm)
+            # Through the real five-bar linkage: ML sways, Z lifts (the pairs
+            # counter-rotating), AP renders as pitch.  Summing them into one
+            # angle for all four cranks -- the old code -- made every motion
+            # look like the same sway.
+            brain.pose = cradle_angles(ap_mm, ml_mm, z_mm)
 
         report = brain.monitor.latest()
         if report.diverged and not was_diverged:
@@ -239,9 +266,18 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
         was_diverged = report.diverged
 
         if ros is not None:
-            ros.send_joints(brain.pose)
+            # Display gain exaggerates the RViz mirror only -- the report's
+            # amplitudes (~2.5 deg full sway) are honest but subtle on screen.
+            # The full linkage: cranks, knees and the bearing.  Gain is applied
+            # to the plate travel before solving, so the exaggerated pose is
+            # still a real pose and the rods stay on their bearings.
+            ap_mm, ml_mm, z_mm = shared.offsets
+            ros.send_joints(cradle_joint_state(ap_mm, ml_mm, z_mm,
+                                               gain=shared.viz_gain))
 
-        if sensor:
+        if infant is not None:
+            canvas = frame                     # the baby drew itself
+        elif sensor:
             from perception.sense import draw as sense_draw
             canvas = sense_draw(frame, reading, sensor)
         else:
@@ -450,7 +486,8 @@ def lan_ip() -> str:
 
 def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: bool,
           sense: bool = False, audio_device: str = "plughw:WEBCAM,0",
-          no_sound: bool = False):
+          no_sound: bool = False, baby: bool = False,
+          baby_seed: int | None = None):
     ros = None
     if use_ros:
         try:
@@ -460,7 +497,8 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
             shared.log(f"RViz mirroring off ({type(exc).__name__})")
     worker = threading.Thread(
         target=sensor_loop,
-        args=(shared, camera_index, fake, ros, sense, audio_device, no_sound),
+        args=(shared, camera_index, fake, ros, sense, audio_device, no_sound,
+              baby_seed, baby),
         daemon=True)
     worker.start()
     Handler.shared = shared
@@ -473,6 +511,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--fake", action="store_true",
                         help="no camera: a synthetic tag drives the loop")
+    parser.add_argument("--baby", action="store_true",
+                        help="no camera: a virtual infant (random state "
+                             "process) the sway can genuinely soothe")
+    parser.add_argument("--baby-seed", type=int, default=None,
+                        help="seed the virtual infant for a repeatable run")
     parser.add_argument("--sense", action="store_true",
                         help="real sensing: face+emotion (+mic) drives the "
                              "machine instead of tag state cards")
@@ -482,8 +525,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="with --sense: face only, no microphone")
     parser.add_argument("--no-ros", action="store_true",
                         help="do not mirror joints to RViz")
+    parser.add_argument("--viz-gain", type=float, default=1.0,
+                        help="exaggerate the RViz mirror by this factor "
+                             "(display only; the real sway is ~2.5 deg)")
     parser.add_argument("--research", action="store_true",
-                        help="unlock the R-grade library modes (sim only)")
+                        help="unlock the R-grade library modes (sim only; "
+                             "--fake already implies it)")
     parser.add_argument("--dream-auto", action="store_true",
                         help="old autopilot: tag shake picks a DREAM slot "
                              "instead of the report's cradle machine")
@@ -492,16 +539,28 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--sense needs a real camera; it cannot run with --fake")
     if args.sense and args.dream_auto:
         parser.error("--dream-auto ranks tag shake; it cannot run with --sense")
+    if args.baby and (args.sense or args.fake or args.dream_auto):
+        parser.error("--baby is its own world; drop --sense/--fake/--dream-auto")
 
+    # --fake is a desk demo: a synthetic tag, no camera and no rig, so there is
+    # nothing an R-grade mode can hurt.  Unlock the whole library there so the
+    # dashboard's selector can drive all 50 without a second flag.  This does
+    # not put R into automatic behaviour -- TRIAL_LADDER is P1 only, and the
+    # machine never commands anything outside it plus M05/M06/M08.  Every other
+    # mode (real camera, --sense, --baby) still needs --research explicitly.
+    research = args.research or args.fake
     chunks = load_chunks()
     table = load_slot_table("slots.json")
     shared = Shared(Brain(chunks, table), chunks, table,
-                    allow_research=args.research, dream_auto=args.dream_auto)
+                    allow_research=research, dream_auto=args.dream_auto)
+    shared.viz_gain = max(1.0, args.viz_gain)
     server, worker, ros = start(shared, args.port, args.camera_index,
                                 args.fake, use_ros=not args.no_ros,
                                 sense=args.sense, audio_device=args.audio_device,
-                                no_sound=args.no_sound)
-    source = ("synthetic tag" if args.fake
+                                no_sound=args.no_sound, baby=args.baby,
+                                baby_seed=args.baby_seed)
+    source = ("virtual infant" if args.baby
+              else "synthetic tag" if args.fake
               else "face+emotion sensing" if args.sense
               else f"camera {args.camera_index}")
     print(f"SIGMA dashboard:  http://{lan_ip()}:{args.port}   ({source})")

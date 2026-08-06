@@ -364,12 +364,18 @@ class MotionEngine:
             "motion": m.id if m else None,
             "name": m.name if m else "STATIC",
             "grade": m.grade if m else "C0",
+            # what sort of thing this is (sine/taper/pause/...), so a reader
+            # can describe it in words without parsing the name
+            "kind": m.kind if m else "static",
             "f_hz": round(f, 2),
             "a_mm": round(a_now, 2),
             "env": round(self.env * self.amp_scale, 3),
             "tapering": self.tapering,
             "offset_mm": {"ap": round(ap, 2), "ml": round(ml, 2), "z": round(z, 2)},
             "a_peak_g": round(a_peak_g(f, a_now), 4),
+            # so the library selector can show which R entries it would refuse
+            # rather than letting the click fail with no explanation
+            "research": self.allow_research,
         }
 
 
