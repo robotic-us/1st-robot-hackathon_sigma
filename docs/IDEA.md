@@ -20,3 +20,7 @@
 
 @ Webapp
 User: Select Baby's Taste of Motion -> Motion Play or Sim -> LLM Agent or Other Algorithm Changes the Motion to Fit the Baby's Feeling
+
+Computer Vision
+Input / Image and Audio
+How / Tablet Img or Virtual Baby -> Baby img changer -> How?? Just like the webapp circle(?) thing

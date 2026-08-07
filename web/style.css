@@ -220,6 +220,7 @@ details[open].card summary { margin-bottom:12px; }
        font-family:var(--mono); white-space:nowrap; }
 .m:hover { border-color:var(--accent); }
 /* grade identity: three edge colours, each spelled out in the tooltip */
+.m.g-N  { border-left-color:var(--r0); }
 .m.g-C0 { border-left-color:var(--sleep); }
 .m.g-P1 { border-left-color:var(--accent); }
 .m.g-R  { border-left-color:var(--r1); }

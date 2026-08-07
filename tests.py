@@ -540,8 +540,11 @@ def test_serve() -> None:
         grades: dict[str, int] = {}
         for m in motions:
             grades[m["grade"]] = grades.get(m["grade"], 0) + 1
-        assert len(motions) == 50 and grades == {"C0": 8, "P1": 20, "R": 22}, grades
-        print(f"  GET /motions 50 motions, grades {grades}  -- ok")
+        assert len(motions) == 84 and grades == {"C0": 8, "P1": 20, "R": 22,
+                                                 "N": 34}, grades
+        assert sum(m["candidate"] for m in motions) == 26, \
+            "the N system offers 26 trial candidates"
+        print(f"  GET /motions 84 motions, grades {grades}  -- ok")
 
         refused = json.loads(urlopen(base + "/motion?id=M35", timeout=5).read())
         assert refused["ok"] is False and "research-only" in refused["msg"]
@@ -1193,31 +1196,42 @@ def test_policy() -> None:
         assert rank_of(level) == want, f"rank_of({level}) != {want}"
     print("  ranks        distress 0..1 -> happiness ladder 0..4  -- ok")
 
-    # The shared language: prompts render, replies parse whatever the LLM says.
-    assert parse_reply("M13") == "M13"
-    assert parse_reply("I'd try m13 next.") == "M13"
+    # The shared language: prompts render, replies parse whatever the LLM
+    # says.  The search space is now the team's N system (M ids are the
+    # report machine's own vocabulary, not the policy's).
+    assert parse_reply("N16") == "N16"
+    assert parse_reply("I'd try n16 next.") == "N16"
     assert parse_reply("stop now, baby is happy") == "STOP"
-    assert parse_reply("M45") is None and parse_reply("hmm") is None
-    prompt = render_prompt([], [Step("M10", 2, 3)], 3)
-    assert "M10: 2 -> 3" in prompt and "M18" in prompt and "STOP" in prompt
+    assert parse_reply("M13") is None and parse_reply("hmm") is None
+    prompt = render_prompt([], [Step("N05", 2, 3)], 3)
+    assert "N05: 2 -> 3" in prompt and "N33" in prompt and "STOP" in prompt
+    assert "shape" in prompt, "the prompt must teach the feature vocabulary"
     print("  language     prompt renders, sloppy replies parse  -- ok")
 
-    # The taught strategy IS the IDEA.md storyline: try -> worse -> switch ->
-    # improves -> keep -> happy -> STOP.
+    # The taught strategy: worse -> switch; improving -> keep (while it
+    # cries); happy -> STOP; and while merely fussing, no motion may
+    # monopolise -- experiments continue, guided by feature similarity.
+    from core.policy import FEATURES
     brain = ReflexBrain()
     assert brain("", [], 0) == "STOP", "at HAPPY the answer is STOP"
-    steps = [Step("M10", 2, 3)]                       # first try made it worse
+    steps = [Step("N05", 2, 3)]                       # first try made it worse
     switched = brain("", steps, 3)
-    assert switched in CANDIDATES and switched != "M10", "worse must switch"
-    steps.append(Step("M12", 3, 1))                   # this one improved
-    assert brain("", steps, 1) == "M12", "an improving motion must be kept"
-    steps.append(Step("M12", 1, 0))
+    assert switched in CANDIDATES and switched != "N05", "worse must switch"
+    steps.append(Step("N10", 3, 1))                   # this one improved
+    assert brain("", steps, 2) == "N10", "improving motion kept while crying"
+    steps.append(Step("N10", 1, 0))
     assert brain("", steps, 0) == "STOP"
-    print("  reflex       explore -> back off -> exploit -> STOP  -- ok")
+    third = brain("", [Step("N10", 1, 0), Step("N10", 1, 0)], 1)
+    assert third != "N10", "no monopoly: a fussing baby is experiment time"
+    pick = brain("", [Step("N05", 2, 0), Step("N03", 1, 1)], 1)
+    assert FEATURES[pick]["size"] == "large" and \
+        FEATURES[pick]["speed"] == "slow", \
+        f"wide+slow worked, so the next experiment generalises: {pick}"
+    print("  reflex       explore, no monopoly, feature generalisation  -- ok")
 
     # Personality: the loved motion soothes a cry, the hated one never does
     # and worsens a fuss -- the hidden temperament the policy must discover.
-    quirks = Personality(love="M13", hate=frozenset({"M10"}))
+    quirks = Personality(love="N16", hate=frozenset({"N05"}))
 
     def under(motion: str, state: str, seconds: float) -> str:
         b = VirtualBaby(seed=5, personality=quirks)
@@ -1228,10 +1242,20 @@ def test_policy() -> None:
             b.update(t, soothing=1.0, motion=motion)
         return b.state
 
-    assert under("M13", "CRY", 120.0) != "CRY", "the loved motion must soothe"
-    assert under("M10", "CRY", 240.0) == "CRY", "a hated motion must not"
-    assert under("M10", "FUSS", 240.0) == "CRY", "a hated motion agitates"
-    print("  temperament  loved soothes, hated agitates  -- ok")
+    assert under("N16", "CRY", 120.0) != "CRY", "the loved motion must soothe"
+    assert under("N05", "CRY", 240.0) == "CRY", "a hated motion must not"
+    assert under("N05", "FUSS", 240.0) == "CRY", "a hated motion agitates"
+
+    # ...and the feature layer: tastes generalise across the N system.
+    feels = Personality(shape_love="circle", shape_hate="vert", vibe_pref=-1)
+    assert feels.gain("N24", None) > feels.gain("N27", None) > 0, \
+        "the loved shape must outscore a neutral one"
+    assert feels.gain("N10", None) < 0, "the hated shape agitates"
+    assert feels.gain("N06", None) < feels.gain("N05", None), \
+        "a tremble-hater discounts the vibe variant"
+    assert feels.gain("N03", None, mood=0.7) < feels.gain("N03", None, mood=1.0), \
+        "a grumpy stretch dulls fast motions"
+    print("  temperament  ids + features + mood shape the soothing  -- ok")
 
     # Time-related emotion: heavy use wears a motion out, rest restores it,
     # and the mood cycle stays inside its documented band.
@@ -1240,14 +1264,14 @@ def test_policy() -> None:
     t = 0.0
     while t < 90.0:
         t += 1.0 / 30.0
-        b.update(t, soothing=1.0, motion="M13")
-    worn = b._fatigue.get("M13", 0.0)
+        b.update(t, soothing=1.0, motion="N16")
+    worn = b._fatigue.get("N16", 0.0)
     assert worn > 0.5, f"90 s of use must wear a motion out, got {worn:.2f}"
     assert 0.64 <= b._mood <= 1.001, f"mood outside its band: {b._mood:.2f}"
     while t < 690.0:
         t += 0.2
         b.update(t)                       # resting: no motion at all
-    rested = b._fatigue.get("M13", 0.0)
+    rested = b._fatigue.get("N16", 0.0)
     assert rested < worn / 3, f"10 min of rest must restore it, got {rested:.2f}"
     print(f"  habituation  90 s use -> fatigue {worn:.2f}, "
           f"10 min rest -> {rested:.2f}  -- ok")
@@ -1283,8 +1307,10 @@ def test_policy() -> None:
     assert first_trial("M45") in TRIAL_LADDER, "R-grade advice must be refused"
     assert first_trial("nonsense") in TRIAL_LADDER
     assert first_trial(None) in TRIAL_LADDER
+    assert first_trial("N01") in TRIAL_LADDER, "the parked state is no trial"
     assert first_trial("M15") == "M15", "a valid P1 pick must be used"
-    print("  advisor      P1 picks used, R/garbage fall back to ladder  -- ok")
+    assert first_trial("N16") == "N16", "a valid N-system pick must be used"
+    print("  advisor      P1/N picks used, R/static/garbage -> ladder  -- ok")
 
     # The demo rhythm: at pace 10 each motion gets ~10 s -- checkpoints,
     # the escalation ramp and the give-up deadline all scale with it.
@@ -1303,11 +1329,14 @@ def test_policy() -> None:
         f"pace 10 must give up at 20 s: {events}"
     print("  pace         10 s checkpoints, 20 s deadline, scaled ramps  -- ok")
 
-    # Closed loop: a baby that hates exactly the ladder's first rungs.  The
-    # policy must learn not to repeat a worsening motion; the plain ladder
-    # keeps walking into them, so the advised run cries no more than it.
+    # Closed loop: a baby that hates the ladder's first rungs and whose real
+    # tastes live in the feature space.  The policy must avoid what worsens,
+    # keep exploring (no monopoly), and cry no more than the fixed ladder.
     def closed_loop(advise: bool, seed: int = 21):
-        temperament = Personality(love="M11", hate=frozenset({"M10", "M12"}))
+        temperament = Personality(love="N24",
+                                  hate=frozenset({"M10", "M12", "N05"}),
+                                  shape_love="circle", size_pref="large",
+                                  speed_pref="slow")
         baby = VirtualBaby(seed=seed, personality=temperament)
         engine = MotionEngine()
         box = CradleMachine(engine, check_every_s=10.0)   # the demo pace
@@ -1333,13 +1362,16 @@ def test_policy() -> None:
     policy_cry, policy = closed_loop(True)
     assert policy.steps, "the machine must have consulted the policy"
     picks = [s.motion for s in policy.steps]
-    for hated in ("M10", "M12"):
-        assert picks.count(hated) <= 1, \
-            f"{hated} worsened things and must not be advised twice: {picks}"
+    assert all(p in CANDIDATES for p in picks), picks
+    assert picks.count("N05") <= 2, \
+        f"a worsening motion must not keep being advised: {picks}"
+    assert len(set(picks)) >= 3, \
+        f"one motion must not monopolise the night: {picks}"
     assert policy_cry <= ladder_cry, \
         f"advised {policy_cry:.0f}s of crying vs ladder {ladder_cry:.0f}s"
     print(f"  closed loop  25 sim-min: advised {policy_cry:.0f}s crying "
-          f"<= ladder {ladder_cry:.0f}s, picks {picks}  -- ok")
+          f"<= ladder {ladder_cry:.0f}s, {len(set(picks))} distinct motions, "
+          f"picks {picks}  -- ok")
 
     # The scenario corpus round-trips into the prompt (the LLM's 학습 data).
     import tools.make_scenarios as ms
@@ -1365,16 +1397,14 @@ def test_policy() -> None:
     snap = policy.snapshot()
     assert set(snap) == {"brain", "scenarios", "error", "scores", "steps"}
     assert snap["brain"] == "reflex" and snap["steps"], snap
-    assert all(v <= 0 for m, v in snap["scores"].items()
-               if m in ("M10", "M12")), \
-        f"hated motions must not score positive: {snap['scores']}"
+    assert all(m in CANDIDATES for m in snap["scores"]), snap["scores"]
     page = Path("web/index.html").read_text()
     js = Path("web/app.js").read_text()
     for hook in ('id="brain"', 'id="ladder"', 'id="scores"', 'id="trail"',
-                 'id="brainsel"', 'id="card-taste"', 'id="orb"'):
+                 'id="brainsel"', 'id="card-taste"', 'id="orb"', 'data-g="N"'):
         assert hook in page, f"learning panel lost {hook!r}"
     for hook in ("S.policy", "drawBrain", "RANK_BANDS", "/policy?set=",
-                 "/taste?", "drawOrb"):
+                 "/taste?", "drawOrb", "fillTaste", "npath"):
         assert hook in js, f"learning panel script lost {hook!r}"
     from serve import Shared, build_state
     from types import SimpleNamespace
@@ -1402,9 +1432,23 @@ def test_policy() -> None:
             html = out.read_text()
     finally:
         lr.NIGHT_S = night_s
-    for marker in ("<svg", "night 1", "learning\npolicy", "M13"):
+    for marker in ("<svg", "night 1", "learning\npolicy"):
         assert marker in html, f"report lost {marker!r}"
     print("  report       learn_report renders svg + trail  -- ok")
+
+    # The robot files: the N system compiles by sampling the live engine.
+    from tools.make_motions import main as make_motions_main
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "n34"
+        with contextlib.redirect_stdout(io.StringIO()):
+            make_motions_main(["--n34", "--out", str(out)])
+        files = sorted(out.glob("motion_*.csv"))
+        assert len(files) == 34, f"N system must compile 34 slots, {len(files)}"
+        v_ls = (out / "motion_16.csv").read_text().splitlines()
+        assert v_ls[1].startswith("16,V_LS"), v_ls[1][:40]
+        assert v_ls[1].strip().rstrip('"').endswith("0.00,400,0,0"), \
+            "every N slot must end parked at rest"
+    print("  n34 files    34 slots compile, MS IDs match, end at rest  -- ok")
 
 
 # --------------------------------------------------------------------------- #

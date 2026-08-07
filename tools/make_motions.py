@@ -294,6 +294,58 @@ def build_library(out: Path) -> int:
     return 0
 
 
+def build_n34(out: Path) -> int:
+    """Compile the team's N01-N34 system (docs/motion-system.png) to slots.
+
+    No per-shape compiler code: each entry is *sampled from the live
+    MotionEngine* every 250 ms and every sample is solved through the rig
+    IK -- so the robot plays exactly what the dashboard and RViz simulate,
+    V-swings, circles, figure-eights, trembles and decays included.  Each
+    file ramps in over 4 s, holds (or decays), tapers via N01 and ends
+    parked at rest.
+    """
+    from core.cradle import A_HARD_MM, VIBE_MM, N_LIBRARY, MotionEngine
+    hard_deg = max(abs(v)
+                   for chan in ("sway_mm", "heave_mm", "pitch_mm")
+                   for v in cradle_axis_degrees(**{chan: A_HARD_MM + VIBE_MM}))
+    out.mkdir(exist_ok=True)
+    for stale in out.glob("motion_*.csv"):
+        stale.unlink()
+
+    sample_ms = 250
+    for m in N_LIBRARY:
+        if m.kind == "static":                       # N01: the parked state
+            rows = [[(0.0, 1000)] for _ in range(AXES)]
+        else:
+            rows = [[] for _ in range(AXES)]
+            eng = MotionEngine()
+            eng.command(m.id, 0.0, ramp_s=4.0)
+            t, t_taper = 0.0, 4.0 + (26.0 if m.decay else 12.0)
+            while t < t_taper + 4.5:
+                if t >= t_taper and eng.active and not eng.tapering:
+                    eng.command("N01", t, ramp_s=4.0)   # the system's own stop
+                for _ in range(5):                      # engine clamps dt<=0.1
+                    t += sample_ms / 5000.0
+                    eng.tick(t)
+                _, ml, z = eng.offsets_mm()
+                for axis, deg in enumerate(
+                        cradle_axis_degrees(sway_mm=ml, heave_mm=z)):
+                    rows[axis].append((deg, sample_ms))
+            for r in rows:                              # end exactly parked
+                r.append((0.0, 400))
+        peak = max(abs(deg) for segs in rows for deg, _ in segs)
+        assert peak <= hard_deg + 1e-6, f"{m.id} breaks the crank envelope"
+        path = out / f"motion_{m.slot:02d}.csv"
+        write_slot(path, m.slot, m.name, rows)
+        duration = sum(ms for _, ms in rows[0]) / 1000.0
+        print(f"  {path}  {m.name:<16} [{m.grade}] peak {peak:5.2f} deg  "
+              f"{len(rows[0]):>3} segs  {duration:5.1f}s")
+
+    print(f"\n34 N-system slots in {out}/\nlaunch the simulator with them:"
+          f"\n  ./sim.sh {out}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--slot-table", default="slots.json")
@@ -301,10 +353,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="output dir (default: motions, or motions_m50 with --library)")
     parser.add_argument("--library", action="store_true",
                         help="compile core/cradle.py's M01-M50 instead of slots.json")
+    parser.add_argument("--n34", action="store_true",
+                        help="compile the N01-N34 system (docs/motion-system.png) "
+                             "to motions_n34/ by sampling the live engine")
     parser.add_argument("--duration-s", type=float, default=1.6)
     parser.add_argument("--s0", type=float, default=0.0, help="acceleration shaping")
     parser.add_argument("--sd", type=float, default=0.0, help="deceleration shaping")
     args = parser.parse_args(argv)
+    if args.n34:
+        return build_n34(Path(args.out or "motions_n34"))
     if args.library:
         return build_library(Path(args.out or "motions_m50"))
     args.out = args.out or "motions"

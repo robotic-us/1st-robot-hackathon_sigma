@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.cradle import CALM_LEVEL, CRY_LEVEL
+from core.cradle import CALM_LEVEL, CRY_LEVEL, N_CANDIDATES, N_LIBRARY
 
 # The reward ladder of docs/IDEA.md, discretised from the 0..1 distress the
 # machine already runs on.  Band edges reuse the report thresholds plus the
@@ -48,13 +48,20 @@ from core.cradle import CALM_LEVEL, CRY_LEVEL
 RANKS = ("HAPPY", "FUSS", "CRY1", "CRY2", "MISERABLE")
 BANDS = (CALM_LEVEL, 0.30, CRY_LEVEL, 0.62)
 
-# The ten "모션 1~10" of the idea: the P1 ML sine candidates.  AP renders as
-# pitch on this rig and R grades are barred from automatic behaviour, so the
-# ML band is the whole safe search space.
-CANDIDATES = tuple(f"M{n:02d}" for n in range(9, 19))
-# Exploration order for untried motions: the report's own trial ladder first
-# (0.3/0.5/0.6 Hz), then outward through the rest of the band.
-EXPLORE = ("M10", "M12", "M13", "M09", "M11", "M14", "M15", "M16", "M17", "M18")
+# The search space: the team's 34-motion system (docs/motion-system.png),
+# minus the parked state and the self-stopping decay entries.  Each
+# candidate carries its features -- shape, size, speed, tremble -- which is
+# what lets a brain generalise ("slow+large works on this baby") instead of
+# memorising 26 ids one by one.
+CANDIDATES = N_CANDIDATES
+FEATURES = {m.id: {"shape": m.shape, "size": m.size, "speed": m.speed,
+                   "vibe": "vibe" if m.vibe else "plain"}
+            for m in N_LIBRARY}
+# Cold-start exploration order: one calm representative of each family
+# first (wide slow strokes), then the fast ones, then the tremble variants.
+EXPLORE = ("N05", "N10", "N16", "N20", "N24", "N27", "N30", "N33", "N13",
+           "N18", "N21", "N03", "N08", "N14", "N19", "N23", "N26", "N29",
+           "N32", "N06", "N11", "N17", "N02", "N04", "N09", "N15")
 
 SCENARIOS_PATH = Path("data/scenarios.jsonl")
 
@@ -94,16 +101,28 @@ def render_prompt(scenarios: list[dict], steps: list[Step], rank: int) -> str:
         "10-30 s), then you see the infant's comfort rank.  Ranks: 0 HAPPY",
         "> 1 FUSS > 2 CRY1 > 3 CRY2",
         "> 4 MISERABLE -- lower is better.  Goal: reach rank 0, then STOP.",
-        f"Motions: {', '.join(CANDIDATES)} (gentle side-sways, different",
-        "speeds/strengths).  Each infant has FIXED hidden preferences: some",
-        "motions soothe fast, one or two make things worse, none of it",
-        "changes within a session.",
         "",
-        "Strategy: keep a motion that improved the rank; if it worsened or",
-        "did nothing, switch -- best known motion first, else one untried;",
-        "at rank 0 answer STOP.  Motions also wear out with heavy use",
-        "(habituation): when the favourite stops working, rotate to the",
-        "next best and come back to it later.",
+        "Motions (id: shape-size-speed, +T = with tremble):",
+    ]
+    tags = [f"{c}:{FEATURES[c]['shape']}"
+            + (f"-{FEATURES[c]['size']}-{FEATURES[c]['speed']}"
+               if FEATURES[c]["size"] else "")
+            + ("+T" if FEATURES[c]["vibe"] == "vibe" else "")
+            for c in CANDIDATES]
+    for i in range(0, len(tags), 5):
+        lines.append("  " + "  ".join(tags[i:i + 5]))
+    lines += [
+        "",
+        "Each infant has FIXED hidden preferences over these FEATURES --",
+        "a favourite shape, a hated one, small-vs-large, fast-vs-slow, and",
+        "loving or hating the tremble.  Generalise: if wide+slow shapes",
+        "work, other wide+slow shapes likely will.",
+        "",
+        "Strategy: while the infant merely fusses (rank 1), experiment --",
+        "keep a winner at most twice in a row, then try the most promising",
+        "untried motion.  While it cries (rank 2+), play the best known",
+        "remedy.  Motions wear out with heavy use (habituation): when the",
+        "favourite fades, rotate and come back later.  At rank 0: STOP.",
     ]
     if scenarios:
         lines += ["", "Example sessions (other infants):"]
@@ -125,10 +144,10 @@ def render_prompt(scenarios: list[dict], steps: list[Step], rank: int) -> str:
 
 
 def parse_reply(text: str) -> Optional[str]:
-    """'I'd try M13.' -> 'M13'; 'stop' -> 'STOP'; garbage -> None."""
-    hit = re.search(r"\bM(0\d|1\d)\b", str(text).upper())
-    if hit and hit.group(0) in CANDIDATES:
-        return hit.group(0)
+    """'I'd try N16.' -> 'N16'; 'stop' -> 'STOP'; garbage -> None."""
+    for hit in re.findall(r"\b[MN]\d{2}\b", str(text).upper()):
+        if hit in CANDIDATES:
+            return hit
     if "STOP" in str(text).upper():
         return "STOP"
     return None
@@ -150,41 +169,80 @@ def load_scenarios(path: Path = SCENARIOS_PATH, limit: int = 6) -> list[dict]:
 # Brains: (prompt, steps, rank) -> reply text
 # --------------------------------------------------------------------------- #
 class ReflexBrain:
-    """The taught strategy as code: explore, back off, exploit, stop.
+    """The taught strategy as code: experiment, generalise, exploit, stop.
 
-    Scores are the mean of each motion's *last three* outcomes, not its
-    whole history -- habituation is real (perception/baby.py), so a
-    favourite that has worn out must be allowed to fall out of favour
-    and a rested one to come back.
+    Three rules shape it:
+
+    * **Explore while fussing, exploit while crying.**  A mild fuss (rank 1)
+      is cheap experiment time -- a winner is kept at most ``MAX_RUN`` times
+      in a row before something untried gets a turn, which is what keeps one
+      lucky motion from monopolising the whole night.  A crying baby
+      (rank >= 2) always gets the best known remedy.
+    * **Generalise over features.**  Untried motions are ranked by the mean
+      outcome of their shape/size/speed/tremble values across everything
+      tried so far -- learn "wide and slow works" from N05 and N16 already
+      points at N20 and N27.
+    * **Recent outcomes only.**  Scores are each motion's last three
+      attempts, because habituation is real: a worn-out favourite must fall
+      out of favour, and a rested one must be allowed back.
     """
 
     RECENT = 3
+    MAX_RUN = 2
 
     def __call__(self, prompt: str, steps: list[Step], rank: int) -> str:
         if rank == 0:
             return "STOP"
-        scores: dict[str, list[int]] = {}
+        deltas: dict[str, list[int]] = {}
         for s in steps:
             if s.delta is not None:
-                scores.setdefault(s.motion, []).append(s.delta)
+                deltas.setdefault(s.motion, []).append(s.delta)
         recent = {m: sum(d[-self.RECENT:]) / len(d[-self.RECENT:])
-                  for m, d in scores.items()}
-        # Keep a motion that just worked.
-        if steps and steps[-1].delta is not None and steps[-1].delta > 0:
-            return steps[-1].motion
-        # Exploit the best motion that has recently improved things.
-        best, best_avg = None, 0.0
-        for motion, avg in recent.items():
-            if avg > best_avg:
-                best, best_avg = motion, avg
+                  for m, d in deltas.items()}
+        untried = [c for c in CANDIDATES if c not in deltas]
+        last = steps[-1] if steps else None
+        run = 0
+        for s in reversed(steps):
+            if last is not None and s.motion == last.motion:
+                run += 1
+            else:
+                break
+        last_won = last is not None and last.delta is not None and last.delta > 0
+        best = max(recent, key=recent.get) if recent else None
+
+        if rank >= 2:                      # crying: best known remedy, now
+            if last_won:
+                return last.motion
+            if best is not None and recent[best] > 0:
+                return best
+            return self._promising(untried, deltas) if untried \
+                else (best or EXPLORE[0])
+        # merely fussing: keep a winner briefly, then experiment
+        if last_won and run < self.MAX_RUN:
+            return last.motion
+        if untried:
+            return self._promising(untried, deltas)
         if best is not None:
             return best
-        # Nothing has worked lately: explore an untried candidate.
-        for motion in EXPLORE:
-            if motion not in scores:
-                return motion
-        # Everything tried, nothing improving: least bad one.
-        return max(recent, key=recent.get)
+        return EXPLORE[0]
+
+    @staticmethod
+    def _promising(untried: list, deltas: dict) -> str:
+        """The untried candidate whose features have scored best so far."""
+        fscore: dict[tuple, list[int]] = {}
+        for m, ds in deltas.items():
+            for f, v in FEATURES[m].items():
+                fscore.setdefault((f, v), []).extend(ds)
+
+        def predicted(c: str) -> float:
+            known = [sum(fscore[k]) / len(fscore[k])
+                     for k in ((f, v) for f, v in FEATURES[c].items())
+                     if k in fscore]
+            return sum(known) / len(known) if known else 0.0
+
+        order = {m: i for i, m in enumerate(EXPLORE)}
+        return max(untried,
+                   key=lambda c: (predicted(c), -order.get(c, len(order))))
 
 
 BRAIN_SYSTEM = (

@@ -114,11 +114,11 @@ glow = how hard the cradle is working; it rides the real sway"></canvas>
   <article class="card" id="card-keys">
     <h2>Manual control</h2>
     <div id="buttons">
-      <button data-m="M10"><b>Rock slowly</b><i>M10</i></button>
-      <button data-m="M12"><b>Rock steadily</b><i>M12</i></button>
-      <button data-m="M16"><b>Rock wider</b><i>M16</i></button>
-      <button data-m="M05"><b>Slow to a stop</b><i>M05</i></button>
-      <button data-m="M01"><b>Hold still</b><i>M01</i></button>
+      <button data-m="N05"><b>Wide slow sway</b><i>N05</i></button>
+      <button data-m="N10"><b>Deep slow bob</b><i>N10</i></button>
+      <button data-m="N24"><b>Slow circles</b><i>N24</i></button>
+      <button data-m="N30"><b>Figure-eight</b><i>N30</i></button>
+      <button data-m="N01"><b>Hold still</b><i>N01</i></button>
       <button id="jam" aria-pressed="false"><b>Simulate a jam</b><i>j</i></button>
     </div>
     <p class="sub">Rocking always eases in gently; the safety gate overrides
@@ -145,11 +145,12 @@ glow = how hard the cradle is working; it rides the real sway"></canvas>
 
 <!-- drawers -->
 <details class="card wide" id="library">
-  <summary>Motion library — M01–M50</summary>
+  <summary>Motion library — N01–N34 (new system) + M01–M50 (evidence report)</summary>
   <div id="mfilter">
     <button data-g="" class="on">All</button>
+    <button data-g="N" title="the team's 34-motion system">N</button>
     <button data-g="C0" title="stop / transition commands">C0</button>
-    <button data-g="P1" title="trial candidates">P1</button>
+    <button data-g="P1" title="report trial candidates">P1</button>
     <button data-g="R" title="research-only">R</button>
     <input id="mq" type="search" placeholder="filter by name…"
            aria-label="filter motions by name">

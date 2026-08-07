@@ -63,16 +63,25 @@ class Motion:
     name: str
     kind: str          # static|pause|soft_start|taper|micro_resume|sine|
                        # diagonal|ellipse|circle|lissajous|pseudo_walk|
-                       # adaptive_a|adaptive_f
-    grade: str         # C0 = stop/transition, P1 = trial candidate, R = research
+                       # adaptive_a|adaptive_f|npath (the N01-N34 system)
+    grade: str         # C0 stop/transition, P1 trial candidate, R research,
+                       # N = the team's 34-motion system (docs/motion-system.png)
     desc: str
-    axis: str = ""     # ML | AP | Z | APML
+    axis: str = ""     # ML | AP | Z | APML | MLZ
     f_hz: float = 0.0
     a_mm: float = 0.0
     f2_hz: float = 0.0  # secondary component (lissajous)
-    a2_mm: float = 0.0  # secondary amplitude (ellipse minor, lissajous)
+    a2_mm: float = 0.0  # secondary amplitude (ellipse minor, z-depth, lissajous)
     sign: float = 1.0   # diagonal +-45 deg, circle CW/CCW
     ramp_s: float = 0.0  # soft_start / taper lengths
+    # N-system features -- the vocabulary the virtual baby's taste and the
+    # policy's generalisation both speak (docs/motion-system.png columns)
+    shape: str = ""     # still|horiz|vert|vert_fall|v|v_fall|parab|dwell|
+                        # circle|ellipse|inf|arc
+    size: str = ""      # small | large
+    speed: str = ""     # fast | slow
+    vibe: bool = False  # 진동 있음: a 0.8 Hz / 3 mm tremble rides along
+    decay: bool = False  # 감쇠: amplitude dies away to rest on its own
 
     @property
     def slot(self) -> int:
@@ -85,6 +94,18 @@ class Motion:
 
     def worst_components(self) -> list[tuple[float, float]]:
         """(f, A) pairs at their envelope-worst, for the import-time gate."""
+        if self.kind == "npath":
+            comps = []
+            if self.a_mm:
+                comps.append((self.f_hz, self.a_mm))
+            if self.a2_mm:
+                # |x|, x^2, arc and figure-eight z-components run at 2f
+                doubled = self.shape in ("v", "v_fall", "parab", "dwell",
+                                         "inf", "arc")
+                comps.append(((2.0 if doubled else 1.0) * self.f_hz, self.a2_mm))
+            if self.vibe:
+                comps.append((VIBE_F_HZ, VIBE_MM))
+            return comps
         if self.kind == "sine":
             return [(self.f_hz, self.a_mm)]
         if self.kind in ("diagonal", "circle"):
@@ -100,6 +121,93 @@ class Motion:
         if self.kind == "adaptive_f":
             return [(0.7, self.a_mm)]          # f steps 0.3 -> 0.5 -> 0.7
         return []                              # C0 commands: no oscillation
+
+
+VIBE_F_HZ, VIBE_MM = 0.8, 3.0   # the 진동 overlay, kept inside the envelope
+DECAY_T_S = 25.0                # 감쇠: amplitude e-folds this fast
+
+
+def _build_n_library() -> list[Motion]:
+    """The team's 34-motion system (docs/motion-system.png) as N01-N34.
+
+    One kind ("npath") whose ``shape`` field picks the trajectory in the
+    ML-Z plane -- the two channels this rig actually has (AP is pitch-only).
+    Sizes/speeds are chosen so every component, the doubled-frequency z terms
+    and the vibe overlay included, passes the report's V0 envelope gate:
+    shapes whose z runs at 2f take their "fast" at 0.4 Hz and "slow" at
+    0.2 Hz so nothing leaves the 0.2-0.8 Hz band.
+    """
+    lib: list[Motion] = []
+
+    def add(n, shape, size, speed, desc, f, a, b=0.0, vibe=False, decay=False):
+        tag = ("" if not (vibe or decay)
+               else "_VIBE" if vibe and not decay else "_DECAY")
+        name = f"{shape.upper()}_{size[:1].upper()}{speed[:1].upper()}{tag}" \
+               if size else f"{shape.upper()}{tag}"
+        # N01 (rest, no tremble) IS the parked state: static, so commanding
+        # it tapers to a stop instead of holding an empty oscillation mode
+        kind = "static" if shape == "still" and not vibe else "npath"
+        lib.append(Motion(f"N{n:02d}", name, kind, "N", desc, axis="MLZ",
+                          f_hz=f, a_mm=a, a2_mm=b, shape=shape, size=size,
+                          speed=speed, vibe=vibe, decay=decay))
+
+    # 선형 -- 정지형
+    add(1, "still", "", "", "hold at rest, no tremble", 0.0, 0.0)
+    add(2, "still", "", "", "at rest with a gentle tremble", 0.0, 0.0, vibe=True)
+    # 선형 -- 수평형 (horizontal sway)
+    add(3, "horiz", "small", "fast", "small quick sway", 0.7, 9.0)
+    add(4, "horiz", "small", "fast", "small quick sway + tremble", 0.7, 9.0, vibe=True)
+    add(5, "horiz", "large", "slow", "wide slow sway", 0.3, 22.0)
+    add(6, "horiz", "large", "slow", "wide slow sway + tremble", 0.3, 22.0, vibe=True)
+    add(7, "horiz", "large", "slow", "wide sway dying away to rest", 0.3, 22.0, decay=True)
+    # 선형 -- 수직형 (vertical bob)
+    add(8, "vert", "small", "fast", "small quick bob", 0.6, 7.0)
+    add(9, "vert", "small", "fast", "small quick bob + tremble", 0.6, 7.0, vibe=True)
+    add(10, "vert", "large", "slow", "deep slow bob", 0.3, 16.0)
+    add(11, "vert", "large", "slow", "deep slow bob + tremble", 0.3, 16.0, vibe=True)
+    add(12, "vert", "large", "slow", "deep bob dying away to rest", 0.3, 16.0, decay=True)
+    add(13, "vert_fall", "large", "slow", "bob with a quicker drop (varying "
+        "fall acceleration)", 0.35, 14.0, 7.0)
+    # 선형 -- V자형 (V-shaped swing; z runs at 2f)
+    add(14, "v", "small", "fast", "small quick V-swing", 0.4, 9.0, 5.0)
+    add(15, "v", "small", "fast", "small quick V-swing + tremble", 0.4, 9.0, 5.0, vibe=True)
+    add(16, "v", "large", "slow", "wide slow V-swing", 0.2, 20.0, 9.0)
+    add(17, "v", "large", "slow", "wide slow V-swing + tremble", 0.2, 20.0, 9.0, vibe=True)
+    add(18, "v_fall", "large", "slow", "V-swing with a quicker drop", 0.25, 20.0, 9.0)
+    # 비선형 -- 포물선형 (parabolic scoop; z at 2f)
+    add(19, "parab", "small", "fast", "small quick scoop", 0.4, 10.0, 5.0)
+    add(20, "parab", "large", "slow", "wide slow scoop", 0.2, 22.0, 10.0)
+    add(21, "dwell", "large", "slow", "scoop that rests at each end, trembling",
+        0.25, 18.0, 8.0, vibe=True)
+    add(22, "parab", "large", "slow", "scoop dying away to rest", 0.2, 22.0, 10.0, decay=True)
+    # 비선형 -- 원형 (circle in the ML-Z plane)
+    add(23, "circle", "small", "fast", "small quick circles", 0.6, 8.0, 8.0)
+    add(24, "circle", "large", "slow", "wide slow circles", 0.3, 15.0, 15.0)
+    add(25, "circle", "large", "slow", "circles dying away to rest", 0.3, 15.0, 15.0, decay=True)
+    # 비선형 -- 타원형 (ellipse)
+    add(26, "ellipse", "small", "fast", "small quick ovals", 0.6, 10.0, 4.0)
+    add(27, "ellipse", "large", "slow", "wide slow ovals", 0.3, 22.0, 8.0)
+    add(28, "ellipse", "large", "slow", "ovals dying away to rest", 0.3, 22.0, 8.0, decay=True)
+    # 비선형 -- 무한대형 (figure-eight; z at 2f)
+    add(29, "inf", "small", "fast", "small quick figure-eight", 0.35, 10.0, 4.0)
+    add(30, "inf", "large", "slow", "wide slow figure-eight", 0.2, 20.0, 8.0)
+    add(31, "inf", "large", "slow", "figure-eight dying away to rest", 0.2, 20.0, 8.0, decay=True)
+    # 비선형 -- 호형 (pendulum arc; z at 2f)
+    add(32, "arc", "small", "fast", "small quick pendulum arc", 0.4, 10.0, 4.0)
+    add(33, "arc", "large", "slow", "wide slow pendulum arc", 0.2, 22.0, 9.0)
+    add(34, "arc", "large", "slow", "arc dying away to rest", 0.2, 22.0, 9.0, decay=True)
+
+    assert len(lib) == 34, f"the N system holds 34 motions, has {len(lib)}"
+    for m in lib:
+        for f, a in m.worst_components():
+            if not (F_MIN_HZ <= f <= F_MAX_HZ):
+                raise ValueError(f"{m.id}: {f} Hz outside {F_MIN_HZ}-{F_MAX_HZ}")
+            if a > A_HARD_MM:
+                raise ValueError(f"{m.id}: A={a} mm over the {A_HARD_MM} mm cap")
+            if a_peak_g(f, a) > A_PEAK_MAX_G:
+                raise ValueError(f"{m.id}: a_peak {a_peak_g(f, a):.4f} g over "
+                                 f"{A_PEAK_MAX_G} g")
+    return lib
 
 
 def _build_library() -> list[Motion]:
@@ -198,18 +306,28 @@ def _build_library() -> list[Motion]:
 
 
 LIBRARY = _build_library()
-LIBRARY_BY_ID = {m.id: m for m in LIBRARY}
+N_LIBRARY = _build_n_library()
+LIBRARY_BY_ID = {m.id: m for m in (*LIBRARY, *N_LIBRARY)}
+
+# The N motions a soothing trial may use: everything that keeps moving --
+# N01 is the parked state and the decay entries stop by themselves, so a
+# 10 s observation of them measures mostly silence.
+N_CANDIDATES = tuple(m.id for m in N_LIBRARY
+                     if not m.decay and not (m.shape == "still" and not m.vibe))
 
 
 def catalog() -> list[dict]:
-    """The /motions payload: the whole library with its theory numbers."""
+    """The /motions payload: both libraries with their theory numbers."""
     out = []
-    for m in LIBRARY:
+    for m in (*LIBRARY, *N_LIBRARY):
         peak = max((a_peak_g(f, a) for f, a in m.worst_components()), default=0.0)
         out.append({
             "id": m.id, "name": m.name, "kind": m.kind, "grade": m.grade,
             "axis": m.axis, "f_hz": m.f_hz, "a_mm": m.a_mm,
             "a_peak_g": round(peak, 4), "desc": m.desc,
+            "shape": m.shape, "size": m.size, "speed": m.speed,
+            "vibe": m.vibe, "decay": m.decay,
+            "candidate": m.id in N_CANDIDATES,
         })
     return out
 
@@ -313,6 +431,8 @@ class MotionEngine:
         m = self.mode
         if m is None:
             return ()
+        if m.kind == "npath":
+            return (m.f_hz or VIBE_F_HZ, VIBE_F_HZ)
         if m.kind == "lissajous":
             return (m.f_hz, m.f2_hz)
         if m.kind == "pseudo_walk":
@@ -336,6 +456,51 @@ class MotionEngine:
             return a
         return m.a_mm
 
+    def _npath_mm(self, m: Motion, s: float,
+                  p: list[float]) -> tuple[float, float, float]:
+        """One N-system trajectory sample: (ap, ml, z) in millimetres.
+
+        All shapes live in the ML-Z plane (the rig's two real translation
+        channels).  ``decay`` entries die away on their own; the 진동 overlay
+        is a 0.8 Hz / 3 mm tremble on whichever channel the shape leaves
+        quietest.
+        """
+        a, b = m.a_mm * s, m.a2_mm * s
+        if m.decay:
+            fade = math.exp(-max(0.0, self.mode_t) / DECAY_T_S)
+            a, b = a * fade, b * fade
+        th = p[0]
+        ml = z = 0.0
+        if m.shape == "horiz":
+            ml = a * math.sin(th)
+        elif m.shape == "vert":
+            z = a * math.sin(th)
+        elif m.shape == "vert_fall":     # slow rise, quicker drop
+            z = a * math.sin(th + 0.6 * math.sin(th))
+        elif m.shape in ("v", "v_fall"):
+            tt = th + (0.5 * math.sin(th) if m.shape == "v_fall" else 0.0)
+            ml, z = a * math.sin(tt), b * abs(math.sin(tt))
+        elif m.shape == "parab":
+            ml, z = a * math.sin(th), b * math.sin(th) ** 2
+        elif m.shape == "dwell":         # flattened extremes = rest at each end
+            ml = a * max(-1.0, min(1.0, 1.35 * math.sin(th)))
+            z = b * math.sin(th) ** 2
+        elif m.shape == "circle":
+            ml, z = a * math.cos(th), b * math.sin(th)
+        elif m.shape == "ellipse":
+            ml, z = a * math.sin(th), b * math.cos(th)
+        elif m.shape == "inf":
+            ml, z = a * math.sin(th), b * math.sin(2.0 * th)
+        elif m.shape == "arc":           # pendulum: highest at the extremes
+            ml, z = a * math.sin(th), b * (1.0 - abs(math.cos(th)))
+        if m.vibe:
+            tremble = VIBE_MM * s * math.sin(p[1])
+            if m.shape in ("vert", "vert_fall"):
+                ml += tremble
+            else:
+                z += tremble
+        return 0.0, ml, z
+
     def offsets_mm(self) -> tuple[float, float, float]:
         """(ap, ml, z) centre offset right now, millimetres."""
         m = self.mode
@@ -344,6 +509,8 @@ class MotionEngine:
             return 0.0, 0.0, 0.0
         p = self._phase
         a = self._amplitude_mm() * s
+        if m.kind == "npath":
+            return self._npath_mm(m, s, p)
         if m.kind in ("sine", "adaptive_a", "adaptive_f"):
             v = a * math.sin(p[0])
             return ((v, 0.0, 0.0) if m.axis == "AP" else
@@ -379,6 +546,8 @@ class MotionEngine:
             # ...and which way it moves: ML sways, Z lifts, AP tilts (rendered
             # as the see-saw channel -- the rig has no second horizontal axis)
             "axis": m.axis if m else "",
+            # the N-system trajectory family, for the dashboard's wording
+            "shape": m.shape if m else "",
             "f_hz": round(f, 2),
             "a_mm": round(a_now, 2),
             "env": round(self.env * self.amp_scale, 3),
@@ -569,7 +738,9 @@ class CradleMachine:
             return step
         pick = self.advisor(now, self.ema)
         m = LIBRARY_BY_ID.get(str(pick).upper()) if pick else None
-        if m is not None and m.grade == "P1":
+        # P1 = the report's trial candidates; N = the team's 34-motion
+        # system (envelope-gated at import like everything else)
+        if m is not None and m.grade in ("P1", "N") and m.kind != "static":
             return m.id
         return step
 

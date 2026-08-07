@@ -74,8 +74,21 @@ function babyWord(tag) {
 /* A rate in hertz means nothing to most readers; a sway every N seconds
    does.  Three real motions on this rig: ML sways side to side, Z lifts
    (bobbing), AP tilts like a see-saw. */
+const SHAPE_WORD = {still: "gentle tremble", horiz: "side-to-side sway",
+                    vert: "up-and-down bob", vert_fall: "bob with a quick drop",
+                    v: "V-shaped swing", v_fall: "V-swing with a quick drop",
+                    parab: "scooping swing", dwell: "scoop resting at each end",
+                    circle: "circling", ellipse: "oval glide",
+                    inf: "figure-eight", arc: "pendulum arc"};
+
 function cradleWords(c) {
   if (c.tapering) return ["slowing to a stop", "easing the motion down to nothing"];
+  if (c.kind === "npath") {   // the N01-N34 system: word it by its shape
+    const pace = c.f_hz <= 0 ? "" : c.f_hz < 0.33 ? "slow " : c.f_hz < 0.5 ? "steady " : "quick ";
+    const every = c.f_hz > 0 ? ` · one pass every ${(1 / c.f_hz).toFixed(1)} s` : "";
+    return [pace + (SHAPE_WORD[c.shape] || "gentle motion"),
+            `${c.a_mm.toFixed(0)} mm${every}`];
+  }
   switch (c.kind) {
     case "static": return ["holding still", "not moving"];
     case "pause": return ["pausing to watch", "stopped for a moment to see what happens"];
@@ -127,7 +140,11 @@ function setMeter(id, frac, color) {
 /* ---- the motion library drawer ------------------------------------------ */
 let motions = [], mGrade = "", mQuery = "", mResearch = null;
 
-fetch("/motions").then(r => r.json()).then(list => { motions = list; drawMotions(); });
+fetch("/motions").then(r => r.json()).then(list => {
+  motions = list;
+  drawMotions();
+  fillTaste(list);
+});
 
 const esc = s => String(s).replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -360,12 +377,19 @@ function ladderEvents() {
 }
 
 /* ---- the temperament editor (virtual infant only) ------------------------ */
-const CANDS = Array.from({length: 10}, (_, i) =>
-  "M" + String(9 + i).padStart(2, "0"));
-for (const [id, blank] of [["t-love", false], ["t-hate1", true],
-                           ["t-hate2", true], ["t-c1", true], ["t-c2", true]])
-  $(id).innerHTML = (blank ? '<option value="">—</option>' : "")
-    + CANDS.map(m => `<option>${m}</option>`).join("");
+/* The selects fill from /motions once it arrives: the N-system trial
+   candidates, each labeled with its features so picking a taste means
+   something ("N16 · v large slow"). */
+function fillTaste(list) {
+  const cands = list.filter(m => m.candidate);
+  const opt = m => `<option value="${m.id}">${m.id} · ${m.shape}`
+    + (m.size ? ` ${m.size} ${m.speed}` : "") + (m.vibe ? " +tremble" : "")
+    + `</option>`;
+  for (const [id, blank] of [["t-love", false], ["t-hate1", true],
+                             ["t-hate2", true], ["t-c1", true], ["t-c2", true]])
+    $(id).innerHTML = (blank ? '<option value="">—</option>' : "")
+      + cands.map(opt).join("");
+}
 $("t-apply").onclick = () => {
   const hate = [$("t-hate1").value, $("t-hate2").value].filter(Boolean).join(",");
   const c1 = $("t-c1").value, c2 = $("t-c2").value;
@@ -629,3 +653,4 @@ function drawTimeline() {
 }
 requestAnimationFrame(drawTimeline);
 new ResizeObserver(() => { tlDirty = true; }).observe($("tlwrap"));
+

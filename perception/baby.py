@@ -77,38 +77,101 @@ COLORS_BGR = {        # matches the dashboard's palette
 class Personality:
     """docs/IDEA.md: a fixed, hidden motion temperament (the '성격').
 
-    ``gain`` scales SOOTHE_RATE for the motion currently playing: the loved
-    motion soothes 3x, a liked transition (combo[0] then combo[1]) 2x, the
-    hated ones agitate instead (negative).  The policy never sees this --
-    it only sees the happiness ranks it produces.
+    Two layers, multiplied together by ``gain``:
+
+    * **Specific motions** -- a loved id (3x), hated ids (agitate), a liked
+      transition (combo[0] then combo[1], 2x).
+    * **Features** (the N-system vocabulary, docs/motion-system.png) -- a
+      favourite and a hated *shape*, small-vs-large, fast-vs-slow, and a
+      feeling about the tremble.  Preferences therefore generalise: a baby
+      that loves wide slow circles also likes wide slow ovals, a little.
+
+    Time leaks in too: during a grumpy mood stretch, fast motions lose most
+    of their charm.  The policy never sees any of this -- only the ranks
+    it produces.
     """
 
     love: str = ""
     hate: frozenset = frozenset()
     combo: tuple = ()          # (a, b): b soothes 2x right after a
+    shape_love: str = ""       # this shape soothes 1.9x
+    shape_hate: str = ""       # this shape agitates
+    size_pref: str = ""        # "small" | "large" | ""
+    speed_pref: str = ""       # "fast" | "slow" | ""
+    vibe_pref: int = 0         # +1 loves the tremble, -1 hates it
 
-    def gain(self, motion, prev) -> float:
+    @staticmethod
+    def _features(motion):
+        from core.cradle import LIBRARY_BY_ID
+        return LIBRARY_BY_ID.get(motion)
+
+    def gain(self, motion, prev, mood: float = 1.0) -> float:
         if not motion:
             return 0.0
         if motion in self.hate:
             return -1.0
         if len(self.combo) == 2 and (prev, motion) == tuple(self.combo):
-            return 2.0
-        if motion == self.love:
-            return 3.0
-        return 1.0
+            base = 2.0
+        elif motion == self.love:
+            base = 3.0
+        else:
+            base = 1.0
+        m = self._features(motion)
+        if m is not None and m.shape:
+            if self.shape_hate and m.shape == self.shape_hate:
+                return -0.8
+            if self.shape_love and m.shape == self.shape_love:
+                base *= 1.9
+            if self.size_pref and m.size:
+                base *= 1.3 if m.size == self.size_pref else 0.8
+            if self.speed_pref and m.speed:
+                base *= 1.3 if m.speed == self.speed_pref else 0.8
+            if self.vibe_pref:
+                if m.vibe:
+                    base *= 1.5 if self.vibe_pref > 0 else 0.35
+                elif self.vibe_pref > 0:
+                    base *= 0.9
+            if mood < 0.8 and m.speed == "fast":   # grumpy: only slow works
+                base *= 0.6
+        return base
 
     @classmethod
     def random(cls, rng: random.Random, pool=None) -> "Personality":
-        pool = list(pool or (f"M{n:02d}" for n in range(9, 19)))
+        if pool is None:
+            from core.cradle import N_CANDIDATES
+            pool = N_CANDIDATES
+        pool = list(pool)
         rng.shuffle(pool)
+        shapes = ["horiz", "vert", "v", "parab", "circle", "ellipse",
+                  "inf", "arc"]
+        rng.shuffle(shapes)
         return cls(love=pool[0], hate=frozenset(pool[1:3]),
-                   combo=(pool[3], pool[4]))
+                   combo=(pool[3], pool[4]),
+                   shape_love=shapes[0], shape_hate=shapes[1],
+                   size_pref=rng.choice(("small", "large", "")),
+                   speed_pref=rng.choice(("fast", "slow", "")),
+                   vibe_pref=rng.choice((-1, 0, 1)))
 
     def describe(self) -> str:
-        return (f"loves {self.love}, hates {'/'.join(sorted(self.hate))}, "
-                f"likes {self.combo[0]}->{self.combo[1]}" if self.combo
-                else f"loves {self.love}, hates {'/'.join(sorted(self.hate))}")
+        bits = []
+        if self.love:
+            bits.append(f"loves {self.love}")
+        if self.hate:
+            bits.append("hates " + "/".join(sorted(self.hate)))
+        if len(self.combo) == 2:
+            bits.append(f"likes {self.combo[0]}->{self.combo[1]}")
+        if self.shape_love:
+            bits.append(f"{self.shape_love} shapes soothe")
+        if self.shape_hate:
+            bits.append(f"{self.shape_hate} shapes upset")
+        if self.size_pref:
+            bits.append(f"prefers {self.size_pref}")
+        if self.speed_pref:
+            bits.append(f"prefers {self.speed_pref}")
+        if self.vibe_pref:
+            bits.append("loves the tremble" if self.vibe_pref > 0
+                        else "hates the tremble")
+        return ", ".join(bits) or "easygoing"
 
 
 @dataclass(frozen=True)
@@ -216,7 +279,7 @@ class VirtualBaby:
         # motion, loved included, fades with heavy use.
         gain = 1.0
         if self.personality is not None and soothing > 0.2:
-            gain = self.personality.gain(motion, self._prev_motion)
+            gain = self.personality.gain(motion, self._prev_motion, self._mood)
         if gain > 0.0 and motion:
             gain *= max(FATIGUE_FLOOR, 1.0 - self._fatigue.get(motion, 0.0))
         if self.state in ("FUSS", "CRY") and soothing > 0.2:

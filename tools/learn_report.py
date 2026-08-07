@@ -218,19 +218,23 @@ def main(argv=None) -> int:
                              "random, the temperament)")
     parser.add_argument("--temperament", choices=("tricky", "random"),
                         default="tricky",
-                        help="'tricky' = the IDEA.md demo case: the baby "
-                             "hates exactly the ladder's first two rungs and "
-                             "loves its third; 'random' draws one from --seed "
-                             "(an easy baby may show no gap -- honestly so)")
+                        help="'tricky' = the demo case: the baby hates the "
+                             "report ladder's motions and only wide slow "
+                             "circling shapes really soothe it; 'random' "
+                             "draws a temperament from --seed (an easy baby "
+                             "may show no gap -- honestly so)")
     parser.add_argument("--out", type=Path, default=Path("data/learning.html"))
     args = parser.parse_args(argv)
 
     NIGHT_S = args.night_s
-    # The demo temperament collides head-on with the fixed ladder (M10, M12,
-    # M13, M16): rungs one and two agitate this baby, rung three is its
-    # favourite.  The policy is never told any of this.
-    personality = (Personality(love="M13", hate=frozenset({"M10", "M12"}),
-                               combo=("M09", "M13"))
+    # The demo temperament collides head-on with the fixed ladder (M10/M12
+    # agitate this baby) and its real tastes live in the N-system feature
+    # space: wide slow circling shapes soothe, trembles annoy.  The policy
+    # is never told any of this.
+    personality = (Personality(love="N24", hate=frozenset({"M10", "M12", "N05"}),
+                               shape_love="circle", shape_hate="vert",
+                               size_pref="large", speed_pref="slow",
+                               vibe_pref=-1)
                    if args.temperament == "tricky"
                    else Personality.random(random.Random(args.seed)))
     policy = SoothePolicy(ReflexBrain())   # one memory across every night
