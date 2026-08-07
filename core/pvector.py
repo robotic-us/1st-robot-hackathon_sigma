@@ -23,18 +23,13 @@ So "dreaming" a chunk costs one polynomial evaluation per axis per sample --
 microseconds, exactly, and with no training data at all.  That is the whole
 trick: the world model was handed to us in the motion format.
 
-Where the numbers come from, in order of preference:
+Where the numbers come from:
 
-  1. ``MotionMap.csv`` on the robot's SD card -- the real thing.  One row per
-     (motion slot, axis); the P-Vector columns are that axis's segment list.
-  2. ``slots.json`` -- our own start_pose/end_pose description, synthesised into
-     one segment per axis.  Coarser, but it means the whole DREAM-Chunk stack
-     runs today, with no robot and no SD card, and upgrades automatically the
-     moment a real MotionMap.csv appears.
+``MotionMap.csv`` on the robot's SD card is the source: one row per (motion
+slot, axis), the P-Vector columns being that axis's segment list.
 
 Run standalone::
 
-    python3 core/pvector.py --from-slots slots.json     # dream every slot, print it
     python3 core/pvector.py --motion-map MotionMap.csv  # same, from the real file
 """
 
@@ -205,7 +200,6 @@ class MotionChunk:
     name: str
     programs: tuple[AxisProgram, ...]
     units_per_deg: float = UNITS_PER_DEG
-    synthesised: bool = False   # True when derived from slots.json, not the SD card
 
     @property
     def axes(self) -> tuple[int, ...]:
@@ -378,74 +372,6 @@ def _parse_axis_index(text: str) -> Optional[int]:
         return None
 
 
-def chunks_from_slot_table(
-    path: str = "slots.json",
-    default_duration_s: float = 1.6,
-    s0: float = 0.0,
-    sd: float = 0.0,
-    units_per_deg: float = UNITS_PER_DEG,
-) -> dict[int, MotionChunk]:
-    """Synthesise a chunk dictionary from ``slots.json``.
-
-    One P-Vector per axis, running start_pose -> end_pose.  This is a *coarser*
-    model than the real MotionMap (no intermediate segments), and every chunk it
-    produces is flagged ``synthesised=True`` so the matcher can say so in the
-    log rather than quietly implying it read the SD card.
-    """
-    with open(path, encoding="utf-8") as handle:
-        raw = json.load(handle)
-
-    axes = tuple(int(a) for a in raw.get("axes", (0, 1, 2, 3)))
-    l_traj = max(1, int(round(default_duration_s * PCM_SAMPLE_HZ)))
-
-    chunks: dict[int, MotionChunk] = {}
-    for key, entry in raw.get("slots", {}).items():
-        slot_id = int(key)
-        start = [float(v) for v in entry.get("start_pose", ())]
-        end = [float(v) for v in entry.get("end_pose", ())]
-        if len(start) != len(axes) or len(end) != len(axes):
-            LOGGER.warning("slot %s: pose length mismatch -- skipped", key)
-            continue
-        programs = tuple(
-            AxisProgram(
-                axis_index=axis,
-                # The synthesised segment is expressed relative to the chunk's
-                # own nominal start, so dreaming it from a *measured* pose
-                # reproduces the same shape displaced to where we really are.
-                segments=(PVector(
-                    yd=rad_to_units(end[col] - start[col], units_per_deg),
-                    l_traj=l_traj, s0=s0, sd=sd,
-                ),),
-            )
-            for col, axis in enumerate(axes)
-        )
-        chunks[slot_id] = MotionChunk(
-            slot_id=slot_id,
-            name=str(entry.get("desc", f"slot {slot_id}")),
-            programs=programs,
-            units_per_deg=units_per_deg,
-            synthesised=True,
-        )
-
-    LOGGER.info("synthesised %d chunks from %s (no MotionMap.csv)", len(chunks), path)
-    return chunks
-
-
-def load_chunk_dictionary(
-    motion_map: Optional[str] = None,
-    slot_table: str = "slots.json",
-    axes: Optional[Sequence[int]] = None,
-    units_per_deg: float = UNITS_PER_DEG,
-) -> dict[int, MotionChunk]:
-    """The real MotionMap if we have it, otherwise the synthesised fallback."""
-    if motion_map:
-        try:
-            return load_motion_map(motion_map, axes=axes, units_per_deg=units_per_deg)
-        except (OSError, ValueError) as exc:
-            LOGGER.warning("could not read %s (%s) -- falling back to %s",
-                           motion_map, exc, slot_table)
-    return chunks_from_slot_table(slot_table, units_per_deg=units_per_deg)
-
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -453,9 +379,7 @@ def describe(chunks: dict[int, MotionChunk]) -> None:
     if not chunks:
         print("no chunks")
         return
-    origin = "synthesised from slots.json" if any(c.synthesised for c in chunks.values()) \
-        else "MotionMap.csv"
-    print(f"{len(chunks)} chunks ({origin})\n")
+    print(f"{len(chunks)} chunks (MotionMap.csv)\n")
     print(f"{'slot':>4}  {'dur(s)':>7}  {'axes':>12}  {'peak(rad)':>9}  name")
     print("-" * 78)
     for slot_id in sorted(chunks):
@@ -467,8 +391,8 @@ def describe(chunks: dict[int, MotionChunk]) -> None:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--motion-map", help="the robot's MotionMap.csv")
-    parser.add_argument("--from-slots", default="slots.json")
+    parser.add_argument("--motion-map", required=True,
+                        help="the robot's MotionMap.csv")
     parser.add_argument("--units-per-deg", type=float, default=UNITS_PER_DEG)
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
@@ -478,11 +402,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         format="%(levelname)-7s %(name)s: %(message)s",
     )
 
-    describe(load_chunk_dictionary(
-        motion_map=args.motion_map,
-        slot_table=args.from_slots,
-        units_per_deg=args.units_per_deg,
-    ))
+    describe(load_motion_map(args.motion_map, units_per_deg=args.units_per_deg))
     return 0
 
 

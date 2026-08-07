@@ -119,9 +119,14 @@ function nextWords(c) {
          + "though the safety gate still overrides it.";
   if (c.state === "trial") {
     const check = c.check_s ?? 30, noImp = c.no_improve_s ?? 2 * check;
+    const trying = `Trying this for ${Math.round(c.trial_s)} s. Re-decided `
+                 + `every ${Math.round(check)} s`;
+    // give_up off (serve.py's default): there is no hand-over to count down to
+    if (c.give_up === false)
+      return trying + "; a motion that is not helping gets swapped for "
+           + "another rather than stopping.";
     const left = Math.max(0, noImp - c.trial_s);
-    return `Trying this for ${Math.round(c.trial_s)} s. Re-decided every `
-         + `${Math.round(check)} s; if nothing helps for ${Math.round(left)} s `
+    return trying + `; if nothing helps for ${Math.round(left)} s `
          + "the cradle stops and calls for you.";
   }
   if (c.state === "settling")
@@ -220,6 +225,10 @@ function updatePanels() {
     : lvl >= CRY_LEVEL ? cssv("--r3")
     : lvl >= CALM_LEVEL ? cssv("--r1") : cssv("--r0"));
   const rank = rankOf(ema);
+  /* the card's top edge carries the rank: the one thing on this panel that is
+     legible from the far side of the room, before any of the words are */
+  $("card-baby").style.setProperty("--edge",
+    c.state === "gate_fail" ? cssv("--critical") : rankColor(rank));
   put("ladder", RANK_SHORT.map((w, i) =>
       `<span class="r${i}${i === rank ? " on" : ""}">${w}</span>`).join(""));
 
@@ -314,9 +323,12 @@ function updatePanels() {
 
 /* ---- the decision brain (docs/IDEA.md, core/policy.py) ------------------- */
 const BRAIN_NAME = {reflex: "Local algorithm",
+                    dream: "DREAM-Chunk planner",
                     ollama: "Local LLM",
                     claude: "Claude (Anthropic API)"};
 const BRAIN_SUB = {reflex: "taught strategy in code — free, offline, deterministic",
+                   dream: "dreams all 26 motions forward through a learned "
+                        + "comfort model and takes the best — free, offline",
                    ollama: "LLM on this machine via Ollama — free, private; "
                          + "falls back to the ladder if unreachable",
                    claude: "paid cloud LLM — falls back to the ladder on any "
@@ -387,8 +399,161 @@ function drawBrain(rank) {
       the first fuss</div>`);
   put("trail", p.steps.slice(-6).map(s =>
       `${s.motion} ${s.before}→${s.after ?? "…"}`).join("  ·  "));
+  drawPlan(p.plan);
 }
 const verdictWord = d => d > 0 ? "helps" : d < 0 ? "worse" : "no effect";
+
+/* ---- the planner's own reasoning (core/policy.py ChunkMatcher) ------------ */
+/* The one brain that can show its work: every candidate it dreamed, the
+   comfort each was predicted to reach, and the three cost terms that moved
+   it off that prediction.  Only the numbers the pick actually used. */
+function drawPlan(plan) {
+  const card = $("card-plan");
+  card.hidden = !plan || !plan.candidates || !plan.candidates.length;
+  $("brainrow").classList.toggle("wide3", !card.hidden);
+  if (card.hidden) return;
+
+  put("planwhen", `${plan.dreamed} motions · ${plan.seqLabel
+      || (plan.plans && plan.plans.length
+          ? `${plan.plans[0].seq.length} × ${plan.slot_s}s`
+          : "")} · ${plan.horizon_s}s ahead`);
+  // A cold model predicts the same future for everything it has not tried.
+  // Say so — a list of equal costs is not a considered ranking, and the
+  // panel should not let it look like one.
+  const tied = plan.candidates.length > 1
+    && Math.abs(plan.candidates[0].cost
+                - plan.candidates[plan.candidates.length - 1].cost) < 0.001;
+  put("planhead", `From <b>${RANK_WORD[rankOf(plan.level)]}</b>
+      (level ${plan.level.toFixed(2)}) it dreamed whole schedules forward and
+      committed the first motion, <b>${esc(plan.chosen || "—")}</b>.`
+      + (tied ? ` The leaders all score the same — these are still untried,
+          so it is exploring in taught order.` : "")
+      + ` <span class="sub2">Only the first motion is played; the rest is
+          re-dreamed at the next decision.</span>`);
+
+  put("plans", planTree(plan));
+
+  // bars are the *predicted* level, so shorter is calmer; the ranking is by
+  // total cost, which is why a shorter bar can still lose
+  const worst = Math.max(plan.level, ...plan.candidates.map(c => c.fit)) || 1;
+  put("plan", plan.candidates.map(c => {
+    const win = c.id === plan.chosen;
+    const why = [];
+    if (c.new) why.push("untried");
+    if (c.switch) why.push("a change"); else if (c.id === plan.playing) why.push("playing now");
+    if (c.resist > 0.001) why.push("used lately");
+    const title = `predicted ${c.fit.toFixed(2)} · gain ${c.gain}`
+                + ` · cost ${c.cost.toFixed(2)}`;
+    return `<div class="prow${win ? " win" : ""}" title="${title}">
+        <b>${c.id}</b>
+        <span class="dbar plain"><i style="width:${clamp(c.fit / worst, 0, 1) * 100}%;
+             background:${rankColor(rankOf(c.fit))}"></i></span>
+        <span class="verdict">→ ${RANK_WORD[rankOf(c.fit)]}${
+          why.length ? ` · ${why.join(", ")}` : ""}</span></div>`;
+  }).join(""));
+  // taste and wear are drawn apart on purpose: recording "worn out" as
+  // "disliked" is what made a carried model talk itself out of every motion
+  const d = S.policy && S.policy.model;
+  const worn = d && d.wear ? Object.entries(d.wear)
+      .sort((a, b) => b[1] - a[1]).slice(0, 4) : [];
+  put("planveto",
+      (worn.length ? `worn right now (recovers with rest): ` + worn.map(
+          ([m, w]) => `${m} ${Math.round(w * 100)}%`).join(", ") : "")
+      + (plan.vetoed.length
+         ? `${worn.length ? " · " : ""}vetoed as disliked: `
+           + plan.vetoed.join(", ")
+         : ""));
+}
+
+/* The dream, drawn as the tree it actually is.
+   A plain node tree would waste the strongest axis, so the geometry carries
+   the data: x is time ahead, y is the comfort each future is predicted to
+   reach, and the branches fan from where the baby is right now.  The
+   steepest line down is the plan it committed to — the shape *is* the
+   argument.  Paths sharing a prefix share their edges, which is what makes
+   it a tree and not a fan. */
+function planTree(plan) {
+  const plans = plan.plans || [];
+  if (!plans.length) return "";
+  const depth = Math.max(...plans.map(q => q.seq.length));
+  const W = 300, H = 34 + depth * 34, L = 6, R = 40, TOP = 16, BOT = 10;
+  const maxY = Math.max(plan.level, ...plans.map(q => Math.max(...q.trace)));
+  const scale = v => TOP + (H - TOP - BOT) * (1 - clamp(v / (maxY || 1), 0, 1));
+  const xAt = i => L + (W - L - R) * (i / depth);
+  const rootY = scale(plan.level);
+
+  // nodes keyed by their path prefix, so shared prefixes share a point
+  const nodes = new Map([["", {x: xAt(0), y: rootY, id: "now", win: true}]]);
+  const edges = [];
+  plans.forEach((q, qi) => {
+    let key = "";
+    q.seq.forEach((m, k) => {
+      const parent = key;
+      key += (key ? "," : "") + m;
+      if (!nodes.has(key))
+        nodes.set(key, {x: xAt(k + 1), y: scale(q.trace[k]), id: m,
+                        win: qi === 0, lvl: q.trace[k]});
+      else if (qi === 0) nodes.get(key).win = true;
+      if (!edges.some(e => e.to === key))
+        edges.push({from: parent, to: key, win: qi === 0,
+                    tip: `${q.seq.slice(0, k + 1).join(" → ")} · dreamed `
+                       + `${RANK_WORD[rankOf(q.trace[k])]}`});
+      else if (qi === 0) edges.find(e => e.to === key).win = true;
+    });
+  });
+
+  // the comfort bands the rest of the dashboard already uses as its ladder
+  let svg = `<svg viewBox="0 0 ${W} ${H}" class="tree" role="img"
+      aria-label="the futures the planner dreamed, best first">`;
+  RANK_BANDS.forEach((edge, i) => {
+    const y = scale(edge);
+    if (y > TOP && y < H - BOT)
+      svg += `<line x1="${L}" y1="${y.toFixed(1)}" x2="${W - R}"
+              y2="${y.toFixed(1)}" class="band"/>`
+           + `<text x="${W - R + 4}" y="${(y + 3).toFixed(1)}"
+              class="bandlab">${RANK_SHORT[i]}</text>`;
+  });
+  edges.forEach(e => {
+    const a = nodes.get(e.from), b = nodes.get(e.to);
+    svg += `<path d="M${a.x.toFixed(1)} ${a.y.toFixed(1)}
+            C${((a.x + b.x) / 2).toFixed(1)} ${a.y.toFixed(1)},
+             ${((a.x + b.x) / 2).toFixed(1)} ${b.y.toFixed(1)},
+             ${b.x.toFixed(1)} ${b.y.toFixed(1)}"
+            class="edge${e.win ? " win" : ""}"><title>${esc(e.tip)}</title></path>`;
+  });
+  // Labels last, and only where they fit. Early on every future is identical,
+  // so the branches sit on top of each other — drawing all 18 ids there gives
+  // an unreadable pile. The committed path is labelled first and keeps its
+  // place; anything landing on top of an existing label is dropped.
+  const placed = [];
+  const fits = (x, y) => !placed.some(p =>
+    Math.abs(p.x - x) < 22 && Math.abs(p.y - y) < 14);
+  let labels = "";
+  const lastX = xAt(depth);
+  const label = (n, key) => {
+    if (key === "") return;                    // the root is the axis's "now"
+    const y = n.y - 6;
+    if (!fits(n.x, y)) return;
+    placed.push({x: n.x, y});
+    // the final column would run into the ladder labels in the right margin,
+    // so those ids hang back off their node instead of straddling it
+    const end = Math.abs(n.x - lastX) < 0.5;
+    labels += `<text x="${(end ? n.x - 5 : n.x).toFixed(1)}"
+               y="${y.toFixed(1)}" class="nlab${n.win ? " win" : ""}"
+               ${end ? 'text-anchor="end"' : ""}>${esc(n.id)}</text>`;
+  };
+  nodes.forEach((n, key) => {
+    svg += `<circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}"
+            r="${n.win ? 3.4 : 2.4}" class="node${n.win ? " win" : ""}"/>`;
+  });
+  nodes.forEach((n, key) => { if (n.win) label(n, key); });
+  nodes.forEach((n, key) => { if (!n.win) label(n, key); });
+  svg += labels;
+  svg += `<text x="${L}" y="${H - 1}" class="tlab">now</text>`
+       + `<text x="${(W - R).toFixed(1)}" y="${H - 1}" class="tlab"
+          text-anchor="end">+${plan.horizon_s}s</text></svg>`;
+  return svg;
+}
 
 /* Fixed-ladder mode still shows its decisions: the machine's own log lines. */
 function ladderEvents() {
@@ -584,7 +749,7 @@ function drawTimeline() {
     tg.textAlign = "left";
     tg.fillText(RANK_SHORT[i], padL + pw + 8 * dpr,
                 Math.min(yBot - 3 * dpr, (yTop + yBot) / 2 + 3 * dpr));
-    tg.strokeStyle = cssv("--border");
+    tg.strokeStyle = cssv("--rule");
     tg.lineWidth = 1;
     tg.beginPath(); tg.moveTo(padL, yTop); tg.lineTo(padL + pw, yTop); tg.stroke();
   }

@@ -11,12 +11,12 @@ reversibly, when that default may be broken.
 ```
                  SENSING (one of three modes)
   ┌──────────────────────┬──────────────────────┬──────────────────────┐
-  │ state cards          │ --sense (real)       │ --baby (closed loop) │
-  │ perception/tag.py    │ face/ + listen.py    │ perception/baby.py   │
-  │ tag_0 calm · tag_1   │ YuNet→FER+ distress  │ random infant state; │
-  │ fuss · tag_2 cry;    │ ⊕ mic cry-band       │ the engine's sway    │
-  │ motion ignored       │ (noisy-OR)           │ feeds back as        │
-  │                      │                      │ soothing             │
+  │ --verify (scripted)  │ --sense (real)       │ --baby (closed loop) │
+  │ serve.py episode     │ watch.py + listen.py │ perception/baby.py   │
+  │ acted sensor signals │ five-state watcher / │ random infant state; │
+  │ through the real     │ YuNet→FER+ ⊕ mic     │ the engine's sway    │
+  │ AudioTrack→judge     │ through InfantJudge  │ feeds back as        │
+  │ chain (VERIFY.md L1) │ (report §4.2-5)      │ soothing             │
   └──────────┬───────────┴──────────┬───────────┴──────────┬───────────┘
              └───────────── present, level 0..1 ───────────┘
                                 │
@@ -38,8 +38,9 @@ reversibly, when that default may be broken.
 
 `serve.py` hosts this loop in one process: a sensor thread produces frames
 and readings, the machine and engine tick on it, and plain-HTTP endpoints
-(`/events` SSE, `/frame` MJPEG, `/motions`, `/motion?id=`, `/auto`, `/jam`,
-`/slots`, `/play`) expose everything to the browser. serve.py stays 2D; the
+(`/events` SSE, `/frame` MJPEG, `/history`, `/motions`, `/motion?id=`,
+`/auto`, `/jam`, `/policy`, `/taste`, `/baby`, `/motion-sensor`) expose
+everything to the browser. serve.py stays 2D; the
 3D view is RViz's job.
 
 ## The safety ladder (report §5, `CradleMachine`)
@@ -82,14 +83,21 @@ Millimetres become joint degrees through the CAD lever: `PIVOT − AXIS0`
 (contact-graph role detection over `docs/udrf_assembly.stl` → 16 links,
 `cad/sigma.urdf`).
 
-## The legacy DREAM-Chunk path
+## DREAM-Chunk
 
-`--dream-auto` restores the earlier autopilot: tag shake picks one of 10
-pre-described slots (`slots.json`) ranked by `core/dream.py`'s cost model
-(task fit + continuity + resistance + consistency), with the `DreamMonitor`
-watching commanded-vs-actual divergence (the browser's "ghost plate" and the
-JAM button demo it). It is kept as a working demo and as the divergence-
-monitoring substrate; the report's machine owns default automatic behaviour.
+The paper's ranking half, re-anchored from the arm onto the infant, lives in
+`core/policy.py`: `WorldModel` learns what this baby makes of each motion
+(taste, pooled over motion *features*; wear, computed from its own play
+history; and transitions), and `ChunkMatcher` dreams every candidate forward
+through it and ranks them on task fit + continuity + habituation. `DreamBrain`
+wraps that as one of the interchangeable brains (`--policy dream`), and the
+dashboard's *What it dreamed* card draws the ranking as a tree of futures.
+
+The paper's monitoring half — a divergence tube cutting a motion that left its
+dreamed curve — was implemented, measured at +2.9 % upset, and removed.
+`docs/dream-chunk.md` carries that measurement, the estimator audit behind it,
+and the tables for every arm. *(The pre-2026-08 autopilot it grew out of —
+`--dream-auto`, `slots.json`, `core/dream.py` — is gone with the tag stack.)*
 
 ## Report → code traceability
 
@@ -108,12 +116,12 @@ monitoring substrate; the report's machine owns default automatic behaviour.
 |---|---|
 | listen | audio features: cry band vs hiss/noise/quiet |
 | sense | emotion→distress weights, noisy-OR fusion |
-| models | the 3 ONNX models load + infer; Sense stack headless |
-| tag | detection, **card identity**, distance, dropout |
-| pvector | quintic boundary conditions, MotionMap parsing |
-| dream | matcher ranking, veto, divergence monitor |
+| models | the ONNX models load + infer, headless |
 | cradle | library gate, engine ramps, the whole safety ladder on a fake clock |
 | baby | virtual infant dynamics; 20 sim-minutes of closed loop baby↔machine↔engine |
+| policy | ranks, brains, the world model + matcher, the advised closed loop |
 | m50 | 50 compiled slots round-trip within envelope, end at rest |
-| demo | DREAM decide/jam/preempt cycle |
+| watch | the five-state watcher and the report-spec judge (§4.2–5) |
+| animate | the rig: one JOINT_NAMES list, real five-bar IK, closure to 0.025 mm |
 | serve | every HTTP endpoint against a live server, card→trial end-to-end |
+| bridge | SlotBridge: decisions become PCM slots (no phorce, no ROS) |

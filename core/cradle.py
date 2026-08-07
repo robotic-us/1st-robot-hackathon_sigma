@@ -585,19 +585,41 @@ class CradleMachine:
     Inputs per tick: is the face (tag) visible, a 0..1 distress level, and
     the jam flag standing in for an arm-desync/E-stop.  The safety gate runs
     even with ``auto`` off; ``auto`` only enables the trial/sleep behaviour.
+
+    ``give_up`` is the report's own §5 hand-over -- no improvement by the
+    deadline, or sustained worsening, stops the trial and calls a caregiver.
+    Turned off (``serve.py`` does, for the demo) the machine never hands the
+    baby over: it re-decides and keeps trying instead, and a trial still ends
+    at the 5-minute cap.  The safety gate is *not* part of this: a jam, a lost
+    face or a pain/posture alarm tapers and alerts either way.
     """
 
     def __init__(self, engine: MotionEngine,
-                 check_every_s: float = CHECK_EVERY_S) -> None:
+                 check_every_s: float = CHECK_EVERY_S,
+                 give_up: bool = True) -> None:
         self.engine = engine
         self.auto = True
+        self.give_up = give_up
         # The trial rhythm.  The report spec is 30 s checkpoints; the demo
         # rig plays each motion for ~10 s, so serve.py passes 10 and the
         # ramps and the no-improvement deadline scale with it.
         self.check_s = max(RAMP_MIN_S, check_every_s)
         self._no_improve_s = 2.0 * self.check_s
-        self._start_ramp_s = min(RAMP_DEFAULT_S, self.check_s)
         self._step_ramp_s = max(RAMP_MIN_S, self.check_s / 3.0)
+        # A 30 s soft start inside a 10 s trial means the motion is only just
+        # at strength when the machine already re-decides -- the baby never
+        # feels the pick, and the demo reads as "nothing happens for ages".
+        # At the report's own cadence nothing changes.
+        self._start_ramp_s = (RAMP_DEFAULT_S if self.check_s >= RAMP_DEFAULT_S
+                              else self._step_ramp_s)
+        # The pauses scale with the same demo pace.  At check_s = 30 (the
+        # report) k = 1 and these are exactly 30 / 90 / 30 s; at --pace 10 a
+        # hand-over otherwise leaves the cradle still for two whole minutes
+        # (30 s taper + 90 s cooldown), which is the gap that reads as dead.
+        k = min(1.0, self.check_s / CHECK_EVERY_S)
+        self._cool_end_s = COOLDOWN_END_S * k
+        self._cool_abort_s = COOLDOWN_ABORT_S * k
+        self._taper_s = max(RAMP_MIN_S, RAMP_DEFAULT_S * k)
         # Optional (now, ema) -> motion-id hook (core/policy.py): may suggest
         # *which* P1 motion a trial uses; every when/abort/taper decision
         # stays here.  Anything but a valid P1 id falls back to the ladder.
@@ -635,7 +657,8 @@ class CradleMachine:
             "trial_s": round(now - self._trial_t0, 1) if self.state == "trial" else 0,
             # the trial rhythm, so the dashboard's words match the machine
             "check_s": round(self.check_s, 1),
-            "no_improve_s": round(self._no_improve_s, 1),
+            "no_improve_s": round(self._no_improve_s, 1) if self.give_up else 0,
+            "give_up": self.give_up,
             "alert": self.alert,
         }
 
@@ -665,6 +688,7 @@ class CradleMachine:
             if self._gate_ok_t >= GATE_RECOVER_S:
                 self.state = "quiet"
                 self._cooldown_until = now + 10.0
+                self.alert = ""
                 self._log("gate recovered -- observing before any restart")
             return
 
@@ -686,8 +710,12 @@ class CradleMachine:
             if self.ema > 1.3 * self._baseline + 0.05:
                 self._worse_t += dt
                 if self._worse_t >= WORSE_SUSTAIN_S:
-                    self._abort(now, "worse during trial")
-                    return
+                    if self.give_up:
+                        self._abort(now, "worse during trial")
+                        return
+                    # Not handing over -- but not sitting on a motion the baby
+                    # is getting worse under either: change it now, off-cycle.
+                    self._retry(now, "worse under")
             else:
                 self._worse_t = 0.0
             if now - self._check_t >= self.check_s:
@@ -704,12 +732,18 @@ class CradleMachine:
                     self.engine.command(step, now, ramp_s=self._step_ramp_s)
                     self._log(f"no improvement at {self.check_s:.0f} s -- "
                               f"one step up to {step}")
-            if now >= self._deadline:
+                elif not self.give_up:
+                    # below the cry line and not improving: with no hand-over
+                    # to fall back on, the answer is a different motion, not
+                    # the same one until the 5-minute cap
+                    self._retry(now, f"no improvement at {self.check_s:.0f} s "
+                                     "on")
+            if self.give_up and now >= self._deadline:
                 self._abort(now, f"no improvement in {self._no_improve_s:.0f} s")
             elif now - self._trial_t0 >= TRIAL_CAP_S:
-                self.engine.command("M05", now)
+                self.engine.command("M05", now, ramp_s=self._taper_s)
                 self.state = "settling"
-                self._cooldown_until = now + COOLDOWN_END_S
+                self._cooldown_until = now + self._cool_end_s
                 self._log("5 min trial cap -- taper")
             return
 
@@ -729,7 +763,7 @@ class CradleMachine:
             if not self.engine.active:
                 self.state = "quiet"
                 self._cooldown_until = max(self._cooldown_until,
-                                           now + COOLDOWN_END_S)
+                                           now + self._cool_end_s)
 
     def _trial_step(self, now: float) -> str:
         """The ladder rung -- unless the advisor names a valid P1 motion."""
@@ -744,6 +778,25 @@ class CradleMachine:
             return m.id
         return step
 
+    def _retry(self, now: float, why: str) -> str:
+        """Keep the trial alive on a different motion (``give_up`` off).
+
+        The baseline moves to where the baby actually is, or the same rung
+        would re-trigger on the next tick and the machine would churn.
+        """
+        was = self.engine.mode.id if self.engine.mode else "?"
+        self._rung = min(self._rung + 1, len(TRIAL_LADDER) - 1)
+        step = self._trial_step(now)
+        self._check_t = now
+        self._worse_t = 0.0
+        self._baseline = max(self.ema, 0.05)
+        if step != was:
+            self.engine.command(step, now, ramp_s=self._step_ramp_s)
+            self._log(f"{why} {was} -- trying {step}, not handing over")
+        # else: the bare ladder is out of rungs and has nothing else to offer
+        # (no advisor).  Hold what is playing rather than churn the log.
+        return step
+
     def _start_trial(self, now: float) -> None:
         self._rung = 1 if self.ema >= CRY_LEVEL else 0
         step = self._trial_step(now)
@@ -754,12 +807,15 @@ class CradleMachine:
         self._baseline = max(self.ema, 0.05)
         self._worse_t = 0.0
         self._resumed = False
+        # the banner states a *live* condition: the machine has taken the baby
+        # back, so the previous hand-over is history, not the current ask
+        self.alert = ""
         self._log(f"cry trial: {step} soft start (level {self.ema:.2f})")
 
     def _abort(self, now: float, why: str) -> None:
-        self.engine.command("M05", now)
+        self.engine.command("M05", now, ramp_s=self._taper_s)
         self.state = "settling"
-        self._cooldown_until = now + COOLDOWN_ABORT_S
+        self._cooldown_until = now + self._cool_abort_s
         self._alert(f"{why} -- taper and hand over")
 
 def main(argv: Optional[list] = None) -> int:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""slots.json -> motion_NN.csv, the format the pcm and the simulator both read.
+"""core/cradle.py -> motion_NN.csv, the format the pcm and the simulator both read.
 
 Discovered empirically against the shipped simulator (the error messages are
 good teachers).  A motion file is one CSV per slot, in the MotionMap layout from
@@ -50,9 +50,7 @@ reference episodes around a 0.5 Hz / A10 sway (soft starts ramp in over their
 
 Usage::
 
-    python3 tools/make_motions.py               # write ./motions from slots.json
     python3 tools/make_motions.py --library     # write ./motions_m50 from M01-M50
-    python3 tools/make_motions.py --duration-s 2.0   # slower slots.json motions
 """
 
 from __future__ import annotations
@@ -348,53 +346,20 @@ def build_n34(out: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slot-table", default="slots.json")
     parser.add_argument("--out", default=None,
                         help="output dir (default: motions, or motions_m50 with --library)")
     parser.add_argument("--library", action="store_true",
-                        help="compile core/cradle.py's M01-M50 instead of slots.json")
+                        help="compile core/cradle.py's M01-M50 to motions_m50/")
     parser.add_argument("--n34", action="store_true",
                         help="compile the N01-N34 system (docs/motion-system.png) "
                              "to motions_n34/ by sampling the live engine")
-    parser.add_argument("--duration-s", type=float, default=1.6)
-    parser.add_argument("--s0", type=float, default=0.0, help="acceleration shaping")
-    parser.add_argument("--sd", type=float, default=0.0, help="deceleration shaping")
     args = parser.parse_args(argv)
     if args.n34:
         return build_n34(Path(args.out or "motions_n34"))
     if args.library:
         return build_library(Path(args.out or "motions_m50"))
-    args.out = args.out or "motions"
-
-    raw = json.loads(Path(args.slot_table).read_text(encoding="utf-8"))
-    out = Path(args.out)
-    out.mkdir(exist_ok=True)
-    for stale in out.glob("motion_*.csv"):
-        stale.unlink()
-
-    # Vigour maps to speed: a big soothing sway is a faster one, and the
-    # settle glides. --duration-s is the fallback for unknown amplitudes.
-    duration_by_amplitude = {"small": 2.2, "medium": 1.6, "large": 1.1, "settle": 2.8}
-    written = 0
-    for key, entry in sorted(raw.get("slots", {}).items(), key=lambda kv: int(kv[0])):
-        slot_id = int(key)
-        end_pose = [float(v) for v in entry.get("end_pose", ())]
-        if not end_pose:
-            print(f"  slot {slot_id}: no end_pose -- skipped")
-            continue
-        name = slot_name(entry, slot_id)
-        duration = duration_by_amplitude.get(str(entry.get("amplitude")), args.duration_s)
-        l_traj = max(1, int(round(duration * 1000)))  # pcm records at 1 kHz
-        path = out / f"motion_{slot_id:02d}.csv"
-        write_motion(path, slot_id, name, end_pose, l_traj, args.s0, args.sd)
-        degrees = ", ".join(f"{math.degrees(v):+.2f}" for v in end_pose)
-        print(f"  {path}  {name:<15} -> [{degrees}] deg over {duration:.2f}s")
-        written += 1
-
-    print(f"\n{written} motion files in {out}/")
-    print(f"launch the simulator with them:\n"
-          f"  ros2 launch agx_bringup motion.launch.py motion_dir:={out.resolve()}")
-    return 0
+    parser.error("nothing to compile: pass --library (M01-M50) or --n34.\n"
+                 "  (the old slots.json path went with the tag stack in 2026-08)")
 
 
 if __name__ == "__main__":

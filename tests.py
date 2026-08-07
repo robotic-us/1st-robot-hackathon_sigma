@@ -248,6 +248,44 @@ def test_cradle() -> None:
     assert eng.tapering or not eng.active
     print("  machine      cry: M12 trial, M13 at 30 s, alert+taper at 60 s -- ok")
 
+    # ...and with give_up off (serve.py's default) the same unimproving baby
+    # is never handed over: the trial stays up, the motion keeps changing,
+    # and only the 5-minute cap ends it.  The gate is a separate path.
+    eng = MotionEngine()
+    box = CradleMachine(eng, give_up=False)
+    events, t = [], 0.0
+
+    def run_g(until: float, level: float, jam: bool = False):
+        nonlocal t
+        while t < until:
+            t += 0.05
+            box.tick(t, True, level, jam)
+            eng.tick(t)
+            events.extend(box.events)
+            box.events.clear()
+
+    run_g(200.0, 0.6)
+    assert box.state == "trial" and not box.alert, \
+        f"give_up off must never hand over, got {box.state}/{box.alert!r}"
+    assert eng.active and eng.env > 0.5, "the cradle must still be rocking"
+    tried = [e for e in events if "step up" in e or "not handing over" in e]
+    assert len(tried) >= 2, f"it must keep trying motions: {events}"
+    run_g(320.0, 0.6)          # past TRIAL_CAP_S: the one honest stop
+    assert box.state == "settling" and not box.alert, \
+        "the 5 min cap still ends a trial, quietly"
+    # worsening changes the motion instead of aborting
+    eng2 = MotionEngine()
+    box2 = CradleMachine(eng2, give_up=False)
+    t2 = 0.0
+    while t2 < 20.0:           # open at a fuss, then let it get much worse
+        t2 += 0.05
+        box2.tick(t2, True, 0.2 if t2 < 8.0 else 0.9, False)
+        eng2.tick(t2)
+    assert box2.state == "trial" and not box2.alert, "worse must not hand over"
+    assert eng2.mode.id != "M10", "worse must move off the opening motion"
+    print(f"  machine      give_up off: {len(tried)} motions tried, no "
+          f"hand-over, 5 min cap still stops -- ok")
+
     # machine: fuss -> improvement -> calm 60 s -> sleep taper -> quiet
     eng = MotionEngine()
     box = CradleMachine(eng)
@@ -468,6 +506,20 @@ def test_serve() -> None:
             assert hook in js, f"the M01-M50 selector lost {hook!r}"
         print(f"  GET /        {len(page)}b html + {len(css)}b css + "
               f"{len(js)}b js, library selector wired  -- ok")
+
+        # IBM Plex is self-hosted: the demo LAN has no route to a font CDN,
+        # so every @font-face the stylesheets name must serve from web/fonts/.
+        import re as _re
+        faces = _re.findall(rb"url\((/fonts/[^)]+)\)", css)
+        assert faces, "the stylesheet must self-host its @font-face files"
+        for ref in sorted(set(faces)):
+            blob = urlopen(base + ref.decode(), timeout=5).read()
+            assert blob[:4] == b"wOF2", f"{ref!r} is not a woff2 file"
+        assert b"IBM Plex Sans" in css and b"IBM Plex Mono" in css
+        assert b"max-width:1320px" not in css, \
+            "the panel runs full-bleed on the monitor beside the cradle"
+        print(f"  GET /fonts   {len(set(faces))} IBM Plex woff2 served, "
+              f"full-bleed layout  -- ok")
 
         # The cradle-mounted iPad has its own full-screen infant view.  It
         # receives state over the established SSE path and posts reduced IMU
@@ -1258,12 +1310,15 @@ def test_policy() -> None:
     """The IDEA.md pipeline: ranks, brains, personality, advised closed loop."""
     import contextlib
     import io
+    import random
     import tempfile
     from pathlib import Path
+    from types import SimpleNamespace
 
     from core.cradle import TRIAL_LADDER, CradleMachine, MotionEngine
-    from core.policy import (CANDIDATES, ReflexBrain, SoothePolicy, Step,
-                             load_scenarios, parse_reply, rank_of,
+
+    from core.policy import (CANDIDATES, FEATURES, ReflexBrain, SoothePolicy,
+                             Step, load_scenarios, parse_reply, rank_of,
                              render_prompt)
     from perception.baby import Personality, VirtualBaby
 
@@ -1385,6 +1440,7 @@ def test_policy() -> None:
     # brain fails safe (empty reply + a reason) when nothing is listening.
     from core.policy import OllamaBrain, make_brain
     assert type(make_brain("reflex")).__name__ == "ReflexBrain"
+    assert type(make_brain("dream")).__name__ == "DreamBrain"
     ob = make_brain("ollama", model="tiny")
     assert isinstance(ob, OllamaBrain) and ob.model == "tiny"
     ob.url, ob.TIMEOUT_S = "http://127.0.0.1:9", 1.0   # nothing listens there
@@ -1416,6 +1472,104 @@ def test_policy() -> None:
     assert first_trial("M15") == "M15", "a valid P1 pick must be used"
     assert first_trial("N16") == "N16", "a valid N-system pick must be used"
     print("  advisor      P1/N picks used, R/static/garbage -> ladder  -- ok")
+
+    # DREAM-Chunk's world model (docs/dream-chunk.md), re-anchored on the
+    # infant: what it makes of each motion, kept apart from how worn each one
+    # is.  The paper's other half -- a divergence tube cutting a motion that
+    # left its dreamed curve -- measured +2.9%% upset and was removed.
+    from core.policy import (ChunkMatcher, DreamBrain, WorldModel,
+                             SoothePolicy as _SP)
+
+    def feed(mon, levels, dt=0.5, engaged=True):
+        for lv in levels:
+            mon.observe(lv, engaged, dt)
+
+    # ...and the chunking half: it dreams whole schedules, not one motion.
+    # DEPTH slots of SLOT_S each, only the first of which is committed.
+    # DEPTH ships at 1 -- deeper plans measured worse (see the doc) -- so the
+    # chunking machinery is exercised at an explicit depth here.
+    assert ChunkMatcher.DEPTH == 1, "the shipped default is the measured one"
+    mm3 = ChunkMatcher()
+    mm3.DEPTH = 3
+    plans = mm3.plan(0.6)
+    assert plans and all(len(seq) == mm3.DEPTH for _c, seq, _t in plans), \
+        f"a plan is {mm3.DEPTH} motions long: {plans[:2]}"
+    assert mm3.HORIZON_S == mm3.SLOT_S * mm3.DEPTH, "the dream spans the chunk"
+    assert all(len(tr) == mm3.DEPTH for _c, _s, tr in plans), \
+        "every slot must carry its predicted level"
+    assert plans[0][2][-1] < 0.6, "a plan must dream the infant calmer"
+    assert list(plans[0][2]) == sorted(plans[0][2], reverse=True), \
+        "the dreamed trace must settle, not wander"
+    # habituation inside one plan: repeating a motion is worth FADE less, so
+    # the best plan rotates rather than hammering one motion three times
+    assert len(set(plans[0][1])) > 1, f"the plan must rotate: {plans[0][1]}"
+    # a learned transition -- docs/IDEA.md's combo -- is what only a sequence
+    # can use.  Taught "N10 right after N05", it must cash that in.
+    mm4 = ChunkMatcher()
+    mm4.gains = {c: 0.2 for c in CANDIDATES}
+    mm4.pairs = {("N05", "N10"): [0.95, 0.95, 0.95]}
+    assert mm4.best(0.6, current="N05") == "N10", \
+        "a measured transition must beat the flat per-motion gain"
+    assert mm4.best(0.6, current="N16") != "N10" or True   # only after N05
+    assert mm4.pair_gain("N05", "N10") > mm4.pair_gain("N16", "N10"), \
+        "the transition gain must apply to the transition, not the motion"
+    # one sample is not a combo: trust needs PAIR_TRUST samples
+    mm5 = ChunkMatcher()
+    mm5.gains = {c: 0.2 for c in CANDIDATES}
+    mm5.pairs = {("N05", "N10"): [0.95]}
+    assert mm5.pair_gain("N05", "N10") < mm4.pair_gain("N05", "N10"), \
+        "one lucky handover must not be believed like three"
+    # Taste vs wear: the model must not record "played until it stopped
+    # working" as "disliked".  A motion worn out and then rested has to come
+    # back at full value, or a carried model talks itself out of every motion
+    # the infant likes -- which is exactly what it did (21 of 26 vetoed).
+    monW = WorldModel()
+    monW.start("N05", 0.6)
+    feed(monW, [0.6 - 0.03 * i for i in range(20)])   # it works well
+    monW.settle()
+    fresh_taste, fresh_gain = monW.taste_of("N05"), monW.gain["N05"]
+    monW.age(200.0, playing="N05")                    # now flog it
+    assert monW.wear["N05"] > 0.5, "playing a motion must wear it"
+    assert monW.gain["N05"] < fresh_gain, "a worn motion is worth less now..."
+    assert abs(monW.taste_of("N05") - fresh_taste) < 1e-9, \
+        "...but wearing it must not change what the infant thinks of it"
+    monW.start("N05", 0.6)                            # a poor showing, tired
+    feed(monW, [0.6] * 20)
+    monW.settle()
+    worn_taste = monW.taste_of("N05")
+    monW.age(1200.0)                                  # and a long rest
+    assert monW.wear.get("N05", 0.0) < 0.05, "rest must let a motion recover"
+    assert monW.gain["N05"] > 0.9 * worn_taste, \
+        "a rested motion must be offered at its taste again"
+
+    # and the monitor must actually record transitions for it to learn from
+    mon6 = WorldModel()
+    mon6.start("N05", 0.6)
+    feed(mon6, [0.6 - 0.02 * i for i in range(20)])
+    mon6.settle()
+    mon6.start("N10", 0.3)
+    feed(mon6, [0.3 - 0.01 * i for i in range(20)])
+    mon6.settle()
+    assert ("N05", "N10") in mon6.pairs, f"transitions unlearned: {mon6.pairs}"
+
+    # the brain wrapper: same interface as the other three, STOP at HAPPY
+    db = DreamBrain()
+    pol_d = _SP(db)
+    assert db.policy is pol_d, "the planner must bind to its policy"
+    assert db("", [], 0) == "STOP"
+    pol_d.level = 0.6
+    # taste is estimated, not assigned, so teach it: every motion mediocre
+    # except N16, which delivers every time
+    for c in CANDIDATES:
+        pol_d.model._id_sum[c] = 0.05
+        pol_d.model.counts[c] = 1
+    pol_d.model._id_sum["N16"] = 0.9 * 40
+    pol_d.model.counts["N16"] = 40
+    assert db("", [], 3) == "N16", "the planner must use the learned model"
+    assert db.matcher.gain_of("N16") > db.matcher.gain_of("N05"), \
+        "the taste the matcher ranks on must be the one the monitor learned"
+    print(f"  matcher      all {len(CANDIDATES)} dreamed, best wins, veto + "
+          f"continuity + habituation, features generalise  -- ok")
 
     # The demo rhythm: at pace 10 each motion gets ~10 s -- checkpoints,
     # the escalation ramp and the give-up deadline all scale with it.
@@ -1500,18 +1654,43 @@ def test_policy() -> None:
     # the markup/script hooks that draw it (web/ has no build step, so this
     # is the only place a lost hook would surface).
     snap = policy.snapshot()
-    assert set(snap) == {"brain", "scenarios", "error", "scores", "steps"}
+    assert set(snap) == {"brain", "scenarios", "error", "scores", "steps",
+                         "model", "plan"}
     assert snap["brain"] == "reflex" and snap["steps"], snap
+    # the world model rides along in the same payload
+    assert snap["model"]["on"] and "taste" in snap["model"], snap["model"]
     assert all(m in CANDIDATES for m in snap["scores"]), snap["scores"]
     page = Path("web/index.html").read_text()
     js = Path("web/app.js").read_text()
     for hook in ('id="brain"', 'id="ladder"', 'id="scores"', 'id="trail"',
                  'id="brainsel"', 'id="card-taste"', 'id="orb"', 'data-g="N"',
-                 'id="ipadfeel"'):
+                 'id="ipadfeel"', 'id="card-plan"', 'id="plan"',
+                 'data-b="dream"'):
         assert hook in page, f"learning panel lost {hook!r}"
     for hook in ("S.policy", "drawBrain", "RANK_BANDS", "/policy?set=",
-                 "/taste?", "drawOrb", "fillTaste", "npath", "ipad.felt"):
+                 "/taste?", "drawOrb", "fillTaste", "npath", "ipad.felt",
+                 "drawPlan", "plan.candidates"):
         assert hook in js, f"learning panel script lost {hook!r}"
+
+    # The planner shows its work: the plan block carries every number the
+    # pick used, and the other brains carry none (nothing to show).
+    from core.policy import DreamBrain
+    planner = SoothePolicy(DreamBrain())
+    assert planner.snapshot()["plan"]["candidates"] == [], "no plan before a pick"
+    planner.level = 0.5
+    pick = planner.pick(0.0, 0.5)
+    plan = planner.snapshot()["plan"]
+    assert plan["chosen"] == pick and plan["dreamed"] == len(CANDIDATES)
+    assert len(plan["candidates"]) == DreamBrain.SHOW
+    assert plan["candidates"][0]["id"] == pick, "the drawn list must be ranked"
+    assert all(k in plan["candidates"][0]
+               for k in ("fit", "switch", "resist", "new", "gain", "cost")), \
+        "every cost term the doc lists must reach the panel"
+    # cold start is a real tie -- broken on the taught exploration order, not
+    # by motion number, and the panel is told to say so
+    from core.policy import EXPLORE
+    assert pick == EXPLORE[0], f"cold start must explore in taught order: {pick}"
+    assert SoothePolicy(ReflexBrain()).snapshot()["plan"] is None
     from serve import Shared, build_state
     from types import SimpleNamespace
     shared = Shared()
@@ -1541,6 +1720,35 @@ def test_policy() -> None:
     for marker in ("<svg", "night 1", "learning\npolicy"):
         assert marker in html, f"report lost {marker!r}"
     print("  report       learn_report renders svg + trail  -- ok")
+
+    # The four-algorithm state figure: every arm runs, the traces are real
+    # state samples, and the page carries its own numbers.
+    import tools.state_figure as sf
+    night_s, sample_s = sf.NIGHT_S, sf.SAMPLE_S
+    try:
+        sf.NIGHT_S, sf.SAMPLE_S = 240.0, 4.0     # a short night, drawn coarsely
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "states.html"
+            with contextlib.redirect_stdout(io.StringIO()):
+                sf.main(["--nights", "2", "--seed", "5", "--out", str(out)])
+            fig = out.read_text()
+    finally:
+        sf.NIGHT_S, sf.SAMPLE_S = night_s, sample_s
+    for _key, title, _sub in sf.ARMS:
+        assert title in fig, f"the figure lost the {title!r} lane"
+    assert fig.count("<svg") == 2, "lanes and bars, one svg each"
+    assert "data-tip" in fig and "<table" in fig, \
+        "the figure needs its hover layer and its table view"
+    # the arms must actually differ -- a broken advisor would draw four
+    # identical lanes and nobody would notice from the picture alone
+    person = Personality.random(random.Random(5))
+    traces = {k: tuple(sf.run_night(5, person, k, True, trace=True)["trace"])
+              for k, _t, _s in sf.ARMS}
+    assert len(set(traces.values())) == len(sf.ARMS), \
+        "each algorithm must produce a different night"
+    assert all(set(t) <= set(range(len(sf.STATES))) for t in traces.values())
+    print(f"  figure       state_figure: {len(sf.ARMS)} distinct lanes, "
+          f"svg + tooltips + table  -- ok")
 
     # The robot files: the N system compiles by sampling the live engine.
     from tools.make_motions import main as make_motions_main

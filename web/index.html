@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#000000">
+<meta name="theme-color" content="#141416">
 <title>SIGMA · cradle monitor</title>
 <link rel="stylesheet" href="/style.css">
 </head>
@@ -27,7 +27,7 @@
 
 <!-- row 1 · what is true right now -->
 <section class="cards" id="nowrow">
-  <article class="card">
+  <article class="card" id="card-baby">
     <h2>Baby</h2>
     <canvas id="orb" aria-hidden="true"
             title="the infant, alive: colour = state, wobble = distress,
@@ -80,6 +80,7 @@ glow = how hard the cradle is working; it rides the real sway"></canvas>
     <div id="brainsel" role="group" aria-label="choose the decision brain">
       <button data-b="off">Ladder</button>
       <button data-b="reflex">Algorithm</button>
+      <button data-b="dream">Planner</button>
       <button data-b="ollama">Local LLM</button>
       <button data-b="claude">Claude API</button>
     </div>
@@ -114,6 +115,14 @@ glow = how hard the cradle is working; it rides the real sway"></canvas>
     <h2>Learned preferences <span class="sub2">mean comfort change per attempt</span></h2>
     <div id="scores"><div class="empty">nothing tried yet</div></div>
     <div id="trail" class="mono sub"></div>
+  </article>
+  <article class="card" id="card-plan" hidden>
+    <h2>What it dreamed <span class="sub2" id="planwhen"></span></h2>
+    <div class="sub" id="planhead">waiting for the first decision</div>
+    <div id="plans"></div>
+    <div class="sub2 planlabel">per motion, this slot</div>
+    <div id="plan"></div>
+    <div class="sub2" id="planveto"></div>
   </article>
 </section>
 

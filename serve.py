@@ -59,6 +59,7 @@ import math
 import random
 import socket
 import ssl
+import sys
 import threading
 import time
 from collections import deque
@@ -75,6 +76,21 @@ from core.cradle import LIBRARY_BY_ID, CradleMachine, MotionEngine, catalog
 from core.rig import cradle_angles, cradle_joint_state
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
+
+# The served files, as a fixed whitelist -- not a static directory, so there is
+# nothing to traverse.  The font entries are built from what web/fonts/ holds
+# at import (the IBM Plex subsets ship with the repo so the dashboard keeps its
+# type on a nursery LAN with no route to a font CDN).
+STATIC: dict[str, tuple[str, str]] = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/style.css": ("style.css", "text/css; charset=utf-8"),
+    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/baby": ("baby.html", "text/html; charset=utf-8"),
+    "/baby.css": ("baby.css", "text/css; charset=utf-8"),
+    "/baby.js": ("baby.js", "text/javascript; charset=utf-8"),
+}
+STATIC.update({f"/fonts/{p.name}": (f"fonts/{p.name}", "font/woff2")
+               for p in sorted((WEB_DIR / "fonts").glob("*.woff2"))})
 
 
 class IPadMotion:
@@ -154,11 +170,16 @@ class IPadMotion:
 # --------------------------------------------------------------------------- #
 class Shared:
     def __init__(self, allow_research: bool = False,
-                 pace_s: float = 10.0) -> None:
+                 pace_s: float = 10.0, give_up: bool = False) -> None:
         self.engine = MotionEngine(allow_research=allow_research)
         # Demo rhythm: each motion gets ~10 s before the machine re-decides
         # (the report spec's own cadence is 30 -- serve.py --pace 30).
-        self.machine = CradleMachine(self.engine, check_every_s=pace_s)
+        # The report's §5 hand-over is off here by default: on the stand the
+        # cradle should keep trying motions rather than park and call for a
+        # human every time a stretch of soothing does not land.  --give-up
+        # restores it.  The safety gate is unaffected either way.
+        self.machine = CradleMachine(self.engine, check_every_s=pace_s,
+                                     give_up=give_up)
         self.jam = False              # simulated mechanism fault (the gate)
         self.pose = [0.0, 0.0, 0.0, 0.0]   # crank angles the viz mirrors
         self.lock = threading.Lock()
@@ -508,6 +529,51 @@ def build_state(shared: Shared, reading, now: float) -> dict:
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
+# A client that walks away mid-stream.  Over plain HTTP that surfaces as
+# BrokenPipe/ConnectionReset; over TLS the same event arrives as SSLEOFError
+# (the tablet closed the socket without a close_notify), which is an SSLError
+# and *not* a ConnectionError -- so it has to be named or every closed tab
+# prints a traceback.
+GONE = (BrokenPipeError, ConnectionResetError, ssl.SSLError)
+
+
+class DashboardServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that does TLS per connection, in the worker thread.
+
+    Wrapping the *listening* socket (the obvious ssl recipe) runs every TLS
+    handshake inside the single accept loop -- so one client stalling mid
+    handshake (a phone parked on a certificate warning, a browser preconnect
+    that never speaks) wedges the whole server, and every later connection
+    times out, loopback included.  Wrapping here, in the per-connection
+    worker thread with a handshake deadline, keeps a stalling client's
+    damage to its own thread.
+    """
+
+    request_queue_size = 32   # stdlib default of 5 is too small for a
+                              # dashboard tab (SSE+MJPEG+preconnects) + tablet
+    ssl_context: Optional[ssl.SSLContext] = None
+
+    def finish_request(self, request, client_address):
+        if self.ssl_context is not None:
+            request.settimeout(12.0)          # a handshake must not dawdle
+            try:
+                request = self.ssl_context.wrap_socket(request,
+                                                       server_side=True)
+                request.settimeout(None)
+            except (ssl.SSLError, OSError):
+                try:
+                    request.close()
+                except OSError:
+                    pass
+                return
+        super().finish_request(request, client_address)
+
+    def handle_error(self, request, client_address):
+        """Only real faults reach the terminal; a departed client is not one."""
+        if not isinstance(sys.exc_info()[1], GONE):
+            super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     shared: Shared = None   # set before serving
 
@@ -525,21 +591,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         url = urlparse(self.path)
         try:
-            if url.path in ("/", "/style.css", "/app.js",
-                            "/baby", "/baby.css", "/baby.js"):
-                # a fixed whitelist, not a static dir -- nothing to traverse
-                name, ctype = {
-                    "/": ("index.html", "text/html; charset=utf-8"),
-                    "/style.css": ("style.css", "text/css; charset=utf-8"),
-                    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-                    "/baby": ("baby.html", "text/html; charset=utf-8"),
-                    "/baby.css": ("baby.css", "text/css; charset=utf-8"),
-                    "/baby.js": ("baby.js", "text/javascript; charset=utf-8"),
-                }[url.path]
+            if url.path in STATIC:
+                name, ctype = STATIC[url.path]
                 body = (WEB_DIR / name).read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
+                if ctype == "font/woff2":   # never changes under its own name
+                    self.send_header("Cache-Control", "public, max-age=604800")
                 self.end_headers()
                 self.wfile.write(body)
             elif url.path == "/motions":
@@ -572,7 +631,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._mjpeg()
             else:
                 self.send_error(404)
-        except (BrokenPipeError, ConnectionResetError):
+        except GONE:
             pass   # a browser tab closed; entirely normal
 
     def do_POST(self) -> None:
@@ -744,7 +803,7 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
         daemon=True)
     worker.start()
     Handler.shared = shared
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    server = DashboardServer(("0.0.0.0", port), Handler)
     return server, worker, ros, robot
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -766,10 +825,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--personality", action="store_true",
                         help="with --baby: give the infant a hidden motion "
                              "temperament (docs/IDEA.md) the policy can learn")
-    parser.add_argument("--policy", choices=("reflex", "ollama", "claude"),
+    parser.add_argument("--policy",
+                        choices=("reflex", "dream", "ollama", "claude"),
                         default=None,
                         help="start with a decision brain advising the trial "
-                             "motion: 'reflex' = local algorithm, 'ollama' = "
+                             "motion: 'reflex' = local algorithm, 'dream' = "
+                             "the DREAM-Chunk planner (dreams every candidate "
+                             "forward, docs/dream-chunk.md), 'ollama' = "
                              "local LLM (OLLAMA_URL/OLLAMA_MODEL), 'claude' = "
                              "Anthropic API (paid, ANTHROPIC_API_KEY).  The "
                              "dashboard can switch brains live either way.")
@@ -780,6 +842,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "before the machine re-decides (default 10, "
                              "the demo rig's per-motion length; the evidence "
                              "report's own cadence is 30)")
+    parser.add_argument("--give-up", action="store_true",
+                        help="restore the evidence report's §5 hand-over: a "
+                             "trial that does not improve (or worsens) tapers "
+                             "and alerts the caregiver.  Off by default -- the "
+                             "cradle keeps trying other motions instead.  The "
+                             "safety gate (jam / face lost / pain) always runs")
     parser.add_argument("--sense", action="store_true",
                         help="real sensing: face+emotion (+mic) drives the "
                              "machine instead of tag state cards")
@@ -819,9 +887,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     # machine never commands anything outside it plus M05/M06/M08.  Every other
     # mode (real camera, --sense, --baby) still needs --research explicitly.
     research = args.research or args.fake
-    shared = Shared(allow_research=research, pace_s=args.pace)
+    shared = Shared(allow_research=research, pace_s=args.pace,
+                    give_up=args.give_up)
     shared.viz_gain = max(1.0, args.viz_gain)
     shared.llm_model = args.llm_model
+    # never a silent deviation from the report: say which rule is running
+    shared.log("hand-over rule: " + (
+        "ON -- report 5 taper + caregiver alert when a trial does not improve"
+        if args.give_up else
+        "off -- the cradle keeps trying motions (safety gate still armed)"))
     if args.policy:
         from core.policy import SoothePolicy, load_scenarios, make_brain
         shared.policy = SoothePolicy(make_brain(args.policy, args.llm_model),
@@ -842,7 +916,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.certfile:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(args.certfile, args.keyfile)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server.ssl_context = context     # per-connection wrap: DashboardServer
     source = ("virtual infant" if args.baby
               else "verification scenario" if args.fake
               else f"camera {args.camera_index} (real sensing)")

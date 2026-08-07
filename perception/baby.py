@@ -2,12 +2,16 @@
 """A virtual infant: a random state process the cradle can try to soothe.
 
 No camera, no models, no tags.  States wander SLEEP <-> CALM <-> FUSS <-> CRY
-on randomized dwell times, and the loop closes: the engine's live sway is fed
-back in as ``soothing``, and a *soothable* fuss/cry steps down faster under
-it -- so the machine's 30 s trials genuinely work, sometimes.  About a third
-of cries are unsoothable (hunger, diaper): motion never helps, which is
-exactly the path that must end in a caregiver alert.  Rarely the face hides
-for a moment, tripping the safety gate.
+on randomized dwell times -- weighted so the infant is restless rather than
+settled: a soothed baby drifts back into fussing within a minute or so, which
+is what keeps the cradle (and the policy) working.  The loop closes: the
+engine's live sway is fed back in as ``soothing``, and a soothable fuss or
+cry *settles cumulatively* under it -- progress builds while good motion
+plays, shows in the distress level on the way, and drains at rest, so the
+machine's trials genuinely work,
+sometimes.  About a third of cries are unsoothable (hunger, diaper): motion
+never helps, which is exactly the path that must end in a caregiver alert.
+Rarely the face hides for a moment, tripping the safety gate.
 
 With a ``Personality`` (docs/IDEA.md) the motion identity matters too: a
 loved motion soothes 3x, hated ones agitate, a liked transition doubles up.
@@ -42,20 +46,35 @@ STATES = {
     "CRY":   (0.62, 0.08),
 }
 DWELL_S = {           # how long a state lingers before rolling the dice again
-    "SLEEP": (40.0, 120.0),
-    "CALM":  (20.0, 60.0),
+    "SLEEP": (25.0, 60.0),
+    "CALM":  (12.0, 30.0),
     "FUSS":  (15.0, 40.0),
-    "CRY":   (20.0, 50.0),
+    "CRY":   (15.0, 35.0),
 }
-NEXT = {              # weighted transitions at the end of a dwell
-    "SLEEP": (("SLEEP", 0.5), ("CALM", 0.5)),
-    "CALM":  (("CALM", 0.35), ("SLEEP", 0.25), ("FUSS", 0.4)),
+# Weighted transitions at the end of a dwell.  This infant is deliberately
+# *unsettled*: content stretches are short and rarely renew themselves, so
+# calm is something the cradle keeps earning rather than a resting state it
+# falls into.  A baby that mostly sits happy makes a demo where nothing
+# happens -- and gives the policy almost no trials to learn from.
+NEXT = {
+    "SLEEP": (("SLEEP", 0.35), ("CALM", 0.65)),
+    "CALM":  (("CALM", 0.25), ("SLEEP", 0.15), ("FUSS", 0.6)),
     "FUSS":  (("CALM", 0.3), ("FUSS", 0.3), ("CRY", 0.4)),
-    "CRY":   (("CRY", 0.6), ("FUSS", 0.4)),
+    "CRY":   (("CRY", 0.45), ("FUSS", 0.55)),
 }
-SOOTHE_RATE = 0.08    # per second at full sway: mean ~12 s to step down
+SOOTHE_RATE = 0.08    # per second at full sway: ~12 s of good motion to settle
 SOOTHABLE_P = 0.7     # the rest are hunger/diaper -- caregiver work
 AGITATE_RATE = 0.05   # per second under a *hated* motion: fussing worsens
+# Settling is *cumulative*, not a per-tick coin flip.  A real infant winds
+# down: rocking that is working shows progressive calming, and interrupting it
+# loses the progress gradually rather than instantly.  So soothing integrates
+# into a 0..1 "settling" score -- one full unit steps the state down -- and the
+# distress level shows the partial progress on the way.  Rest lets it drain.
+# (The memoryless model this replaces is still reachable as
+# ``VirtualBaby(cumulative=False)``; it is what docs/dream-chunk.md's
+# measurement was taken against, and the difference is the whole point there.)
+SETTLE_DRAIN_S = 45.0     # progress half-lives away over ~30 s of no motion
+SETTLE_SHOW = 0.6         # how much of the band the partial progress moves
 # Time-related emotion (docs/IDEA.md follow-up): no motion works forever.
 # Habituation builds while a motion is engaged and decays while it rests,
 # so even the loved motion wears out and the policy must rotate; a slow
@@ -232,9 +251,15 @@ class VirtualBaby:
     """Time is injected; ``soothing`` is the engine's live amplitude 0..1."""
 
     def __init__(self, seed: int | None = None,
-                 personality: Personality | None = None) -> None:
+                 personality: Personality | None = None,
+                 cumulative: bool = True) -> None:
         self.rng = random.Random(seed)
         self.personality = personality
+        # True: soothing accumulates and shows (the model of a real settle).
+        # False: the original memoryless Poisson step-down, kept so the
+        # docs/dream-chunk.md measurement can be reproduced against both.
+        self.cumulative = cumulative
+        self.settling = 0.0        # 0..1 progress towards the next step down
         self.state = "CALM"
         self.soothable = True
         self.level = STATES["CALM"][0]
@@ -326,17 +351,38 @@ class VirtualBaby:
                                          felt=Personality.felt(sensed))
         if gain > 0.0 and motion:
             gain *= max(FATIGUE_FLOOR, 1.0 - self._fatigue.get(motion, 0.0))
-        if self.state in ("FUSS", "CRY") and soothing > 0.2:
+        upset = self.state in ("FUSS", "CRY")
+        if upset and soothing > 0.2:
             if gain < 0.0:
                 if self.rng.random() < 1.0 - math.exp(AGITATE_RATE * gain
                                                       * soothing * dt):
                     self._step_up(now)
-            elif (self.soothable and gain > 0.0 and self.rng.random()
-                    < 1.0 - math.exp(-SOOTHE_RATE * gain * self._mood
-                                     * soothing * dt)):
-                self._step_down(now)
+            elif self.soothable and gain > 0.0:
+                rate = SOOTHE_RATE * gain * self._mood * soothing
+                if not self.cumulative:
+                    if self.rng.random() < 1.0 - math.exp(-rate * dt):
+                        self._step_down(now)
+                else:
+                    # the settle builds; one whole unit is a step down
+                    self.settling += rate * dt
+                    if self.settling >= 1.0:
+                        self.settling = 0.0
+                        self._step_down(now)
+        elif dt > 0.0:
+            # nothing helping right now: the progress drains away, it is not
+            # banked for later
+            self.settling *= math.exp(-dt / SETTLE_DRAIN_S)
+        if not upset:
+            self.settling = 0.0
         base, wander = STATES[self.state]
         target = base + wander * math.sin(now * 0.9 + sum(map(ord, self.state)) % 7)
+        if self.cumulative and self.settling > 0.0:
+            # partial progress is visible: a baby half-way to settling is
+            # already quieter than one that has not started.  Without this the
+            # level teleports at the step and no observer -- policy, dream
+            # model or caregiver -- can tell "working" from "not yet".
+            below = STATES[{"CRY": "FUSS", "FUSS": "CALM"}[self.state]][0]
+            target -= (target - below) * SETTLE_SHOW * min(1.0, self.settling)
         self.level += (target - self.level) * min(1.0, dt / 2.0)
 
         if now >= self._hidden_until and dt > 0.0 \
