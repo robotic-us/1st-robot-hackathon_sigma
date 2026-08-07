@@ -12,7 +12,7 @@
 [docs/ARCHITECTURE.md](ARCHITECTURE.md)에 있습니다.
 
 ```
-상태 카드(태그) 또는 얼굴+울음 ─► CradleMachine(안전 사다리) ─► MotionEngine(M01-M50)
+얼굴+울음(5-상태 워처) 또는 검증 시나리오 ─► CradleMachine(안전 사다리) ─► MotionEngine(M01-M50)
                                                                 │
                                               웹 대시보드 · RViz · phorce 시뮬레이터
 ```
@@ -21,9 +21,8 @@
 
 ```bash
 python3 tests.py                         # 전체 셀프테스트 (10개 스위트, ~30초)
-python3 serve.py --fake                  # 카메라 없이: 합성 상태 카드 시나리오
+python3 serve.py --verify                # 카메라 없이: 검증 시나리오를 실제 판정기로 재생
 python3 serve.py --baby                  # 카메라 없이: 가상 영아 폐루프 (원 = 상태)
-python3 serve.py                         # 웹캠 + 태그 상태 카드 (tag_0/1/2)
 python3 serve.py --sense                 # 실전: 5-상태 워처(mediapipe) + 마이크가 판정
 python3 tools/fetch_models.py            # --sense용 ONNX 모델 3종 (최초 1회)
 ```
@@ -37,6 +36,17 @@ phorce play 12 --target sim:demo         # M12 = ML 0.5 Hz A10 재생
 ./cad/view.sh                            # RViz (터미널 분리)
 ```
 
+실물 로봇(EtherCAT, 주최측 2026-08-06 auto axis profile 방식):
+
+```bash
+./robot.sh                               # phorce_monitor(op_idle/auto) + action server(ecat)
+./robot.sh --verify                      # 주최측 체크리스트 채점 (doctor·mask·veto·verdict)
+export ROS_DOMAIN_ID=21                  # 로봇과 대화하는 모든 다른 터미널에 필수
+phorce play 12                           # 실물 재생 (슬롯은 PCM에 이미 있어야 함 — phorce list)
+python3 serve.py --sense --robot         # 풀 파이프라인: 판정 → 상태기계 → 실물 슬롯 재생
+python3 serve.py --baby --robot sim:demo # 같은 경로를 ./sim.sh 상대로 (하드웨어 없이)
+```
+
 ## 파일 지도
 
 | 경로 | 역할 |
@@ -44,15 +54,15 @@ phorce play 12 --target sim:demo         # M12 = ML 0.5 Hz A10 재생
 | `serve.py` | ★ 진입점. 센싱 → 상태기계 → 모션 → 웹 대시보드 한 프로세스 |
 | `tests.py` | 유일한 테스트 명령. 모든 스위트가 여기 있음 |
 | `core/cradle.py` | 근거 보고서의 M01–M50 라이브러리 · MotionEngine · CradleMachine |
-| `core/dream.py` · `core/pvector.py` | DREAM-Chunk 매처/모니터 + P-Vector 월드 모델 |
-| `core/slot_table.py` · `core/phorce_iface.py` | 슬롯 표 · phorce/ROS 2 어댑터 |
-| `perception/tag.py` | AprilTag **상태 카드** (tag_0 평온 / tag_1 칭얼 / tag_2 울음) |
+| `core/pvector.py` | P-Vector 월드 모델 (m50 스위트가 컴파일된 CSV를 왕복 검증) |
+| `core/phorce_iface.py` | phorce/ROS 2 어댑터 + SlotBridge(판정→슬롯 재생) |
 | `perception/watch.py` | ★ 팀의 아기 인식+모션 플랜(docs/example.py 이식): 5-상태 분류기, 상태별 모션 힌트 |
 | `perception/sense.py` · `perception/listen.py` | 시각 채널(watcher 우선, FER+ 폴백)+소리 → distress 0..1 |
 | `perception/baby.py` | 가상 영아: 랜덤 상태 프로세스, 흔들림에 실제로 달래짐 |
 | `perception/face/` | 얼굴 검출(YuNet) · 인식(SFace) · 감정(FER+) |
-| `apps/` | demo(DREAM 시연) · care(구 진입점) · run(얼굴 데모) · animate(RViz 재생, `--tour`가 M 라이브러리를 실제로 돌림) |
-| `tools/` | make_motions(--library) · make_urdf · fetch_models · enroll |
+| `apps/animate.py` · `core/rig.py` | RViz 재생(`--tour`) · 5절 링키지 기구학+RosSide |
+| `tools/` | make_motions(--library) · make_urdf · fetch_models |
+| `bench/` | VERIFY.md 3단계용 실물 아기 사진 (라이선스는 bench/README.md) |
 | `motions_m50/` | M01–M50을 pcm 슬롯으로 컴파일한 것 (`./sim.sh`가 기본 사용) |
 | `web/` · `cad/` | 대시보드 · URDF/메시(RViz) |
 | `webapp/` | 같은 대시보드의 Next.js 판. `serve.py`의 **클라이언트**일 뿐, 대체가 아님(Node 필요) |
@@ -64,7 +74,6 @@ phorce play 12 --target sim:demo         # M12 = ML 0.5 Hz A10 재생
 | [docs/ARCHITECTURE.md](ARCHITECTURE.md) | 전체 구조 · 근거 보고서 ↔ 코드 대응표 |
 | `docs/infant_robotic_cradle_evidence_report_ko.pdf` | **모션 명세의 원전** |
 | [docs/VERIFY.md](VERIFY.md) | **아기 없이 인식기를 검증하는 4단 프로토콜** (합성→가상아기 폐루프→벤치→재생) |
-| [docs/dream-chunk.md](dream-chunk.md) | DREAM-Chunk 설계 |
 | [docs/face-recognition.md](face-recognition.md) | 얼굴 인식 + 5분류 감정 파이프라인 |
 | `docs/RH_Guide/` | 논문 3종 · OT 자료 · P-Vector · phact · 배선 |
 | `docs/RH_Guide_Jetson-SDK/` | phorce SDK 공식 문서 5종 (**이쪽이 최신**) |
@@ -79,7 +88,7 @@ phorce play 12 --target sim:demo         # M12 = ML 0.5 Hz A10 재생
 전부 로봇 없이, 카메라 없이, ROS 없이 돕니다.
 
 ```bash
-python3 tests.py             # 전체 (listen sense models tag pvector dream cradle m50 demo serve)
+python3 tests.py             # 전체 (listen sense models cradle baby m50 watch animate serve bridge)
 python3 tests.py cradle m50  # 골라서
 python3 tests.py --list      # 목록
 ```
@@ -89,13 +98,12 @@ python3 tests.py --list      # 목록
 - **모션 슬롯이 아직 실물 로봇에 없습니다.** `phorce list`가 비어 있으면
   phorce Studio에서 교시하거나, `tools/make_motions.py --library`로 만든
   파일을 시뮬레이터에 물려 쓰세요.
-- `slots.json`의 자세는 전부 `"placeholder": true`입니다(DREAM 데모용 10슬롯).
 - 시뮬레이터는 **모션 계약만** 흉내 냅니다. `/phorce/feedback`(1 kHz)은 나오지
-  않으므로 DREAM-Chunk의 이탈 감시는 sim에서 동작하지 않습니다.
+  않고, 로봇도 움직이지 않습니다 — 궤적 판단은 RViz로 하세요.
 - `pvector.UNITS_PER_DEG`는 실제 피드백으로 보정이 필요합니다.
 - 기구는 5절 링키지 2쌍입니다: 채널은 sway(수평)·heave(수직)·pitch(시소) 셋.
   AP 방향 *병진*만은 물리적으로 없어서 AP 모션은 pitch로 재생됩니다
-  (`apps/demo.py` 참고).
+  (`core/rig.py` 참고).
 
 ## 라이선스
 

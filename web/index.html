@@ -12,18 +12,19 @@
 
 <header>
   <h1>SIGMA <span>· infant-responsive cradle</span></h1>
-  <span id="conn">connecting</span>
+  <span id="conn" aria-live="polite">connecting</span>
 </header>
 
-<div id="alert"></div>
+<div id="alert" role="alert"></div>
 
 <section id="hero">
   <canvas id="babycv"></canvas>
-  <div id="safechip"><span class="dot" id="safedot"></span>
-    <span id="safesay">waiting for the cradle</span></div>
+  <div id="safechip"><span class="dot" id="safedot" aria-hidden="true"></span>
+    <span id="safesay">waiting for the cradle</span>
+    <span id="scen"></span></div>
   <div id="say">
     <div id="headline">
-      <span class="dot" id="hdot"></span>
+      <span class="dot" id="hdot" aria-hidden="true"></span>
       <span id="hbaby">Connecting</span>
       <span id="harrow">→</span>
       <span id="hcradle">holding still</span>
@@ -38,8 +39,8 @@
     <div class="k">Upset level</div>
     <div class="val" id="lvlval">–</div>
     <div class="bar"><i id="lvlbar"></i>
-      <span class="tick" style="left:12%"></span>
-      <span class="tick" style="left:45%"></span></div>
+      <span class="tick" style="left:12%" title="fuss threshold 0.12"></span>
+      <span class="tick" style="left:45%" title="cry threshold 0.45"></span></div>
   </div>
   <div class="stat">
     <div class="k">Rocking strength</div>
@@ -49,30 +50,32 @@
   <div class="stat">
     <div class="k">How far it moves</div>
     <div class="val" id="swayval">0.0 <small>of 30 mm</small></div>
-    <div class="bar"><i id="swaybar"></i></div>
+    <div class="bar"><i id="swaybar"></i>
+      <span class="tick" style="left:80%" title="warning at 80% of the cap"></span></div>
   </div>
   <div class="stat">
     <div class="k">How hard it pushes</div>
     <div class="val" id="accval">0.000 <small>of 0.05 g</small></div>
-    <div class="bar"><i id="accbar"></i></div>
+    <div class="bar"><i id="accbar"></i>
+      <span class="tick" style="left:80%" title="warning at 80% of the cap"></span></div>
   </div>
 </div>
 
 <div id="foot">
-  <div>
+  <div id="zone-cam">
     <h2>Camera</h2>
     <img id="cam" src="/frame" alt="camera stream">
   </div>
-  <div>
+  <div id="zone-keys">
     <h2>Take over by hand</h2>
     <div id="buttons">
-      <button id="auto"><b>Automatic care</b><i>–</i></button>
+      <button id="auto" aria-pressed="false"><b>Automatic care</b><i>–</i></button>
       <button data-m="M10"><b>Rock slowly</b><i>M10</i></button>
       <button data-m="M12"><b>Rock steadily</b><i>M12</i></button>
       <button data-m="M16"><b>Rock wider</b><i>M16</i></button>
       <button data-m="M05"><b>Slow to a stop</b><i>M05</i></button>
       <button data-m="M01"><b>Hold still</b><i>M01</i></button>
-      <button id="jam"><b>Simulate a jam</b><i>j</i></button>
+      <button id="jam" aria-pressed="false"><b>Simulate a jam</b><i>j</i></button>
       <span class="note">Rocking always eases in gently, and the safety gate
         overrides anything pressed here.</span>
     </div>
@@ -81,54 +84,34 @@
     <h2>Motion library — M01–M50</h2>
     <div id="mfilter">
       <button data-g="" class="on">All</button>
-      <button data-g="C0">C0 stop/transition</button>
-      <button data-g="P1">P1 trial</button>
-      <button data-g="R">R research</button>
+      <button data-g="C0" title="stop / transition commands">C0</button>
+      <button data-g="P1" title="trial candidates">P1</button>
+      <button data-g="R" title="research-only">R</button>
       <input id="mq" type="search" placeholder="filter by name…"
              aria-label="filter motions by name">
       <span class="note" id="mcount"></span>
     </div>
     <div id="motions"></div>
-    <div id="mkey">
-      <span><i style="background:var(--cat-1)"></i>C0 stop / transition</span>
-      <span><i style="background:var(--cat-2)"></i>P1 trial candidate</span>
-      <span><i style="background:var(--cat-3)"></i>R research-only</span>
-      <span><i style="background:var(--ink)"></i>now playing</span>
-    </div>
-    <div id="mmsg"></div>
   </section>
-  <div>
+  <div id="zone-log">
     <h2>What just happened</h2>
-    <div id="log">waiting…</div>
+    <div id="log" aria-live="polite">waiting…</div>
   </div>
 </div>
 
 <details>
-  <summary>DREAM-Chunk internals — slot ranking and the divergence monitor</summary>
+  <summary>Internals — machine state, and the scenario acting it</summary>
   <div class="internals">
     <section>
-      <h2>Divergence monitor</h2>
+      <h2>Machine internals</h2>
       <div class="kv"><span>machine state</span><b id="rawstate">–</b></div>
       <div class="kv"><span>motion / grade</span><b id="rawmotion">–</b></div>
       <div class="kv"><span>f_hz · a_mm · env</span><b id="rawmode">–</b></div>
       <div class="kv"><span>distress raw · ema</span><b id="rawlevel">–</b></div>
       <div class="kv"><span>arm angle θ</span><b id="thetaval">–</b></div>
       <div class="kv"><span>peak acceleration</span><b id="apeak">–</b></div>
-      <div class="kv"><span>|measured − dreamed|</span><b id="err">–</b></div>
-      <div class="bar"><i id="errbar"></i></div>
-      <div class="kv" style="margin-top:9px"><span>external force dob_a</span><b id="dob">–</b></div>
-      <div class="kv"><span>dream rms (ASAP residual)</span><b id="rms">–</b></div>
-      <div class="kv"><span id="playname">idle</span><b id="playpct"></b></div>
-    </section>
-    <section>
-      <h2>Last decision</h2>
-      <table id="rank">
-        <thead><tr><th>slot</th><th>cost</th><th>consist</th><th>resist</th>
-                   <th>contin</th><th>task</th><th></th></tr></thead>
-        <tbody><tr><td colspan="7" style="text-align:center;color:var(--muted)">
-          no decision yet</td></tr></tbody>
-      </table>
-      <div id="slots"></div>
+      <div class="kv"><span>judge state</span><b id="rawjudge">–</b></div>
+      <div class="kv"><span>scenario phase</span><b id="rawphase">–</b></div>
     </section>
   </div>
 </details>

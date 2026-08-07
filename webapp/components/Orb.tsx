@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { CradleState } from "@/lib/types";
-import { LEVER_MM, ROLE, SWAY_CAP_MM, clamp, sway } from "@/lib/words";
+import { ROLE, SWAY_CAP_MM, clamp, sway } from "@/lib/words";
 
 /**
  * The infant as something alive.
@@ -18,8 +18,6 @@ import { LEVER_MM, ROLE, SWAY_CAP_MM, clamp, sway } from "@/lib/words";
  * make the shape feel inhabited, NOT a respiration reading.  Do not let it
  * grow into one without a sensor behind it.
  *
- * When a DREAM slot is playing, a dashed ghost marks where the dream says the
- * plate should be.  Jam the cradle and the two part -- divergence made visible.
  *
  * It reads the live frame from a ref rather than props: this loop runs at 60
  * fps and must never be a reason for React to re-render the page.
@@ -68,7 +66,7 @@ export default function Orb({
     scheme.addEventListener("change", retint);
 
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const view = { off: 0, ghost: 0, lvl: 0, env: 0 };
+    const view = { off: 0, lvl: 0, env: 0 };
     let raf = 0;
 
     /** One closed outline: radius R, deformed by the lobes at time t. */
@@ -126,25 +124,12 @@ export default function Orb({
         Math.max(0, W / 2 - R - 16 * dpr) / SWAY_CAP_MM,
       );
       view.off += (mm * pxmm - view.off) * 0.35;
-      view.ghost +=
-        ((S.playing ? S.playing.dream_theta * LEVER_MM : mm) * pxmm -
-          view.ghost) * 0.35;
 
       const room = Math.max(0, W / 2 - R * 1.05 - 6 * dpr);
       const cy = H / 2;
       const cx = W / 2 + clamp(view.off, -room, room);
       const col = S.tag.present ? stateColor(S.tag.emotion) : cssv("--critical");
       g.clearRect(0, 0, W, H);
-
-      // the dream's plate, drawn only once it visibly parts from the real one
-      if (S.playing && Math.abs(view.ghost - view.off) > 2 * dpr) {
-        blob(W / 2 + clamp(view.ghost, -room, room), cy, R, t, amp, speed);
-        g.lineWidth = 1.5 * dpr;
-        g.strokeStyle = S.monitor.diverged ? cssv("--critical") : cssv("--baseline");
-        g.setLineDash([6 * dpr, 6 * dpr]);
-        g.stroke();
-        g.setLineDash([]);
-      }
 
       // glow: how hard the cradle is working, wrapped around the body
       const aura = g.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 1.8);

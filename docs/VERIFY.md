@@ -7,6 +7,13 @@ one below cannot; none of them claims what only a clinical study could.
 
 ## Layer 1 — synthetic streams (automated, every `python3 tests.py`)
 
+**Watch it live:** `python3 serve.py --verify` acts a scripted nursery episode
+(quiet → fussing → soothed → crying → sleep → a rollover → resettled) through
+the real AudioTrack → InfantJudge → CradleMachine chain and visualises it on
+the dashboard and the webapp — the camera panel shows the drawn baby acting
+the script, watermarked as synthetic; the internals drawer shows the judge
+state and the current phase.
+
 The judge, audio track and posture rules are pure, so the suite drives them
 with scripted signals and asserts the report's own rows:
 

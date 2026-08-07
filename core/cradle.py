@@ -74,6 +74,15 @@ class Motion:
     sign: float = 1.0   # diagonal +-45 deg, circle CW/CCW
     ramp_s: float = 0.0  # soft_start / taper lengths
 
+    @property
+    def slot(self) -> int:
+        """The PCM slot this entry compiles to -- M*NN* is ``motion_NN.csv``.
+
+        The one home of that naming rule: the compiler (tools/make_motions.py)
+        and the live player (serve.py's SlotBridge feed) both read it here.
+        """
+        return int(self.id[1:])
+
     def worst_components(self) -> list[tuple[float, float]]:
         """(f, A) pairs at their envelope-worst, for the import-time gate."""
         if self.kind == "sine":
@@ -385,7 +394,7 @@ class MotionEngine:
 # --------------------------------------------------------------------------- #
 # The state machine, report section 5
 # --------------------------------------------------------------------------- #
-CALM_LEVEL = 0.12          # matches demo.CALM_FLOOR: below this, nobody fusses
+CALM_LEVEL = 0.12          # below this, nobody fusses (report 5.2)
 CRY_LEVEL = 0.45           # above this the trial starts one rung up
 TRIAL_LADDER = ("M10", "M12", "M13", "M16")   # fuss -> cry -> escalation (ML)
 

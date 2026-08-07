@@ -4,7 +4,7 @@ import { Events, SafeChip, Say, Strip } from "@/components/Cards";
 import { Camera, Controls } from "@/components/Controls";
 import Internals from "@/components/Internals";
 import Orb from "@/components/Orb";
-import { useCradle, useSlots } from "@/lib/useCradle";
+import { useCradle, } from "@/lib/useCradle";
 
 /**
  * Three zones, in order of what a reader needs:
@@ -17,7 +17,6 @@ import { useCradle, useSlots } from "@/lib/useCradle";
  */
 export default function Page() {
   const { state: S, conn, latest } = useCradle();
-  const slots = useSlots();
 
   return (
     <>
@@ -55,7 +54,7 @@ export default function Page() {
           <div className="log">waiting…</div></div>}
       </div>
 
-      {S ? <Internals S={S} slots={slots} /> : null}
+      {S ? <Internals S={S} /> : null}
     </>
   );
 }

@@ -3,16 +3,12 @@
 
 ``robot_state_publisher`` turns joint angles into link poses, but something has
 to publish the angles.  That is this: a ``/joint_states`` publisher fed by the
-same P-Vector world model DREAM-Chunk dreams with (see pvector.py).
-
-So what you see in RViz is not an animation someone keyframed.  It is the exact
-trajectory the pcm would play for that slot, evaluated from the quintic:
+real MotionEngine, so what you see in RViz is not an animation someone
+keyframed -- it is the library's own trajectory, solved through the linkage:
 
     python3 apps/animate.py --tour          # walk the real M-library -- the demo
     python3 apps/animate.py --motion M16          # hold one library entry
     python3 apps/animate.py --rock          # one plain sine, until Ctrl-C
-    python3 apps/animate.py --slot 3          # play one motion slot, once
-    python3 apps/animate.py --all          # cycle through every slot
     python3 apps/animate.py --sweep          # one joint at a time, a wiring check
 
 The rig is two five-bar linkages, not a parallelogram: all four cranks the same
@@ -41,10 +37,9 @@ if __package__ in (None, ""):   # direct run: put the repo root on sys.path
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from apps.demo import (JOINT_NAMES, LEVER_M, axis_angles, cradle_cranks,
+from core.rig import (JOINT_NAMES, LEVER_M, cradle_cranks,
                        cradle_joint_state, joint_state)
 from core.cradle import LIBRARY_BY_ID, MotionEngine
-from core.pvector import load_chunk_dictionary
 VIZ_GAIN = 5.0          # display exaggeration, exactly like serve.py --viz-gain
 
 # A pass through what the rig can actually do: slow to fast, double amplitude,
@@ -88,7 +83,7 @@ TOUR_DWELL_S = 10.0     # seconds per entry; --dwell overrides
 TOUR_RAMP_S = 5.0
 
 # The URDF's joints, by name, in the order joint_state() emits them.  This is
-# imported from apps/demo.py rather than written out again: after the tree was
+# imported from core/rig.py rather than written out again: after the tree was
 # re-rooted (every upper arm on the holder), a stale local copy here kept
 # publishing joint_axis_1/2/3 -- which no longer exist -- and never published
 # the joint_bearing_N that do, so robot_state_publisher had no TF for three
@@ -113,13 +108,6 @@ class Animator(Node):
         msg.position = pos
         self.pub.publish(msg)
 
-    def hold(self, positions, seconds: float) -> None:
-        """Keep publishing a pose. RViz needs a steady stream, not one message."""
-        steps = max(1, int(seconds * RATE_HZ))
-        for _ in range(steps):
-            self.send(positions)
-            time.sleep(1.0 / RATE_HZ)
-
 
 # --rock is a screen animation, not a robot command: nothing in this mode goes
 # near the engine, the library or the envelope, so both numbers are chosen to
@@ -142,26 +130,6 @@ def sway_state(amp_deg: float, phase: float) -> list[float]:
     exaggerated screen modes keep every arm on the holder.
     """
     return joint_state(sway_mm=amp_deg * MM_PER_DEG * math.sin(phase))
-
-
-def crank_to_sway_mm(theta_rad: float) -> float:
-    """Invert the sway channel: leg 0's crank delta -> plate travel (mm).
-
-    The linkage is nonlinear, so this is a bisection on the real solve rather
-    than a lever multiply.  Used to render DREAM slots, whose trajectories are
-    stored as crank angles.
-    """
-    lo, hi = -160.0, 160.0
-    f = lambda mm: axis_angles(sway_mm=mm)[0] - theta_rad
-    if f(lo) * f(hi) > 0:            # out of reach: clamp to the nearer end
-        return lo if abs(f(lo)) < abs(f(hi)) else hi
-    for _ in range(48):
-        mid = 0.5 * (lo + hi)
-        if f(lo) * f(mid) <= 0:
-            hi = mid
-        else:
-            lo = mid
-    return 0.5 * (lo + hi)
 
 
 def library_angles(engine: MotionEngine, script, gain: float = VIZ_GAIN,
@@ -198,23 +166,6 @@ def library_angles(engine: MotionEngine, script, gain: float = VIZ_GAIN,
             t += dt
 
 
-def play_chunk(node: Animator, chunk, start) -> list[float]:
-    """Walk one motion slot's dreamed trajectory at wall-clock speed.
-
-    The dream is stored as crank angles (the world model's coordinates), but
-    the screen needs all nine joints, so each sample is inverted back to plate
-    travel and re-solved through the linkage.  The returned pose stays in
-    crank coordinates -- that is what the next chunk dreams from.
-    """
-    t, y = chunk.dream(start, dt=1.0 / RATE_HZ)
-    node.get_logger().info(
-        f"slot {chunk.slot_id} '{chunk.name}' -- {chunk.duration_s:.2f}s")
-    for row in y:
-        node.send(joint_state(sway_mm=crank_to_sway_mm(float(row[0]))))
-        time.sleep(1.0 / RATE_HZ)
-    return list(y[-1])
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tour", action="store_true",
@@ -232,11 +183,7 @@ def main(argv=None) -> int:
                         help=f"--rock frequency (default {ROCK_HZ}, the library's fastest)")
     parser.add_argument("--deg", type=float, default=ROCK_DEG,
                         help=f"--rock amplitude in degrees (default {ROCK_DEG}, exaggerated)")
-    parser.add_argument("--slot", type=int, help="play one slot")
-    parser.add_argument("--all", action="store_true", help="cycle through every slot")
     parser.add_argument("--sweep", action="store_true", help="sine on each joint in turn")
-    parser.add_argument("--motion-map", help="MotionMap.csv (else motions/ or slots.json)")
-    parser.add_argument("--slot-table", default="slots.json")
     parser.add_argument("--loop", action="store_true", help="repeat forever")
     args = parser.parse_args(argv)
 
@@ -313,25 +260,7 @@ def main(argv=None) -> int:
                     break
             return 0
 
-        chunks = load_chunk_dictionary(motion_map=args.motion_map,
-                                       slot_table=args.slot_table)
-        if not chunks:
-            node.get_logger().error("no chunks -- run: python3 tools/make_motions.py")
-            return 1
-
-        while True:
-            pose = [0.0] * 4
-            ids = sorted(chunks) if args.all else [args.slot or min(chunks)]
-            for slot_id in ids:
-                chunk = chunks.get(slot_id)
-                if chunk is None:
-                    node.get_logger().error(f"slot {slot_id} not in the dictionary")
-                    return 1
-                pose = play_chunk(node, chunk, pose)
-                node.hold(joint_state(
-                    sway_mm=crank_to_sway_mm(float(pose[0]))), 0.4)
-            if not args.loop:
-                break
+        parser.error("pick a mode: --tour, --motion, --rock or --sweep")
     except KeyboardInterrupt:
         print()
     finally:

@@ -309,10 +309,10 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
     urdf.write_text(render_urdf(big, base), encoding="utf-8")
     print(f"\nwrote {urdf} and {len(big)} meshes in {meshes}/")
 
-    # apps/demo.py carries these three as its geometry constants -- paste
+    # core/rig.py carries these three as its geometry constants -- paste
     # them there whenever the CAD changes.
     metres = lambda v: ", ".join(f"{x * MM_TO_M:.4f}" for x in v)
-    print("\ngeometry for apps/demo.py (metres):")
+    print("\ngeometry for core/rig.py (metres):")
     print(f"  AXIS0 = np.array([{metres(by_name['axis_0'].centre)}])")
     print(f"  PIVOT = np.array([{metres(FRAME_OVERRIDE[PLATFORM])}])")
     print(f"  PLATE = np.array([{metres(plate.centre)}])")

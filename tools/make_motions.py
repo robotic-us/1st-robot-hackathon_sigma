@@ -34,7 +34,7 @@ becomes a chain of rest-to-rest quintic half-cycles (both a sine and a quintic
 have zero velocity at the extremes), with the amplitude envelope ramped in and
 out so every slot starts soft and ends parked at rest.  Schedules are written in
 millimetres of plate travel and solved into crank angles through the rig's real
-inverse kinematics (apps/demo.py), one solve per P-Vector -- so the four cranks
+inverse kinematics (core/rig.py), one solve per P-Vector -- so the four cranks
 carry different magnitudes, which is correct: the linkage is not symmetric.
 
 Notes for the honest small print: the rig is two five-bar linkages, giving three
@@ -96,7 +96,7 @@ AXES = 4
 REFERENCE = (0.5, 10.0)  # (Hz, mm) sway the C0 transition episodes demonstrate
 
 # The rig is two five-bar linkages, not a parallelogram -- measured off the
-# assembly STL, see apps/demo.py for the derivation.  It has three channels:
+# assembly STL, see core/rig.py for the derivation.  It has three channels:
 #
 #   sway   all four cranks the same way          -> horizontal, ~4.3 mm/deg
 #   heave  each pair's two cranks opposed        -> VERTICAL, ~3.1 mm/deg
@@ -144,7 +144,7 @@ def scaled(schedule: list[tuple[float, int]], k: float) -> list[tuple[float, int
 def cradle_axis_degrees(sway_mm: float = 0.0, heave_mm: float = 0.0,
                         pitch_mm: float = 0.0) -> list[float]:
     """The four crank angles in **degrees**, which is what a P-Vector carries."""
-    from apps.demo import axis_angles
+    from core.rig import axis_angles
     return [math.degrees(v)
             for v in axis_angles(sway_mm=sway_mm, heave_mm=heave_mm,
                                  pitch_mm=pitch_mm)]
@@ -249,10 +249,8 @@ def write_slot(path: Path, slot_id: int, name: str,
 
 
 def build_library(out: Path) -> int:
-    from apps.demo import AXIS0, PIVOT
+    from core.rig import LEVER_M as lever_m
     from core.cradle import A_HARD_MM, LIBRARY
-
-    lever_m = float(PIVOT[2] - AXIS0[2])
     # The report's cap is on plate travel (A_HARD_MM one-way), and core/cradle.py
     # already refuses a library entry that exceeds it.  This is the second guard,
     # in crank-angle space: no slot may ask a crank for more than the hard cap
@@ -267,7 +265,7 @@ def build_library(out: Path) -> int:
         stale.unlink()
 
     for m in LIBRARY:
-        slot_id = int(m.id[1:])
+        slot_id = m.slot
         axis_segments = library_episode(m)
         peak = max(abs(deg) for segs in axis_segments for deg, _ in segs)
         assert peak <= hard_deg + 1e-6, f"{m.id} breaks the envelope"

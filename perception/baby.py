@@ -82,18 +82,28 @@ class VirtualBaby:
         self._until = 0.0
         self._hidden_until = 0.0
         self._t: float | None = None
+        # The first act is scripted, not diced: a few calm seconds, then a
+        # fuss.  Left to the dice, CALM dwells 20-60 s with a 40% exit to
+        # FUSS -- an opening that can sit quiet for many minutes, which reads
+        # as "nothing is running".  Only the opening is special-cased; every
+        # transition after it is the normal process.
+        self._opening = True
 
     def _dwell(self) -> float:
         lo, hi = DWELL_S[self.state]
         return self.rng.uniform(lo, hi)
 
     def _transition(self, now: float) -> None:
-        roll, acc = self.rng.random(), 0.0
-        for state, p in NEXT[self.state]:
-            acc += p
-            if roll <= acc:
-                self.state = state
-                break
+        if self._opening:
+            self._opening = False
+            self.state = "FUSS"
+        else:
+            roll, acc = self.rng.random(), 0.0
+            for state, p in NEXT[self.state]:
+                acc += p
+                if roll <= acc:
+                    self.state = state
+                    break
         if self.state == "CRY":
             self.soothable = self.rng.random() < SOOTHABLE_P
         self._until = now + self._dwell()
@@ -106,7 +116,8 @@ class VirtualBaby:
         dt = 0.0 if self._t is None else max(0.0, min(0.2, now - self._t))
         self._t = now
         if self._until == 0.0:
-            self._until = now + self._dwell()
+            self._until = now + (self.rng.uniform(4.0, 8.0) if self._opening
+                                 else self._dwell())
         if now >= self._until:
             self._transition(now)
         # The closed loop: a soothable fuss/cry yields to sway, hunger does not.

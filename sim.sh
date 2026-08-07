@@ -54,7 +54,7 @@ for _ in $(seq 1 15); do
         echo
         echo "ready.  log: /tmp/sigma-sim.log"
         echo "  phorce play 3 --target sim:demo"
-        echo "  python3 $ROOT/apps/care.py --target sim:demo"
+        echo "  python3 $ROOT/serve.py --baby --robot sim:demo"
         exit 0
     fi
 done

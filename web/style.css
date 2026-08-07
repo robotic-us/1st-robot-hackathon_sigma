@@ -1,8 +1,8 @@
 /* The dashboard's one stylesheet.  Served by serve.py at /style.css;
    no build step.
 
-   The plain treatment: monochrome, square, flat.  No hue and no radius
-   anywhere; state is carried by words, weight and position.  The status
+   The plain treatment: monochrome and flat, with soft-cornered controls.
+   No hue; state is carried by words, weight and position.  The status
    tokens survive because the page's JS and canvas resolve colours through
    them, but they map onto an ink ramp -- fainter is calmer, stronger is
    worse -- and every marked element sits beside a text label, so nothing
@@ -17,7 +17,7 @@
    page; the log clips instead of scrolling (newest line is first).
    Type is instrument-sized: nothing shouts except the safety alert. */
 :root {
-  --page:#ffffff; --surface:#ffffff; --raised:#f2f2f2;
+  --page:#ffffff; --raised:#f2f2f2;
   --ink:#111111; --ink-2:#3d3d3d; --muted:#6f6f6f;
   --hairline:#e2e2e2; --baseline:#b5b5b5; --ring:#d8d8d8;
   --accent:#111111;
@@ -26,13 +26,17 @@
   --scrim:255 255 255;                    /* hero text scrim, as rgb */
   /* grade identity as three gray steps, keyed in the legend */
   --cat-1:#111111; --cat-2:#6f6f6f; --cat-3:#b5b5b5;
-  --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+  --sans:"Helvetica Neue","Liberation Sans","Segoe UI",Arial,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  /* five sizes, no half-pixels: micro labels, small chrome, body, the two
+     display sizes.  Everything on the page draws from these. */
+  --fs-micro:10px; --fs-small:11px; --fs-body:12px;
+  --fs-stat:18px; --fs-title:21px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     /* true black: the page is off, only the light is on */
-    --page:#000000; --surface:#000000; --raised:#161616;
+    --page:#000000; --raised:#161616;
     --ink:#ffffff; --ink-2:#c9c9c9; --muted:#8a8a8a;
     --hairline:#1f1f1f; --baseline:#454545; --ring:#333333;
     --accent:#ffffff;
@@ -56,9 +60,14 @@ body { background:var(--page); color:var(--ink);
 header { display:contents; }
 header h1 { display:none; }
 #conn { grid-column:3; grid-row:1; justify-self:end; margin-bottom:6px;
-        font-size:11px; color:var(--muted); }
+        font-size:var(--fs-small); color:var(--muted);
+        font-variant-numeric:tabular-nums; }
 #conn::before { content:"\25CF"; margin-right:6px; color:var(--baseline); }
 #conn.live::before { color:var(--good); }
+/* Disconnection is the loud state: a dead stream freezes every number on the
+   page, so the chip inverts instead of dimming a 9px dot two gray steps. */
+#conn.down { background:var(--ink); color:var(--page); padding:2px 8px; }
+#conn.down::before { color:var(--page); }
 
 .dot { width:9px; height:9px; border-radius:50%; background:var(--muted);
        flex:none; display:inline-block; }
@@ -68,6 +77,9 @@ header h1 { display:none; }
 #alert.on { display:block; position:fixed; top:0; left:0; right:0; z-index:40;
             padding:10px 20px;
             background:var(--ink); color:var(--page); font-size:13px; }
+/* JS mirrors .on onto body.alerted so the banner pushes the page down
+   instead of covering the connection chip and the rail tops. */
+body.alerted { padding-top:52px; }
 
 /* ---- centre stage: ambient.  No border, no panel -- the circle floats
    on the page itself, its glow the only light around it, the sentence at
@@ -77,18 +89,21 @@ header h1 { display:none; }
 #hero canvas { position:absolute; inset:0; width:100%; height:100%;
                display:block; }
 #safechip { position:absolute; top:0; left:0; display:flex;
-            align-items:center; gap:7px; font-size:11px; color:var(--muted);
+            align-items:center; gap:7px; font-size:var(--fs-small); color:var(--muted);
             padding:2px 0; }
+/* the acted-episode label: only ever present under --verify */
+#scen { border-left:1px solid var(--baseline); padding-left:8px; }
+#scen:empty { display:none; }
 #say { position:absolute; left:0; right:0; bottom:0; padding:18px 2px 4px;
        background:linear-gradient(to top, rgb(var(--scrim) / .9), transparent); }
 #headline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 #headline .dot { width:10px; height:10px; }
-#hbaby { font-size:21px; font-weight:600; letter-spacing:-.01em; }
+#hbaby { font-size:var(--fs-title); font-weight:600; letter-spacing:-.01em; }
 #harrow { color:var(--muted); font-size:15px; }
-#hcradle { font-size:21px; font-weight:400; color:var(--ink-2);
+#hcradle { font-size:var(--fs-title); font-weight:400; color:var(--ink-2);
            letter-spacing:-.01em; }
-#hdetail { font-size:11.5px; color:var(--muted); margin-top:4px; }
-#hwhy { font-size:12px; color:var(--ink-2); margin-top:8px; max-width:56ch;
+#hdetail { font-size:var(--fs-small); color:var(--muted); margin-top:4px; }
+#hwhy { font-size:var(--fs-body); color:var(--ink-2); margin-top:8px; max-width:56ch;
         line-height:1.5; }
 
 /* ---- left rail: the readouts.  A thin rule, a small label, a number
@@ -96,11 +111,11 @@ header h1 { display:none; }
 #strip { grid-column:1; grid-row:1 / 3; display:grid; align-content:start;
          grid-template-columns:1fr; gap:11px; }
 .stat { border-top:1px solid var(--baseline); padding-top:6px; }
-.stat .k { font-size:9.5px; color:var(--muted); text-transform:uppercase;
-           letter-spacing:.1em; }
-.stat .val { font-size:18px; font-weight:600; margin-top:2px;
+.stat .k, .internals h2 { font-size:var(--fs-micro); color:var(--muted);
+           text-transform:uppercase; letter-spacing:.1em; }
+.stat .val { font-size:var(--fs-stat); font-weight:600; margin-top:2px;
              font-variant-numeric:tabular-nums; letter-spacing:0; }
-.stat .val small { font-size:10.5px; font-weight:400; color:var(--muted); }
+.stat .val small { font-size:var(--fs-micro); font-weight:400; color:var(--muted); }
 /* Meter: the unfilled track is a dim step of whatever the fill currently is,
    so weight reads across the whole bar and not just the filled part.
    JS sets --fill on the track; both halves derive from it. */
@@ -115,53 +130,52 @@ header h1 { display:none; }
 /* ---- the rails' utility: #foot dissolves, its children place
    themselves -- camera lower-left, keypad and log on the right. ---- */
 #foot { display:contents; }
-#foot > div, #foot > section { border-top:1px solid var(--baseline);
+#foot > div, #foot > section { border-top:1px solid var(--hairline);
                                padding-top:8px; min-width:0; }
 #foot h2 { display:none; }
-#foot > div:nth-of-type(1) { grid-column:1; grid-row:3; align-self:start;
-                             margin-top:11px; }
-#cam { width:100%; aspect-ratio:4/3; max-height:180px; object-fit:cover;
-       background:#000; display:block;
-       filter:grayscale(1); }   /* the feed obeys the page: no colour */
+#zone-cam { grid-column:1; grid-row:3; align-self:start; margin-top:11px; }
+#cam { width:100%; aspect-ratio:4/3; max-height:210px; object-fit:cover;
+       background:var(--raised); display:block; border-radius:8px; }
 
-/* Buttons.  The generic button is an outlined key; hover inverts it, and
-   so do on-states -- there is no colour to lean on.  The manual controls
-   collapse into one hairline keypad: keys share rules like a machine's
-   front panel, the label left, the M-number or hotkey right, and the jam
-   key -- the dangerous one -- gets the full bottom row. */
-button { font:inherit; font-size:11.5px; color:var(--ink-2);
-         background:transparent; border:1px solid var(--baseline);
-         padding:6px 10px; cursor:pointer; white-space:nowrap; }
-button:hover { background:var(--ink); border-color:var(--ink);
-               color:var(--page); }
+/* Buttons.  Soft raised keys: a filled rounded surface reads as pressable
+   in a way hairline cells never did.  Hover raises the edge, a held press
+   and every ON state invert -- state outranks pointer.  The jam key -- the
+   dangerous one -- gets the full bottom row. */
+button { font:inherit; font-size:var(--fs-small); color:var(--ink-2);
+         background:var(--raised); border:1px solid transparent;
+         border-radius:8px; padding:8px 12px; cursor:pointer;
+         white-space:nowrap; transition:border-color .1s, background .1s; }
+/* The interaction grammar, two tiers so state and hover stay tellable:
+   hover = ink border and ink text; ON (and a held press) = full inversion.
+   Before, both were the inversion, and you could not see whether automatic
+   care was on while pointing at it. */
+button:hover { border-color:var(--ink); color:var(--ink); }
+button:focus-visible { outline-offset:2px; }
+button:active { background:var(--ink); border-color:var(--ink);
+                color:var(--page); }
 button b { font-weight:500; }
-button i { font-style:normal; color:var(--muted); font-size:10px;
+button i { font-style:normal; color:var(--muted); font-size:var(--fs-micro);
            margin-left:6px; }
-button:hover i { color:var(--page); opacity:.7; }
-#foot > div:nth-of-type(2) { grid-column:3; grid-row:2; }
-#buttons { display:grid; grid-template-columns:1fr 1fr; gap:1px;
-           background:var(--baseline); border:1px solid var(--baseline);
+button:active i { color:var(--page); opacity:.7; }
+#zone-keys { grid-column:3; grid-row:2; }
+#buttons { display:grid; grid-template-columns:1fr 1fr; gap:6px;
            align-content:flex-start; }
 #buttons button { display:flex; justify-content:space-between;
-                  align-items:baseline; gap:8px; border:0;
-                  background:var(--page); text-align:left; }
-#buttons button:hover { background:var(--ink); }
-#buttons button:focus-visible { outline-offset:-3px; }
+                  align-items:baseline; gap:8px; text-align:left; }
 #jam { grid-column:1 / -1; }
-#auto.on { background:var(--ink); color:var(--page); }
-#auto.on i { color:var(--page); opacity:.7; }
-#jam.on { background:var(--ink); color:var(--page); }
-#jam.on i { color:var(--page); opacity:.7; }
-#buttons .note { grid-column:1 / -1; background:var(--page);
-                 padding:6px 10px; }
-.note { font-size:10.5px; color:var(--muted); }
+#auto.on, #jam.on { background:var(--ink); border-color:var(--ink);
+                    color:var(--page); }
+#auto.on i, #jam.on i { color:var(--page); opacity:.7; }
+/* hovering an ON key must not un-invert it -- state outranks pointer */
+#buttons button.on:hover { background:var(--ink); color:var(--page); }
+#buttons .note { grid-column:1 / -1; padding:2px 2px 0; }
+.note { font-size:var(--fs-micro); color:var(--muted); }
 
 /* The log fills whatever height the row leaves and clips -- the newest
    line is first, so what falls off the bottom is the oldest. */
-#foot > div:nth-of-type(3) { grid-column:3; grid-row:3; margin-top:11px;
-                             display:flex; flex-direction:column;
-                             min-height:0; }
-#log { font:10.5px/1.7 var(--mono); color:var(--muted);
+#zone-log { grid-column:3; grid-row:3; margin-top:11px;
+            display:flex; flex-direction:column; min-height:0; }
+#log { font:var(--fs-micro)/1.7 var(--mono); color:var(--muted);
        flex:1; min-height:0; overflow:hidden; }
 #log div:first-child { color:var(--ink-2); }
 
@@ -169,20 +183,23 @@ button:hover i { color:var(--page); opacity:.7; }
 #library { grid-column:1 / -1; grid-row:4; margin-top:10px; }
 #mfilter { display:flex; flex-wrap:wrap; gap:5px; align-items:center;
            margin:2px 0 7px; }
-#mfilter button { font-size:10.5px; padding:2px 8px; }
-#mfilter button.on { border-color:var(--ink); color:var(--ink); }
-#mfilter input { font:inherit; font-size:10.5px; color:var(--ink);
+#mfilter button { font-size:var(--fs-micro); padding:3px 11px;
+                  border-radius:999px; }
+#mfilter button.on { background:var(--ink); border-color:var(--ink);
+                     color:var(--page); }
+#mfilter input { font:inherit; font-size:var(--fs-micro); color:var(--ink);
                  background:var(--raised); border:1px solid var(--ring);
-                 padding:2px 7px; width:110px; }
+                 border-radius:999px; padding:3px 11px; width:130px; }
 #mfilter .note { margin-left:auto; }
-#motions { display:grid; grid-template-columns:repeat(10,minmax(0,1fr));
-           gap:4px; }
-.m { background:var(--raised); border:1px solid var(--ring);
-     padding:3px 6px; cursor:pointer; font-size:9.5px; color:var(--muted);
-     border-left-width:3px; min-width:0; }
-.m b { display:block; font-size:10px; color:var(--ink-2); font-weight:500;
-       white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.m:hover { border-color:var(--ink); }
+#motions { display:grid; grid-template-columns:repeat(auto-fill,minmax(46px,1fr));
+           gap:3px; }
+.m { background:var(--raised); border:0; border-left:3px solid transparent;
+     border-radius:6px; padding:3px 0 3px 6px; cursor:pointer; min-width:0;
+     text-align:left; }
+.m b { display:block; font-size:var(--fs-micro); color:var(--ink-2);
+       font-weight:500; white-space:nowrap; }
+.m:hover { outline:1px solid var(--ink); outline-offset:-1px;
+           border-radius:6px; }
 /* Grade is identity, not a verdict, so it wears categorical steps -- reusing
    the status tokens here would have made R read as "warning" and P1 as
    "good", which is not what the grades mean.  The edge never carries it
@@ -190,25 +207,20 @@ button:hover i { color:var(--page); opacity:.7; }
 .m.g-C0 { border-left-color:var(--cat-1); }
 .m.g-P1 { border-left-color:var(--cat-2); }
 .m.g-R  { border-left-color:var(--cat-3); }
-#mkey { display:flex; gap:11px; flex-wrap:wrap; align-items:center;
-        font-size:10px; color:var(--muted); margin:7px 0 0; }
-#mkey span { display:inline-flex; align-items:center; gap:5px; }
-#mkey i { width:8px; height:8px; display:inline-block; }
 /* "Playing" is a state, so this one *is* a status token -- and it is the only
    colour in the grid that changes on its own. */
-.m.on { border-color:var(--ink); background:var(--raised); }
-.m.on b { color:var(--ink); }
+/* Now-playing inverts, keeping its grade edge -- a 1px border change on a
+   9-across cell was indistinguishable from hover. */
+.m.on { background:var(--ink); }
+.m.on b { color:var(--page); }
 /* R entries the engine will refuse: still listed, but visibly not available. */
 .m.locked { opacity:.45; }
-#mmsg { font-size:10.5px; color:var(--muted); min-height:0;
-        position:absolute; }             /* painted over the mkey row */
-#mmsg.bad { color:var(--serious); }
 
 /* ---- the drawer: everything a reader should not need.  The summary is
    the last line of the page; opening it overlays the stage instead of
    growing the page. ---- */
 details { grid-column:1 / -1; grid-row:5; margin-top:8px; }
-details > summary { cursor:pointer; color:var(--muted); font-size:11px;
+details > summary { cursor:pointer; color:var(--muted); font-size:var(--fs-small);
                     padding:4px 0 0; user-select:none; }
 details[open] .internals { position:fixed; left:20px; right:20px; bottom:34px;
                            z-index:30; max-height:66vh; overflow:auto;
@@ -216,31 +228,14 @@ details[open] .internals { position:fixed; left:20px; right:20px; bottom:34px;
                            border:1px solid var(--baseline);
                            padding:12px 16px 14px; }
 .internals { display:grid; grid-template-columns:320px 1fr; gap:24px; }
-.internals > section { border-top:1px solid var(--baseline); padding-top:8px; }
-.internals h2 { font-size:9.5px; font-weight:600; text-transform:uppercase;
-                letter-spacing:.1em; color:var(--muted); margin-bottom:8px; }
+.internals > section { border-top:1px solid var(--hairline); padding-top:8px; }
+.internals h2 { font-weight:600; margin-bottom:8px; }
 /* Key-value rows read as an index: dotted leaders, value flush right. */
 .kv { display:flex; justify-content:space-between; align-items:baseline;
-      gap:10px; font-size:11.5px; color:var(--muted); padding:3px 0; margin:0;
+      gap:10px; font-size:var(--fs-small); color:var(--muted); padding:3px 0; margin:0;
       border-bottom:1px dotted var(--hairline); }
 .kv b { color:var(--ink-2); font-weight:500; white-space:nowrap;
         font-variant-numeric:tabular-nums; }
-table { width:100%; border-collapse:collapse; font-size:11.5px;
-        font-variant-numeric:tabular-nums; }
-td,th { padding:3px 6px; text-align:right; border-bottom:1px solid var(--hairline); }
-th { color:var(--muted); font-weight:600; font-size:9.5px;
-     text-transform:uppercase; letter-spacing:.06em; }
-td:first-child, th:first-child { text-align:left; }
-tr.win td { color:var(--ink); font-weight:600; }
-tr.veto td { color:var(--muted); text-decoration:line-through; }
-#slots { display:grid; grid-template-columns:repeat(5,1fr); gap:6px;
-         margin-top:9px; }
-.slot { background:var(--raised); border:1px solid var(--ring);
-        padding:5px 7px; cursor:pointer; font-size:10.5px;
-        color:var(--muted); }
-.slot b { display:block; font-size:11px; color:var(--ink-2); font-weight:500; }
-.slot:hover { border-color:var(--ink); }
-.slot.play { border-color:var(--ink); }
 
 /* Small screens go back to a plain scrolling stack -- one column is the
    honest layout there, and "no scroll" cannot survive a phone. */
@@ -256,6 +251,5 @@ tr.veto td { color:var(--muted); text-decoration:line-through; }
   details[open] .internals { position:static; max-height:none; padding:0;
                              border:0; }
   .internals { grid-template-columns:1fr; }
-  #mmsg { position:static; }
-  #hbaby, #hcradle { font-size:18px; }
+  #hbaby, #hcradle { font-size:var(--fs-stat); }
 }

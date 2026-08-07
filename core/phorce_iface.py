@@ -479,8 +479,11 @@ class PhorceRobot(RobotInterface):
             # age_ms, is_fresh().  There is no ethercat_operational/estop_active
             # here -- that spelling is from the older guide generation.
             status = self._robot.status()
+            # is_fresh is a method in one SDK generation and a plain bool in
+            # another (the sim target ships the latter) -- take either.
+            fresh = status.is_fresh() if callable(status.is_fresh) else status.is_fresh
             LOGGER.info("state=%s fresh=%s physical_idle=%s recovery_required=%s",
-                        status.state_name, status.is_fresh(),
+                        status.state_name, fresh,
                         status.physical_idle, status.recovery_required)
             if status.recovery_required:
                 LOGGER.warning("robot needs RECOVERY -- park with button 2, then hold "
@@ -554,6 +557,7 @@ class PhorceRobot(RobotInterface):
         lives, and it should be visible in our own code rather than assumed.
         """
         import rclpy
+        from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
         from rclpy.qos import qos_profile_sensor_data  # <-- THE critical import
         from agx_msgs.msg import PhorceFeedback
@@ -569,11 +573,19 @@ class PhorceRobot(RobotInterface):
             PhorceFeedback, "/phorce/feedback", self._on_feedback, qos_profile_sensor_data
         )
         self._ros_node = node
+        # A dedicated executor, NOT rclpy.spin(node): spin() grabs the process-
+        # wide global executor, which the phorce SDK is already spinning from
+        # its own thread.  Two threads contending for it starve the SDK's
+        # liveness watchdog and every play dies with PhorceUnavailable
+        # ("모션 스택이 사라졌습니다") while the stack is demonstrably up.
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
         self._ros_thread = threading.Thread(
-            target=rclpy.spin, args=(node,), name="rclpy-spin", daemon=True
+            target=executor.spin, name="rclpy-spin", daemon=True
         )
         self._ros_thread.start()
-        LOGGER.info("feedback via direct rclpy subscription (qos_profile_sensor_data)")
+        LOGGER.info("feedback via dedicated-executor rclpy subscription "
+                    "(qos_profile_sensor_data)")
 
     # -- motion ------------------------------------------------------------ #
     def _play_blocking(self, slot_id: int) -> PlayOutcome:
@@ -603,6 +615,83 @@ class PhorceRobot(RobotInterface):
         except phorce.PhorceError:
             LOGGER.exception("play(%d) failed", slot_id)
             return PlayOutcome.ERROR
+
+
+# --------------------------------------------------------------------------- #
+# Bridge -- the decision loop's motion, replayed as PCM slots
+# --------------------------------------------------------------------------- #
+class SlotBridge:
+    """Keeps a :class:`RobotInterface` playing the slot the engine is in.
+
+    The live loop streams continuous offsets to the dashboard and RViz, but
+    the physical robot only plays pre-compiled slots (``motion_NN.csv``,
+    already loaded on the PCM).  This is the whole adapter: every decision
+    tick the caller passes the slot number the engine's mode maps to (or
+    ``None``), and the bridge keeps the robot replaying it back-to-back --
+    the robot has no queue, so "continuous rocking" is just re-requesting
+    the slot whenever the robot goes idle.
+
+    Deliberate semantics:
+
+    * ``None`` (parked / tapering) stops *requesting*; it cannot stop a slot
+      already running -- the participant API has no abort.  The physical
+      safety stop is the robot's own contract and the E-stop, not this class.
+    * NEEDS_OPERATOR (reject 12/13) holds off for ``RETRY_OPERATOR_S``: a
+      human has to press the zero button, and hammering ``play()`` meanwhile
+      accomplishes nothing (see the module docstring).
+    * ERROR holds off briefly too, so a persistent fault logs at a readable
+      rate instead of every tick.
+
+    Time is injected (``tick(now, ...)``) so the hold-offs are testable with
+    a fake clock, same rule as ``core/cradle.py``.
+    """
+
+    RETRY_OPERATOR_S = 10.0
+    RETRY_ERROR_S = 2.0
+
+    def __init__(self, robot: RobotInterface,
+                 log: Optional[Callable[[str], None]] = None) -> None:
+        self.robot = robot
+        self._log = log if log is not None else (
+            lambda text: LOGGER.info("%s", text))
+        self._hold_until = 0.0
+        self._awaiting = False      # a play we issued has not finished yet
+        self._last_slot: Optional[int] = None
+        self._warned_no_abort = False
+
+    def tick(self, now: float, slot_id: Optional[int]) -> None:
+        if slot_id is None:
+            if self.robot.is_motion_active() and not self._warned_no_abort:
+                self._warned_no_abort = True
+                self._log("robot: mode parked -- current slot finishes "
+                          "(the API has no abort)")
+            self._last_slot = None
+            return
+        self._warned_no_abort = False
+
+        if self.robot.is_motion_active():
+            return
+        if self._awaiting:
+            # The play we issued has completed; its terminal outcome decides
+            # whether re-requesting now is useful or noise.
+            self._awaiting = False
+            outcome = self.robot.last_outcome()
+            if outcome is PlayOutcome.NEEDS_OPERATOR:
+                self._hold_until = now + self.RETRY_OPERATOR_S
+                self._log("robot: NOT READY -- hold the zero button (button 1) "
+                          f"0.6 s; retrying in {self.RETRY_OPERATOR_S:.0f} s")
+            elif outcome is PlayOutcome.ERROR:
+                self._hold_until = now + self.RETRY_ERROR_S
+        if now < self._hold_until:
+            return
+
+        if self.robot.play(slot_id) is PlayOutcome.OK:
+            self._awaiting = True
+            if slot_id != self._last_slot:
+                self._log(f"robot: playing slot {slot_id}")
+                self._last_slot = slot_id
+        # BUSY needs nothing: is_motion_active() covers our own plays, so BUSY
+        # means someone else owns the robot right now -- try again next tick.
 
 
 # --------------------------------------------------------------------------- #

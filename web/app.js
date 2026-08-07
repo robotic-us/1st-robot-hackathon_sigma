@@ -1,24 +1,29 @@
 /* The dashboard's one script.  Served by serve.py at /app.js; no build
    step.  Everything below reads the SSE stream and paints the page. */
 "use strict";
-let S = null, slots = [], lastSeq = -1;
+let S = null;
 const $ = id => document.getElementById(id);
 const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 
-/* State → status role. Every colored dot sits beside its text label. */
-const ROLE = {SLEEP:"--accent", CALM:"--good", HAPPY:"--good",
+/* State → status role, and the marked element always sits beside its label.
+   The tokens are an ink ramp, so the rule is: FAINT = AT REST, STRONG = NEEDS
+   SOMEONE.  Sleep is the calmest thing on this page and wears the faintest
+   step (--baseline) -- mapping it to --accent (which IS full ink here) once
+   made a stably sleeping baby as loud as PAIN_SUSPECT.  --accent is reserved
+   for the machine's own action (the envelope meter), never for the baby. */
+const ROLE = {SLEEP:"--baseline", CALM:"--good", HAPPY:"--good",
               NEUTRAL:"--muted", FUSS:"--warn", SAD:"--warn", SURPRISE:"--warn",
               CRY:"--serious", ANGRY:"--serious",
               /* the five-state watcher (perception/watch.py).  DISTRESS_FACE
                  is a visual pattern, not confirmed crying, so it wears warn,
                  not serious -- the words say "looks upset", not "crying". */
-              AWAKE:"--good", EYES_CLOSED:"--accent",
-              SLEEP_CANDIDATE:"--accent", DISTRESS_FACE:"--warn",
+              AWAKE:"--good", EYES_CLOSED:"--baseline",
+              SLEEP_CANDIDATE:"--baseline", DISTRESS_FACE:"--warn",
               UNKNOWN:"--muted",
               QUIET_AWAKE:"--good", STARTLE:"--warn", FUSS_WEAK:"--warn",
-              CRY:"--serious", STRONG_DISTRESS:"--serious",
-              PAIN_SUSPECT:"--critical", DROWSY:"--accent",
-              SLEEP_TENTATIVE:"--accent", SLEEP_STABLE:"--accent",
+              STRONG_DISTRESS:"--serious",
+              PAIN_SUSPECT:"--critical", DROWSY:"--baseline",
+              SLEEP_TENTATIVE:"--baseline", SLEEP_STABLE:"--baseline",
               STATE_UNCLEAR:"--muted"};
 
 /* The palette only changes when the colour scheme does, so read each token
@@ -53,7 +58,7 @@ function rgba(hex, a) {
    and the machine's own decisions agree. */
 const CALM_LEVEL = 0.12, CRY_LEVEL = 0.45;
 const NO_IMPROVE_S = 60, CHECK_EVERY_S = 30, GATE_RECOVER_S = 2;
-const SWAY_CAP_MM = 30, ACC_CAP_G = 0.05, LEVER_MM = 227;
+const SWAY_CAP_MM = 30, ACC_CAP_G = 0.05;
 
 /* ---- plain words -------------------------------------------------------- */
 const BABY_WORD = {SLEEP:"Sleeping", CALM:"Calm", HAPPY:"Happy",
@@ -64,7 +69,7 @@ const BABY_WORD = {SLEEP:"Sleeping", CALM:"Calm", HAPPY:"Happy",
                    UNKNOWN:"Can't see the baby",
                    /* the report-spec judge (perception/watch.py, report §5) */
                    QUIET_AWAKE:"Quiet and awake", STARTLE:"Startled",
-                   FUSS_WEAK:"Fussing", CRY:"Crying",
+                   FUSS_WEAK:"Fussing",
                    STRONG_DISTRESS:"Very upset", PAIN_SUSPECT:"Needs you now",
                    DROWSY:"Getting sleepy", SLEEP_TENTATIVE:"Falling asleep",
                    SLEEP_STABLE:"Sleeping", STATE_UNCLEAR:"Can't see the baby"};
@@ -126,12 +131,6 @@ function nextWords(c) {
 }
 
 /* ---- wiring ------------------------------------------------------------- */
-fetch("/slots").then(r => r.json()).then(list => {
-  slots = list;
-  $("slots").innerHTML = list.map(s =>
-    `<div class="slot" id="slot${s.id}" onclick="fetch('/play?slot=${s.id}')">
-       <b>${s.id} · ${s.name}</b>${s.target_deg}° · ${s.duration}s</div>`).join("");
-});
 
 /* The whole library, straight from core/cradle.py's catalog().  Clicking one
    goes through /motion, which validates grade and refuses R without --research
@@ -154,32 +153,33 @@ function drawMotions() {
     (!mGrade || m.grade === mGrade) &&
     (!q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)));
   const research = mResearch === null ? false : mResearch;
+  /* One field per cell: the id.  Fifty cells each carrying name, rate,
+     reach, axis and grade was a wall of truncated noise -- the detail hangs
+     on the tooltip and on the hover line below the grid. */
   $("motions").innerHTML = show.map(m => {
     /* The engine refuses R unless serve.py started with --research; show that
        up front rather than letting the click fail silently. */
     const locked = m.grade === "R" && !research;
-    const hz = m.f_hz ? `${m.f_hz.toFixed(1)} Hz` : "—";
-    const mm = m.a_mm ? `${m.a_mm.toFixed(0)} mm` : "";
-    const tip = `${m.id} ${m.name} · ${m.kind}${m.axis ? " · " + m.axis : ""}
+    const hz = m.f_hz ? ` · ${m.f_hz.toFixed(1)} Hz` : "";
+    const mm = m.a_mm ? ` · ${m.a_mm.toFixed(0)} mm` : "";
+    const tip = `${m.id} ${m.name}${hz}${mm} · ${m.kind}${m.axis ? " · " + m.axis : ""}
 ${m.desc}${locked ? "\n\nresearch-only (R) — needs serve.py --research" : ""}`;
     return `<div class="m g-${m.grade}${locked ? " locked" : ""}"
                  data-id="${esc(m.id)}" title="${esc(tip)}">
-              <b>${esc(m.id)} · ${esc(m.name)}</b>${hz}${mm ? " · " + mm : ""}
-              ${m.axis ? " · " + esc(m.axis) : ""} · ${m.grade}</div>`;
+              <b>${esc(m.id)}</b></div>`;
   }).join("");
   $("mcount").textContent = `${show.length} of ${motions.length}`;
   markActiveMotion();
 }
 
 /* Delegated, so it survives every re-render of the grid. */
+/* Click feedback lands in the event log ("What just happened") -- serve.py
+   logs both the queue and any refusal, so the grid needs no caption of its
+   own.  The tooltip carries each entry's full name and description. */
 $("motions").onclick = e => {
   const cell = e.target.closest(".m");
   if (!cell) return;
-  fetch("/motion?id=" + cell.dataset.id).then(r => r.json()).then(r => {
-    $("mmsg").textContent = r.ok
-      ? `queued ${r.queued} · ${r.name}` : r.msg;
-    $("mmsg").classList.toggle("bad", !r.ok);
-  });
+  fetch("/motion?id=" + cell.dataset.id);
 };
 
 $("mq").oninput = e => { mQuery = e.target.value; drawMotions(); };
@@ -197,14 +197,14 @@ function markActiveMotion() {
 }
 
 const es = new EventSource("/events");
-es.onopen  = () => { $("conn").textContent = "live"; $("conn").classList.add("live"); };
-es.onerror = () => { $("conn").textContent = "reconnecting"; $("conn").classList.remove("live"); };
+es.onopen  = () => { $("conn").textContent = "live"; $("conn").classList.add("live");
+                     $("conn").classList.remove("down"); };
+// Silence is dangerous on a monitoring page: a dead stream freezes every
+// number on screen, so disconnection is the loud state, not the quiet one.
+es.onerror = () => { $("conn").textContent = "reconnecting — numbers may be stale";
+                     $("conn").classList.remove("live"); $("conn").classList.add("down"); };
 es.onmessage = e => {
   S = JSON.parse(e.data);
-  if (S.decision && S.decision.seq !== lastSeq) {
-    lastSeq = S.decision.seq;
-    showRanking(S.decision);
-  }
   updatePanels();
 };
 
@@ -213,7 +213,11 @@ $("auto").onclick = () =>
   fetch("/auto?set=" + (S && S.cradle.auto ? "off" : "on"));
 document.querySelectorAll("[data-m]").forEach(b =>
   b.onclick = () => fetch("/motion?id=" + b.dataset.m));
-document.addEventListener("keydown", e => { if (e.key === "j") fetch("/jam"); });
+document.addEventListener("keydown", e => {
+  // never while typing -- a motion name with a "j" must not jam the cradle
+  if (e.target.matches("input, textarea, select")) return;
+  if (e.key === "j") fetch("/jam");
+});
 
 function updatePanels() {
   const c = S.cradle, lvl = S.tag.level ?? 0, ema = c.ema ?? lvl;
@@ -257,21 +261,45 @@ function updatePanels() {
   $("accval").innerHTML = `${c.a_peak_g.toFixed(3)} <small>of ${ACC_CAP_G} g</small>`;
   setMeter("accbar", accFrac, safeCol);
 
-  $("safedot").style.background = c.state === "gate_fail" ? cssv("--critical") : safeCol;
-  $("safesay").textContent = c.state === "gate_fail"
+  const alarm = !!S.tag.alarm;
+  $("safedot").style.background =
+      alarm || c.state === "gate_fail" ? cssv("--critical") : safeCol;
+  $("safesay").textContent = alarm
+      ? "pain/posture alarm — stopping"
+      : c.state === "gate_fail"
       ? "safety gate tripped — winding down"
       : worst > 0.8 ? "close to the limit, still inside it"
                     : "well within safe limits";
 
-  // zone 3 -- alert, buttons, log
+  // zone 3 -- alert, buttons, log.  Writes are change-guarded: this runs at
+  // ~20 Hz, and rebuilding innerHTML every frame kills text selection in the
+  // log and any transition on the buttons.
+  const put = (id, html) => {
+    const el = $(id);
+    if (el.dataset.v !== html) { el.dataset.v = html; el.innerHTML = html; }
+  };
   $("alert").textContent = c.alert ? "⚠ " + c.alert : "";
   $("alert").classList.toggle("on", !!c.alert);
+  document.body.classList.toggle("alerted", !!c.alert);
   $("jam").classList.toggle("on", S.jam);
-  $("jam").innerHTML = S.jam ? "<b>Jammed — release</b><i>j</i>"
-                             : "<b>Simulate a jam</b><i>j</i>";
+  $("jam").setAttribute("aria-pressed", S.jam);
+  put("jam", S.jam ? "<b>Jammed — release</b><i>j</i>"
+                   : "<b>Simulate a jam</b><i>j</i>");
   $("auto").classList.toggle("on", c.auto);
-  $("auto").innerHTML = `<b>Automatic care</b><i>${c.auto ? "on" : "off"}</i>`;
-  $("log").innerHTML = S.events.map(t => `<div>${t}</div>`).join("");
+  $("auto").setAttribute("aria-pressed", c.auto);
+  put("auto", `<b>Automatic care</b><i>${c.auto ? "on" : "off"}</i>`);
+  // Cheap change-key first: the event list is identical on ~99% of frames,
+  // and building 14 <div> strings per tick just to discard them adds up.
+  const logKey = S.events.length + "|" + (S.events[0] || "");
+  if (logKey !== put.logKey) {
+    put.logKey = logKey;
+    put("log", S.events.map(t => `<div>${t}</div>`).join(""));
+  }
+
+  // The acted scenario says so on the page, not only inside the drawer;
+  // and a pain/posture alarm shows the moment the judge raises it, before
+  // the machine's own alert lands.
+  $("scen").textContent = S.tag.phase ? `scenario · ${S.tag.phase}` : "";
 
   // The library grid: follow the active entry, and redraw once the first frame
   // tells us whether --research is on (the fetch usually lands before it does).
@@ -287,32 +315,10 @@ function updatePanels() {
   $("rawlevel").textContent = `${lvl.toFixed(2)} · ${ema.toFixed(2)}`;
   $("thetaval").textContent = S.pose[0].toFixed(4) + " rad";
   $("apeak").textContent = c.a_peak_g.toFixed(4) + " g";
-  $("err").textContent = S.monitor.err.toFixed(3) + " rad"
-                       + (S.monitor.diverged ? " · DIVERGED" : "");
-  const frac = clamp(S.monitor.err / (S.monitor.threshold * 2), 0, 1);
-  setMeter("errbar", frac,
-           S.monitor.diverged ? cssv("--critical") : cssv("--accent"));
-  $("dob").textContent = S.dob.toFixed(1) + " A";
-  $("rms").textContent = S.monitor.rms.toFixed(3) + " rad";
-  $("playname").textContent = S.playing
-      ? `playing slot ${S.playing.slot} · ${S.playing.name}` : "idle";
-  $("playpct").textContent = S.playing
-      ? Math.round(S.playing.progress * 100) + "%" : "";
-  for (const s of slots) {
-    const el = $("slot" + s.id);
-    if (el) el.classList.toggle("play", !!(S.playing && S.playing.slot === s.id));
-  }
+  $("rawjudge").textContent = S.tag.emotion || "–";
+  $("rawphase").textContent = S.tag.phase || "live camera";
 }
 
-function showRanking(d) {
-  $("rank").querySelector("tbody").innerHTML = d.ranked.map(r => `
-    <tr class="${r.vetoed ? "veto" : (r.slot === d.chosen ? "win" : "")}">
-      <td>${r.slot}</td><td>${r.vetoed ? "—" : r.cost.toFixed(2)}</td>
-      <td>${r.consist.toFixed(2)}</td><td>${r.resist.toFixed(2)}</td>
-      <td>${r.contin.toFixed(2)}</td><td>${r.task.toFixed(2)}</td>
-      <td>${r.vetoed ? "veto" : (r.slot === d.chosen ? "play" : "")}</td>
-    </tr>`).join("");
-}
 
 /* ---- The hero: the infant as something alive.
 
@@ -327,12 +333,10 @@ function showRanking(d) {
    to make the shape feel inhabited, NOT a respiration reading.  Do not let it
    grow into one without a sensor behind it.
 
-   When a DREAM slot is playing, a dashed ghost marks where the dream says the
-   plate should be.  Jam the cradle and the two part -- divergence made
-   visible.  The orb sits high in the frame so the sentence below it never
-   fights the shape for space. ---- */
+   The orb sits high in the frame so the sentence below it never fights the
+   shape for space. ---- */
 const cv = $("babycv"), g = cv.getContext("2d");
-const view = { off: 0, lift: 0, tilt: 0, ghost: 0, lvl: 0, env: 0 };
+const view = { off: 0, lift: 0, tilt: 0, lvl: 0, env: 0 };
 const STILL = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const LOBES = [{k: 2, a: .024, w: .31}, {k: 3, a: .030, w: -.55},
                {k: 5, a: .017, w: .80}, {k: 7, a: .010, w: -1.15}];
@@ -385,8 +389,7 @@ function drawBaby() {
   view.off += (sway * pxmm - view.off) * 0.35;
   view.lift += (lift * pxmm - view.lift) * 0.35;
   view.tilt += (tilt - view.tilt) * 0.35;
-  view.ghost += ((S.playing ? S.playing.dream_theta * LEVER_MM : sway) * pxmm
-                 - view.ghost) * 0.35;
+
 
   const room = Math.max(0, W / 2 - R * 1.05 - 6 * dpr);
   // sits above centre: the sentence owns the bottom third of the hero.
@@ -414,15 +417,6 @@ function drawBaby() {
   g.stroke();
   g.restore();
 
-  // the dream's plate position, drawn only once it visibly parts from the real
-  if (S.playing && Math.abs(view.ghost - view.off) > 2 * dpr) {
-    blob(W / 2 + clamp(view.ghost, -room, room), cy, R, t, amp, speed);
-    g.lineWidth = 1.5 * dpr;
-    g.strokeStyle = S.monitor.diverged ? cssv("--critical") : cssv("--baseline");
-    g.setLineDash([6 * dpr, 6 * dpr]);
-    g.stroke();
-    g.setLineDash([]);
-  }
 
   // glow: how hard the cradle is working, wrapped around the body
   const aura = g.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 1.8);
