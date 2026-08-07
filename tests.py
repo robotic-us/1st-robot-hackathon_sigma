@@ -490,6 +490,18 @@ def test_serve() -> None:
         print(f"  GET /events  keys ok, judge={state['tag']['emotion']} "
               f"level={state['tag']['level']:.2f}  -- ok")
 
+        # The emotion timeline seeds itself from /history: 1 Hz samples,
+        # bounded, carrying everything the chart draws.
+        hist = json.loads(urlopen(base + "/history", timeout=5).read())
+        assert isinstance(hist, list) and hist, "history must have samples"
+        assert len(hist) <= 900, f"history unbounded: {len(hist)}"
+        assert set(hist[0]) >= {"t", "level", "ema", "state", "motion",
+                                "env", "alarm"}, hist[0]
+        for hook in (b'id="timeline"', b'id="tltip"'):
+            assert hook in page, f"the emotion timeline lost {hook!r}"
+        assert b'fetch("/history")' in js, "the timeline must seed from /history"
+        print(f"  GET /history {len(hist)} samples, timeline wired  -- ok")
+
         assert json.loads(urlopen(base + "/jam", timeout=5).read())["jam"] is True
         assert json.loads(urlopen(base + "/jam", timeout=5).read())["jam"] is False
         print("  GET /jam     toggles  -- ok")

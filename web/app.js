@@ -1,90 +1,79 @@
-/* The dashboard's one script.  Served by serve.py at /app.js; no build
-   step.  Everything below reads the SSE stream and paints the page. */
+/* The dashboard's one script.  Served by serve.py at /app.js; no build step.
+   Reads the SSE stream (~20 Hz) and paints the page; the emotion timeline
+   seeds itself from /history so a freshly opened tab shows the last 15 min.
+
+   Colour rules: one calm blue accent for the cradle's own actions, a five
+   step comfort ramp (--r0..--r4) for the baby, slate for sleep.  Colour is
+   never the only carrier -- every coloured element sits beside its word. */
 "use strict";
 let S = null;
 const $ = id => document.getElementById(id);
 const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 
-/* State → status role, and the marked element always sits beside its label.
-   The tokens are an ink ramp, so the rule is: FAINT = AT REST, STRONG = NEEDS
-   SOMEONE.  Sleep is the calmest thing on this page and wears the faintest
-   step (--baseline) -- mapping it to --accent (which IS full ink here) once
-   made a stably sleeping baby as loud as PAIN_SUSPECT.  --accent is reserved
-   for the machine's own action (the envelope meter), never for the baby. */
-const ROLE = {SLEEP:"--baseline", CALM:"--good", HAPPY:"--good",
-              NEUTRAL:"--muted", FUSS:"--warn", SAD:"--warn", SURPRISE:"--warn",
-              CRY:"--serious", ANGRY:"--serious",
-              /* the five-state watcher (perception/watch.py).  DISTRESS_FACE
-                 is a visual pattern, not confirmed crying, so it wears warn,
-                 not serious -- the words say "looks upset", not "crying". */
-              AWAKE:"--good", EYES_CLOSED:"--baseline",
-              SLEEP_CANDIDATE:"--baseline", DISTRESS_FACE:"--warn",
-              UNKNOWN:"--muted",
-              QUIET_AWAKE:"--good", STARTLE:"--warn", FUSS_WEAK:"--warn",
-              STRONG_DISTRESS:"--serious",
-              PAIN_SUSPECT:"--critical", DROWSY:"--baseline",
-              SLEEP_TENTATIVE:"--baseline", SLEEP_STABLE:"--baseline",
-              STATE_UNCLEAR:"--muted"};
+/* Change-guarded innerHTML writer: the stream ticks ~20x a second and most
+   frames change nothing; rewriting identical HTML kills text selection. */
+function put(id, html) {
+  const el = $(id);
+  if (el.dataset.v !== html) { el.dataset.v = html; el.innerHTML = html; }
+}
 
-/* The palette only changes when the colour scheme does, so read each token
-   once and drop the cache on a theme flip -- the hero asks for colours sixty
-   times a second and getComputedStyle is not free. */
+/* CSS tokens, cached until the colour scheme flips. */
 let TOKENS = {};
 const cssv = name => name in TOKENS ? TOKENS[name]
   : (TOKENS[name] = getComputedStyle(document.documentElement)
                       .getPropertyValue(name).trim());
 matchMedia("(prefers-color-scheme: dark)")
-  .addEventListener("change", () => { TOKENS = {}; });
-const stateColor = st => cssv(ROLE[st] || "--muted");
+  .addEventListener("change", () => { TOKENS = {}; tlDirty = true; });
 
-/* One meter update: width on the fill, hue on the track it sits in.  Setting
-   --fill on the track is what keeps the two halves from drifting apart -- the
-   unfilled remainder is a dim step of the same colour, never a neutral gray,
-   so a bar at 12% still reads as "serious" rather than "mostly empty". */
-function setMeter(id, frac, color) {
-  const fill = $(id);
-  fill.style.width = (clamp(frac, 0, 1) * 100) + "%";
-  fill.parentNode.style.setProperty("--fill", color);
-}
-
-/* #rrggbb -> rgba(), for the glow gradients. */
-function rgba(hex, a) {
-  const h = hex.replace("#", "");
-  const n = parseInt(h.length === 3 ? h.replace(/./g, "$&$&") : h, 16);
-  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
-}
-
-/* Report thresholds, mirrored from core/cradle.py so the words on this page
-   and the machine's own decisions agree. */
+/* Report thresholds, mirrored from core/cradle.py and core/policy.py so the
+   words on this page and the machine's decisions agree. */
 const CALM_LEVEL = 0.12, CRY_LEVEL = 0.45;
 const NO_IMPROVE_S = 60, CHECK_EVERY_S = 30, GATE_RECOVER_S = 2;
 const SWAY_CAP_MM = 30, ACC_CAP_G = 0.05;
+const RANK_BANDS = [0.12, 0.30, 0.45, 0.62];          // rank edges (policy.py)
+const RANK_WORD = ["happy", "fussing", "crying", "crying hard", "very upset"];
+const RANK_SHORT = ["happy", "fuss", "cry 1", "cry 2", "awful"];
+const rankOf = v => { for (let i = 0; i < RANK_BANDS.length; i++)
+                        if (v < RANK_BANDS[i]) return i;
+                      return RANK_BANDS.length; };
+const rankColor = i => cssv(["--r0", "--r1", "--r2", "--r3", "--r4"][i] || "--faint");
 
-/* ---- plain words -------------------------------------------------------- */
+/* Baby state -> colour token.  The ramp is comfort, slate is sleep, and the
+   critical red is reserved for pain/lost-face/gate. */
+const ROLE = {SLEEP:"--sleep", EYES_CLOSED:"--sleep", DROWSY:"--sleep",
+              SLEEP_CANDIDATE:"--sleep", SLEEP_TENTATIVE:"--sleep",
+              SLEEP_STABLE:"--sleep",
+              CALM:"--r0", HAPPY:"--r0", AWAKE:"--r0", QUIET_AWAKE:"--r0",
+              NEUTRAL:"--r0",
+              FUSS:"--r1", SAD:"--r1", SURPRISE:"--r1", STARTLE:"--r1",
+              FUSS_WEAK:"--r1", DISTRESS_FACE:"--r1",
+              CRY:"--r3", ANGRY:"--r3", STRONG_DISTRESS:"--r3",
+              PAIN_SUSPECT:"--critical",
+              UNKNOWN:"--faint", STATE_UNCLEAR:"--faint"};
+const stateColor = st => cssv(ROLE[st] || "--faint");
+
 const BABY_WORD = {SLEEP:"Sleeping", CALM:"Calm", HAPPY:"Happy",
                    NEUTRAL:"Settled", FUSS:"Fussing", SAD:"Fussing",
                    SURPRISE:"Startled", CRY:"Crying", ANGRY:"Crying",
                    AWAKE:"Awake", EYES_CLOSED:"Eyes closed",
                    SLEEP_CANDIDATE:"Drifting off", DISTRESS_FACE:"Looks upset",
                    UNKNOWN:"Can't see the baby",
-                   /* the report-spec judge (perception/watch.py, report §5) */
                    QUIET_AWAKE:"Quiet and awake", STARTLE:"Startled",
-                   FUSS_WEAK:"Fussing",
-                   STRONG_DISTRESS:"Very upset", PAIN_SUSPECT:"Needs you now",
-                   DROWSY:"Getting sleepy", SLEEP_TENTATIVE:"Falling asleep",
-                   SLEEP_STABLE:"Sleeping", STATE_UNCLEAR:"Can't see the baby"};
+                   FUSS_WEAK:"Fussing", STRONG_DISTRESS:"Very upset",
+                   PAIN_SUSPECT:"Needs you now", DROWSY:"Getting sleepy",
+                   SLEEP_TENTATIVE:"Falling asleep", SLEEP_STABLE:"Sleeping",
+                   STATE_UNCLEAR:"Can't see the baby"};
 
 function babyWord(tag) {
   if (!tag.present) return "Can't see the baby";
   if (tag.emotion) return BABY_WORD[tag.emotion] || tag.emotion;
-  const lvl = tag.level ?? 0;          // state-card mode: no face, just a level
+  const lvl = tag.level ?? 0;
   return lvl >= CRY_LEVEL ? "Crying" : lvl >= CALM_LEVEL ? "Fussing" : "Calm";
 }
 
-/* A rate in hertz means nothing to most readers; a sway every N seconds does.
-   The rig has three motions, and the words must not blur them: ML sways side
-   to side, Z lifts and lowers, AP tilts like a see-saw (the rig has no second
-   horizontal axis, so that is how those entries actually move). */
+/* A rate in hertz means nothing to most readers; a sway every N seconds
+   does.  Three real motions on this rig: ML sways side to side, Z lifts
+   (bobbing), AP tilts like a see-saw. */
 function cradleWords(c) {
   if (c.tapering) return ["slowing to a stop", "easing the motion down to nothing"];
   switch (c.kind) {
@@ -105,45 +94,40 @@ function cradleWords(c) {
   if (c.axis === "APML")
     return [`${pace} sway and tilt`, `swaying and tipping together, every ${every} s`];
   const wide = c.a_mm >= 15 ? ", wide" : "";
-  return [`${pace}${wide} rocking`,
-          `one sway every ${every} s · ${mm} mm each way`];
+  return [`${pace}${wide} rocking`, `one sway every ${every} s · ${mm} mm each way`];
 }
 
-/* What the state machine will do next, in the reader's terms. */
 function nextWords(c) {
   if (c.state === "gate_fail")
     return "Stopped for safety. Rocking only restarts once the baby has been "
          + `visible again for ${GATE_RECOVER_S} seconds.`;
   if (!c.auto)
-    return "Automatic care is off. The cradle does only what you press, though "
-         + "the safety gate still overrides it.";
+    return "Automatic care is off. The cradle does only what you press, "
+         + "though the safety gate still overrides it.";
   if (c.state === "trial") {
     const left = Math.max(0, NO_IMPROVE_S - c.trial_s);
-    return `Trying this for ${Math.round(c.trial_s)} s. It gets checked every `
-         + `${CHECK_EVERY_S} s, and if it still hasn't helped in `
-         + `${Math.round(left)} s the cradle stops and calls for you.`;
+    return `Trying this for ${Math.round(c.trial_s)} s. Checked every `
+         + `${CHECK_EVERY_S} s; if it hasn't helped in ${Math.round(left)} s `
+         + "the cradle stops and calls for you.";
   }
   if (c.state === "settling")
-    return "The baby has been calm for a while, so the cradle is winding down "
-         + "towards sleep.";
-  return "Watching. If the baby starts fussing, the cradle begins rocking on "
-       + "its own.";
+    return "The baby has been calm for a while, so the cradle is winding "
+         + "down towards sleep.";
+  return "Watching. If the baby starts fussing, the cradle begins rocking "
+       + "on its own.";
 }
 
-/* ---- wiring ------------------------------------------------------------- */
+function setMeter(id, frac, color) {
+  const fill = $(id);
+  fill.style.width = (clamp(frac, 0, 1) * 100) + "%";
+  fill.parentNode.style.setProperty("--fill", color);
+}
 
-/* The whole library, straight from core/cradle.py's catalog().  Clicking one
-   goes through /motion, which validates grade and refuses R without --research
-   -- so the browser never decides what is allowed, it only reports the reply. */
+/* ---- the motion library drawer ------------------------------------------ */
 let motions = [], mGrade = "", mQuery = "", mResearch = null;
 
-fetch("/motions").then(r => r.json()).then(list => {
-  motions = list;
-  drawMotions();
-});
+fetch("/motions").then(r => r.json()).then(list => { motions = list; drawMotions(); });
 
-/* The catalog is ours, not user input, but it lands in an attribute -- one
-   quote in a future desc would silently break the grid. */
 const esc = s => String(s).replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -153,35 +137,23 @@ function drawMotions() {
     (!mGrade || m.grade === mGrade) &&
     (!q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)));
   const research = mResearch === null ? false : mResearch;
-  /* One field per cell: the id.  Fifty cells each carrying name, rate,
-     reach, axis and grade was a wall of truncated noise -- the detail hangs
-     on the tooltip and on the hover line below the grid. */
   $("motions").innerHTML = show.map(m => {
-    /* The engine refuses R unless serve.py started with --research; show that
-       up front rather than letting the click fail silently. */
     const locked = m.grade === "R" && !research;
     const hz = m.f_hz ? ` · ${m.f_hz.toFixed(1)} Hz` : "";
     const mm = m.a_mm ? ` · ${m.a_mm.toFixed(0)} mm` : "";
     const tip = `${m.id} ${m.name}${hz}${mm} · ${m.kind}${m.axis ? " · " + m.axis : ""}
 ${m.desc}${locked ? "\n\nresearch-only (R) — needs serve.py --research" : ""}`;
     return `<div class="m g-${m.grade}${locked ? " locked" : ""}"
-                 data-id="${esc(m.id)}" title="${esc(tip)}">
-              <b>${esc(m.id)}</b></div>`;
+                 data-id="${esc(m.id)}" title="${esc(tip)}"><b>${esc(m.id)}</b></div>`;
   }).join("");
   $("mcount").textContent = `${show.length} of ${motions.length}`;
   markActiveMotion();
 }
 
-/* Delegated, so it survives every re-render of the grid. */
-/* Click feedback lands in the event log ("What just happened") -- serve.py
-   logs both the queue and any refusal, so the grid needs no caption of its
-   own.  The tooltip carries each entry's full name and description. */
 $("motions").onclick = e => {
   const cell = e.target.closest(".m");
-  if (!cell) return;
-  fetch("/motion?id=" + cell.dataset.id);
+  if (cell) fetch("/motion?id=" + cell.dataset.id);
 };
-
 $("mq").oninput = e => { mQuery = e.target.value; drawMotions(); };
 document.querySelectorAll("#mfilter [data-g]").forEach(b => b.onclick = () => {
   mGrade = b.dataset.g;
@@ -189,64 +161,59 @@ document.querySelectorAll("#mfilter [data-g]").forEach(b => b.onclick = () => {
           .forEach(x => x.classList.toggle("on", x === b));
   drawMotions();
 });
-
 function markActiveMotion() {
   const now = S && S.cradle ? S.cradle.motion : null;
   document.querySelectorAll("#motions .m").forEach(el =>
     el.classList.toggle("on", el.dataset.id === now));
 }
 
+/* ---- the stream ---------------------------------------------------------- */
 const es = new EventSource("/events");
-es.onopen  = () => { $("conn").textContent = "live"; $("conn").classList.add("live");
+es.onopen  = () => { $("conn").textContent = "live";
+                     $("conn").classList.add("live");
                      $("conn").classList.remove("down"); };
-// Silence is dangerous on a monitoring page: a dead stream freezes every
-// number on screen, so disconnection is the loud state, not the quiet one.
 es.onerror = () => { $("conn").textContent = "reconnecting — numbers may be stale";
-                     $("conn").classList.remove("live"); $("conn").classList.add("down"); };
-es.onmessage = e => {
-  S = JSON.parse(e.data);
-  updatePanels();
-};
+                     $("conn").classList.remove("live");
+                     $("conn").classList.add("down"); };
+es.onmessage = e => { S = JSON.parse(e.data); pushSample(); updatePanels(); };
 
 $("jam").onclick = () => fetch("/jam");
-$("auto").onclick = () =>
-  fetch("/auto?set=" + (S && S.cradle.auto ? "off" : "on"));
+$("auto").onclick = () => fetch("/auto?set=" + (S && S.cradle.auto ? "off" : "on"));
 document.querySelectorAll("[data-m]").forEach(b =>
   b.onclick = () => fetch("/motion?id=" + b.dataset.m));
 document.addEventListener("keydown", e => {
-  // never while typing -- a motion name with a "j" must not jam the cradle
   if (e.target.matches("input, textarea, select")) return;
   if (e.key === "j") fetch("/jam");
 });
 
+/* ---- the panels ---------------------------------------------------------- */
 function updatePanels() {
   const c = S.cradle, lvl = S.tag.level ?? 0, ema = c.ema ?? lvl;
-  const who = babyWord(S.tag);
   const [doing, detail] = cradleWords(c);
   const col = S.tag.present ? stateColor(S.tag.emotion) : cssv("--critical");
 
-  // zone 1 -- the hero says it in one sentence
+  // baby card
   $("hdot").style.background = c.state === "gate_fail" ? cssv("--critical") : col;
-  $("hbaby").textContent = who;
-  $("hcradle").textContent = c.state === "gate_fail" ? "stopping for safety" : doing;
-  $("hdetail").textContent = detail;
-  $("hwhy").textContent = nextWords(c);
+  put("hbaby", esc(babyWord(S.tag)));
+  put("hbabysub", esc(`recognizer: ${S.tag.emotion || "level only"}`
+                      + (S.tag.name ? ` · ${S.tag.name}` : "")));
+  put("lvlval", lvl.toFixed(2));
+  setMeter("lvlbar", lvl, !S.tag.present ? cssv("--faint")
+    : lvl >= CRY_LEVEL ? cssv("--r3")
+    : lvl >= CALM_LEVEL ? cssv("--r1") : cssv("--r0"));
+  const rank = rankOf(ema);
+  put("ladder", RANK_SHORT.map((w, i) =>
+      `<span class="r${i}${i === rank ? " on" : ""}">${w}</span>`).join(""));
 
-  // zone 2 -- four numbers, each against the limit that makes it mean something
-  $("lvlval").textContent = lvl.toFixed(2);
-  // With no face there is nothing to read, so the bar must not keep asserting
-  // a level -- a stale confident-looking reading is worse than none.
-  setMeter("lvlbar", lvl, !S.tag.present ? cssv("--baseline")
-    : lvl >= CRY_LEVEL ? cssv("--serious")
-    : lvl >= CALM_LEVEL ? cssv("--warn") : cssv("--good"));
-
-  $("envval").innerHTML = c.env > 0.01
-      ? Math.round(c.env * 100) + " <small>%</small>" : "– <small>idle</small>";
+  // cradle card
+  put("hcradle", esc(c.state === "gate_fail" ? "stopping for safety" : doing));
+  put("hdetail", esc(detail));
+  put("envval", c.env > 0.01
+      ? Math.round(c.env * 100) + " <small>%</small>" : "– <small>idle</small>");
   setMeter("envbar", c.env, c.tapering ? cssv("--warn") : cssv("--accent"));
+  put("rawmotion", esc(`${c.motion || "M01"} · ${c.name}`));
 
-  // Three distinct motions -- summing them (the old code) added see-saw
-  // millimetres to sway millimetres.  The stat shows whichever is largest,
-  // named, against the report's 30 mm per-channel cap.
+  // safety card -- the largest of the three channels, named, vs the caps
   const chans = [[Math.abs(c.offset_mm.ml), "swing"],
                  [Math.abs(c.offset_mm.z), "lift"],
                  [Math.abs(c.offset_mm.ap), "tilt"]];
@@ -255,32 +222,25 @@ function updatePanels() {
   const accFrac = clamp(c.a_peak_g / ACC_CAP_G, 0, 1);
   const worst = Math.max(swayFrac, accFrac);
   const safeCol = worst > 0.8 ? cssv("--warn") : cssv("--good");
-  $("swayval").innerHTML =
-      `${mm.toFixed(1)} <small>of ${SWAY_CAP_MM} mm ${mm > 0.05 ? chanWord : ""}</small>`;
+  put("swayval", `${mm.toFixed(1)} <small>of ${SWAY_CAP_MM} mm`
+                 + ` ${mm > 0.05 ? chanWord : ""}</small>`);
   setMeter("swaybar", swayFrac, safeCol);
-  $("accval").innerHTML = `${c.a_peak_g.toFixed(3)} <small>of ${ACC_CAP_G} g</small>`;
+  put("accval", `${c.a_peak_g.toFixed(3)} <small>of ${ACC_CAP_G} g</small>`);
   setMeter("accbar", accFrac, safeCol);
+  put("hwhy", esc(nextWords(c)));
 
   const alarm = !!S.tag.alarm;
   $("safedot").style.background =
       alarm || c.state === "gate_fail" ? cssv("--critical") : safeCol;
-  $("safesay").textContent = alarm
-      ? "pain/posture alarm — stopping"
-      : c.state === "gate_fail"
-      ? "safety gate tripped — winding down"
+  put("safesay", alarm ? "pain/posture alarm — stopping"
+      : c.state === "gate_fail" ? "safety gate tripped — winding down"
       : worst > 0.8 ? "close to the limit, still inside it"
-                    : "well within safe limits";
+                    : "within safe limits");
+  $("scen").textContent = S.tag.phase ? `scenario · ${S.tag.phase}` : "";
 
-  // zone 3 -- alert, buttons, log.  Writes are change-guarded: this runs at
-  // ~20 Hz, and rebuilding innerHTML every frame kills text selection in the
-  // log and any transition on the buttons.
-  const put = (id, html) => {
-    const el = $(id);
-    if (el.dataset.v !== html) { el.dataset.v = html; el.innerHTML = html; }
-  };
+  // header controls + alert
   $("alert").textContent = c.alert ? "⚠ " + c.alert : "";
   $("alert").classList.toggle("on", !!c.alert);
-  document.body.classList.toggle("alerted", !!c.alert);
   $("jam").classList.toggle("on", S.jam);
   $("jam").setAttribute("aria-pressed", S.jam);
   put("jam", S.jam ? "<b>Jammed — release</b><i>j</i>"
@@ -288,205 +248,251 @@ function updatePanels() {
   $("auto").classList.toggle("on", c.auto);
   $("auto").setAttribute("aria-pressed", c.auto);
   put("auto", `<b>Automatic care</b><i>${c.auto ? "on" : "off"}</i>`);
-  // Cheap change-key first: the event list is identical on ~99% of frames,
-  // and building 14 <div> strings per tick just to discard them adds up.
+
+  // event log (newest first; identical on most frames)
   const logKey = S.events.length + "|" + (S.events[0] || "");
   if (logKey !== put.logKey) {
     put.logKey = logKey;
-    put("log", S.events.map(t => `<div>${t}</div>`).join(""));
+    put("log", S.events.map(t => `<div>${esc(t)}</div>`).join(""));
   }
 
-  drawBrain(put);
+  drawBrain(rank);
 
-  // The acted scenario says so on the page, not only inside the drawer;
-  // and a pain/posture alarm shows the moment the judge raises it, before
-  // the machine's own alert lands.
-  $("scen").textContent = S.tag.phase ? `scenario · ${S.tag.phase}` : "";
-
-  // The library grid: follow the active entry, and redraw once the first frame
-  // tells us whether --research is on (the fetch usually lands before it does).
   if (mResearch !== c.research) { mResearch = c.research; drawMotions(); }
   else markActiveMotion();
 
-  // the drawer -- raw numbers, for anyone who wants them
-  $("rawstate").textContent = c.state + (c.auto ? "" : " · auto off")
-                            + (c.trial_s ? ` · ${c.trial_s}s` : "");
-  $("rawmotion").textContent = `${c.motion || "M01"} ${c.name} · ${c.grade}`;
-  $("rawmode").textContent = `${c.f_hz} Hz · ${c.a_mm.toFixed(1)} mm · `
-                           + `env ${c.env.toFixed(3)}`;
-  $("rawlevel").textContent = `${lvl.toFixed(2)} · ${ema.toFixed(2)}`;
-  $("thetaval").textContent = S.pose[0].toFixed(4) + " rad";
-  $("apeak").textContent = c.a_peak_g.toFixed(4) + " g";
-  $("rawjudge").textContent = S.tag.emotion || "–";
-  $("rawphase").textContent = S.tag.phase || "live camera";
+  // internals drawer
+  put("rawstate", esc(c.state + (c.auto ? "" : " · auto off")
+                      + (c.trial_s ? ` · ${c.trial_s}s` : "")));
+  put("rawmode", esc(`${c.f_hz} Hz · ${c.a_mm.toFixed(1)} mm · env ${c.env.toFixed(3)}`));
+  put("rawlevel", esc(`${lvl.toFixed(2)} · ${ema.toFixed(2)}`));
+  put("thetaval", S.pose[0].toFixed(4) + " rad");
+  put("apeak", c.a_peak_g.toFixed(4) + " g");
+  put("rawjudge", esc(S.tag.emotion || "–"));
+  put("rawphase", esc(S.tag.phase || "live camera"));
 }
 
+/* ---- the decision brain (docs/IDEA.md, core/policy.py) ------------------- */
+const BRAIN_NAME = {reflex: "Local algorithm",
+                    claude: "Claude (Anthropic API)"};
+const BRAIN_SUB = {reflex: "taught strategy in code — free, offline, deterministic",
+                   claude: "LLM advisor over the network — falls back to the "
+                         + "ladder on any API failure"};
 
-/* ---- The learning panel (docs/IDEA.md, core/policy.py).  Only exists when
-   serve.py runs with --policy: S.policy carries the advised steps and the
-   per-motion mean rank change.  The ladder mirrors core/policy.py's BANDS,
-   like CALM_LEVEL/CRY_LEVEL above; polarity in the rows is direction from
-   the centre axis + a signed number, never colour alone -- this page has no
-   hue to spend. ---- */
-const RANK_BANDS = [0.12, 0.30, 0.45, 0.62];
-const RANK_WORD = ["happy", "fuss", "cry 1", "cry 2", "awful"];
+function drawBrain(rank) {
+  const p = S.policy;
+  $("brain").hidden = !p;
+  if (!p) {
+    put("feed", `<div class="empty">Fixed-ladder mode: the report's state
+      machine picks motions (M10 → M12 → M13 → M16) with no memory of this
+      baby. Start serve.py with <b>--policy reflex</b> (local algorithm) or
+      <b>--policy claude</b> (LLM) to watch a learning brain here.</div>`
+      + ladderEvents());
+    put("scores", `<div class="empty">nothing to learn in fixed-ladder mode</div>`);
+    put("trail", "");
+    return;
+  }
 
-function drawBrain(put) {
-  const brain = $("brain"), p = S.policy;
-  if (!p) { brain.hidden = true; return; }
-  brain.hidden = false;
-  $("brainkind").textContent =
-      `· ${p.brain} brain · ${p.scenarios} taught scenarios`;
+  // the brain card
+  put("brainname", esc(BRAIN_NAME[p.brain] || p.brain));
+  put("brainkind", esc(BRAIN_SUB[p.brain] || ""));
+  put("brainrank", esc(RANK_WORD[rank]));
+  put("brainscen", String(p.scenarios));
+  const last = p.steps[p.steps.length - 1];
+  put("brainlast", last
+      ? esc(`${last.motion} — ${last.after === null ? "playing now"
+             : verdictWord(last.before - last.after)}`)
+      : "none yet");
 
-  const ema = S.cradle.ema ?? 0;
-  let rank = RANK_BANDS.length;
-  for (let i = 0; i < RANK_BANDS.length; i++)
-    if (ema < RANK_BANDS[i]) { rank = i; break; }
-  put("ladder", RANK_WORD.map((w, i) =>
-      `<span class="${i === rank ? "on" : ""}">${w}</span>`).join(""));
+  // the decision feed, newest first
+  put("feed", p.steps.length ? p.steps.slice().reverse().map(s => {
+    const pending = s.after === null || s.after === undefined;
+    const d = pending ? null : s.before - s.after;
+    const badge = pending ? `<span class="badge live">playing…</span>`
+      : d > 0 ? `<span class="badge ok">improved</span>`
+      : d < 0 ? `<span class="badge bad">made it worse</span>`
+      : `<span class="badge flat">no change</span>`;
+    const after = pending ? "…" : RANK_WORD[s.after];
+    return `<div class="dcard"><div class="mid">tried <b>${s.motion}</b>
+        <div class="why">${RANK_WORD[s.before]} → ${after}</div></div>${badge}</div>`;
+  }).join("") : `<div class="empty">no decisions yet — the brain is asked
+      when the baby first fusses</div>`);
 
-  // One diverging row per tried motion: mean rank change per 30 s attempt.
-  // Full scale is +-2 rungs; direction and the signed number carry polarity.
-  const rows = Object.entries(p.scores)
-    .sort((a, b) => b[1] - a[1])
-    .map(([m, v]) => {
-      const w = clamp(Math.abs(v) / 2, 0, 1) * 50;
-      const bar = v >= 0 ? `<i class="up" style="width:${w}%"></i>`
-                         : `<i class="dn" style="width:${w}%"></i>`;
-      const sign = v > 0 ? "+" : "";
-      const say = v > 0 ? "helps" : v < 0 ? "makes it worse" : "no effect";
-      return `<div class="srow" title="${m}: mean rank change ${sign}${v} `
-           + `per attempt — ${say}"><b>${m}</b>`
-           + `<span class="dbar">${bar}</span>`
-           + `<span class="dval">${sign}${v.toFixed(1)}</span></div>`;
-    }).join("");
-  put("scores", rows ||
-      `<div class="note">nothing tried yet — learning starts at the first fuss</div>`);
-
-  put("trail", p.steps.slice(-5).map(s =>
+  // learned preferences: diverging bars, helps right / worsens left
+  const rows = Object.entries(p.scores).sort((a, b) => b[1] - a[1]);
+  put("scores", rows.length ? rows.map(([m, v]) => {
+    const w = clamp(Math.abs(v) / 2, 0, 1) * 50;
+    const bar = v >= 0 ? `<i class="up" style="width:${w}%"></i>`
+                       : `<i class="dn" style="width:${w}%"></i>`;
+    return `<div class="srow"><b>${m}</b><span class="dbar">${bar}</span>
+        <span class="verdict">${v > 0 ? "+" : ""}${v.toFixed(1)} · ${verdictWord(v)}</span></div>`;
+  }).join("") : `<div class="empty">nothing tried yet — learning starts at
+      the first fuss</div>`);
+  put("trail", p.steps.slice(-6).map(s =>
       `${s.motion} ${s.before}→${s.after ?? "…"}`).join("  ·  "));
 }
+const verdictWord = d => d > 0 ? "helps" : d < 0 ? "worse" : "no effect";
 
-/* ---- The hero: the infant as something alive.
-
-   The outline is a blob, not a circle -- a handful of sine lobes turning at
-   different speeds, which is enough to read as breathing tissue instead of a
-   spinning polygon.  Everything that animates is driven by state the machine
-   actually publishes: distress sets how far and how fast the outline wobbles,
-   the envelope sets how brightly it burns, a taper settles it, and the body
-   rides the real plate offset.  A lost face goes dashed and red.
-
-   The one thing not measured is the breathing cadence: it is a visual pulse
-   to make the shape feel inhabited, NOT a respiration reading.  Do not let it
-   grow into one without a sensor behind it.
-
-   The orb sits high in the frame so the sentence below it never fights the
-   shape for space. ---- */
-const cv = $("babycv"), g = cv.getContext("2d");
-const view = { off: 0, lift: 0, tilt: 0, lvl: 0, env: 0 };
-const STILL = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const LOBES = [{k: 2, a: .024, w: .31}, {k: 3, a: .030, w: -.55},
-               {k: 5, a: .017, w: .80}, {k: 7, a: .010, w: -1.15}];
-
-/* One closed outline: radius R, deformed by the lobes at time t. */
-function blob(cx, cy, R, t, amp, speed) {
-  const N = 96;
-  g.beginPath();
-  for (let i = 0; i <= N; i++) {
-    const th = i / N * Math.PI * 2;
-    let d = 0;
-    for (const l of LOBES) d += l.a * Math.sin(l.k * th + l.w * speed * t);
-    const rr = R * (1 + d * amp);
-    const x = cx + rr * Math.cos(th), y = cy + rr * Math.sin(th);
-    i ? g.lineTo(x, y) : g.moveTo(x, y);
-  }
-  g.closePath();
+/* Fixed-ladder mode still shows its decisions: the machine's own log lines. */
+function ladderEvents() {
+  const hits = (S.events || []).filter(t =>
+      /cry trial|step up|micro-resume|taper|hand over/.test(t)).slice(0, 5);
+  return hits.map(t => `<div class="dcard"><div class="mid mono why">${esc(t)}</div></div>`).join("");
 }
 
-function drawBaby() {
-  requestAnimationFrame(drawBaby);
-  if (!S || document.hidden) return;
+/* ---- the emotion timeline ------------------------------------------------ */
+/* Samples {t, level, ema, motion, alarm}: seeded once from /history (the
+   server keeps 15 min at 1 Hz), then appended live from the stream.  The
+   chart is the page's centrepiece: comfort bands as the backdrop, the raw
+   level dotted, the decision-driving trend solid, motion starts flagged. */
+const WINDOW_S = 900;
+const HIST = [];
+let tlDirty = true, hoverX = null;
 
-  // back the canvas with real device pixels, so the edge stays crisp
+fetch("/history").then(r => r.json()).then(rows => {
+  HIST.unshift(...rows.map(r => ({t: r.t, level: r.level, ema: r.ema,
+                                  motion: r.motion, alarm: r.alarm})));
+  HIST.sort((a, b) => a.t - b.t);
+  tlDirty = true;
+});
+
+function pushSample() {
+  const lastT = HIST.length ? HIST[HIST.length - 1].t : -1e9;
+  if (S.t - lastT < 0.5) return;
+  HIST.push({t: S.t, level: S.tag.level ?? 0, ema: S.cradle.ema ?? 0,
+             motion: S.cradle.motion,
+             alarm: !!S.tag.alarm || S.cradle.state === "gate_fail"});
+  while (HIST.length && HIST[0].t < S.t - WINDOW_S - 30) HIST.shift();
+  tlDirty = true;
+}
+
+const tl = $("timeline"), tg = tl.getContext("2d");
+const tip = $("tltip");
+tl.addEventListener("mousemove", e => {
+  hoverX = e.offsetX; tlDirty = true;
+});
+tl.addEventListener("mouseleave", () => {
+  hoverX = null; tip.hidden = true; tlDirty = true;
+});
+
+function drawTimeline() {
+  requestAnimationFrame(drawTimeline);
+  if (!tlDirty || document.hidden) return;
+  tlDirty = false;
+
   const dpr = window.devicePixelRatio || 1;
-  const w = Math.round(cv.clientWidth * dpr), h = Math.round(cv.clientHeight * dpr);
+  const w = Math.round(tl.clientWidth * dpr), h = Math.round(tl.clientHeight * dpr);
   if (!w || !h) return;
-  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  if (tl.width !== w || tl.height !== h) { tl.width = w; tl.height = h; }
 
-  const c = S.cradle, W = cv.width, H = cv.height, span = Math.min(W, H * 1.35);
-  const t = performance.now() / 1000;
-  // Three motions, three readings: ML sways the body sideways, Z lifts it,
-  // AP tips the plate it rides on.  The old code summed ap+ml into one x
-  // offset, which drew a see-saw as a sideways slide.
-  const sway = c.offset_mm.ml, lift = c.offset_mm.z, tilt = c.offset_mm.ap;
-  view.lvl += ((S.tag.level ?? 0) - view.lvl) * 0.15;
-  view.env += ((c.env || 0) - view.env) * 0.10;
-  const lvl = view.lvl;
+  const padL = 6 * dpr, padR = 52 * dpr, padT = 22 * dpr, padB = 20 * dpr;
+  const pw = w - padL - padR, ph = h - padT - padB;
+  const tNow = HIST.length ? HIST[HIST.length - 1].t : WINDOW_S;
+  const x = t => padL + clamp((t - (tNow - WINDOW_S)) / WINDOW_S, 0, 1) * pw;
+  const y = v => padT + (1 - clamp(v, 0, 1)) * ph;
+  tg.clearRect(0, 0, w, h);
+  tg.font = `${10 * dpr}px ${getComputedStyle(document.body).fontFamily}`;
 
-  // agitation: distress drives it, a taper calms it, lost face unsettles it
-  const settle = c.tapering ? 0.45 : 1;
-  const amp = STILL ? 0.20 : (0.45 + 1.5 * lvl) * settle * (S.tag.present ? 1 : 1.6);
-  const speed = (0.9 + 2.4 * lvl) * settle;
-  const breath = STILL ? 0 : 0.045 * Math.sin(2 * Math.PI * (0.8 + 1.0 * lvl) * t);
-  const R = span * (0.15 + 0.16 * lvl) * (1 + breath);
+  // comfort bands: the ladder as the backdrop, named on the right edge
+  const darkMode = matchMedia("(prefers-color-scheme: dark)").matches;
+  const edges = [0, ...RANK_BANDS, 1];
+  for (let i = 0; i < 5; i++) {
+    const yTop = y(edges[i + 1]), yBot = y(edges[i]);
+    tg.globalAlpha = darkMode ? 0.13 : 0.08;
+    tg.fillStyle = rankColor(i);
+    tg.fillRect(padL, yTop, pw, yBot - yTop);
+    tg.globalAlpha = 1;
+    tg.fillStyle = rankColor(i);
+    tg.textAlign = "left";
+    tg.fillText(RANK_SHORT[i], padL + pw + 8 * dpr,
+                Math.min(yBot - 3 * dpr, (yTop + yBot) / 2 + 3 * dpr));
+    tg.strokeStyle = cssv("--border");
+    tg.lineWidth = 1;
+    tg.beginPath(); tg.moveTo(padL, yTop); tg.lineTo(padL + pw, yTop); tg.stroke();
+  }
 
-  // Exaggerated like the RViz mirror -- true sway is ~10 mm and would be a
-  // few pixels -- but never wide enough to push the body out of the panel.
-  const pxmm = Math.min(span * 0.011, Math.max(0, W / 2 - R - 16 * dpr) / SWAY_CAP_MM);
-  view.off += (sway * pxmm - view.off) * 0.35;
-  view.lift += (lift * pxmm - view.lift) * 0.35;
-  view.tilt += (tilt - view.tilt) * 0.35;
+  // time axis: a tick every 5 minutes (edge labels hug their edge)
+  tg.fillStyle = cssv("--faint");
+  for (let back = WINDOW_S; back >= 0; back -= 300) {
+    const xx = x(tNow - back);
+    tg.textAlign = back === WINDOW_S ? "left" : back === 0 ? "right" : "center";
+    tg.fillText(back ? `${back / 60}m ago` : "now", xx, h - 6 * dpr);
+  }
 
+  // motion starts: dashed accent flags with the motion id
+  tg.textAlign = "center";
+  let lastLabelX = -1e9;
+  for (let i = 1; i < HIST.length; i++) {
+    const cur = HIST[i], prev = HIST[i - 1];
+    if (cur.motion && cur.motion !== prev.motion && cur.t >= tNow - WINDOW_S) {
+      const xx = x(cur.t);
+      tg.strokeStyle = cssv("--accent");
+      tg.lineWidth = 1 * dpr;
+      tg.setLineDash([3 * dpr, 4 * dpr]);
+      tg.beginPath(); tg.moveTo(xx, padT); tg.lineTo(xx, padT + ph); tg.stroke();
+      tg.setLineDash([]);
+      if (xx - lastLabelX > 26 * dpr) {          // skip labels that would pile up
+        tg.fillStyle = cssv("--accent");
+        tg.fillText(cur.motion, xx, padT - 8 * dpr);
+        lastLabelX = xx;
+      }
+    }
+    if (cur.alarm && !prev.alarm) {              // gate/alarm marker
+      const xx = x(cur.t);
+      tg.fillStyle = cssv("--critical");
+      tg.beginPath();
+      tg.moveTo(xx, padT - 4 * dpr);
+      tg.lineTo(xx - 4 * dpr, padT - 12 * dpr);
+      tg.lineTo(xx + 4 * dpr, padT - 12 * dpr);
+      tg.closePath(); tg.fill();
+    }
+  }
 
-  const room = Math.max(0, W / 2 - R * 1.05 - 6 * dpr);
-  // sits above centre: the sentence owns the bottom third of the hero.
-  // Lift raises the body (canvas y grows downward), capped so it never
-  // collides with the safety chip or the sentence.
-  const rise = clamp(view.lift, -H * 0.06, H * 0.06);
-  const cy = H * 0.40 - rise, cx = W / 2 + clamp(view.off, -room, room);
-  const col = S.tag.present ? stateColor(S.tag.emotion) : cssv("--critical");
-  g.clearRect(0, 0, W, H);
+  // the two series: raw level dotted, decision trend solid
+  const line = (key, color, width, dash) => {
+    tg.strokeStyle = color; tg.lineWidth = width * dpr;
+    tg.setLineDash(dash.map(d => d * dpr));
+    tg.beginPath();
+    let started = false;
+    for (const s of HIST) {
+      if (s.t < tNow - WINDOW_S) continue;
+      const xx = x(s.t), yy = y(s[key]);
+      started ? tg.lineTo(xx, yy) : tg.moveTo(xx, yy);
+      started = true;
+    }
+    tg.stroke(); tg.setLineDash([]);
+  };
+  line("level", cssv("--faint"), 1.4, [2, 3]);
+  line("ema", cssv("--ink"), 2, []);
 
-  // The plate the baby rides: the one place a see-saw tilt is visible, since
-  // rotating an amorphous blob reads as nothing.  Angle from the real
-  // geometry -- the two mount pairs sit 200 mm apart -- exaggerated the same
-  // way the sway is, then clamped so it stays a gesture, not a ramp.
-  const plateHalf = R * 1.15;
-  const ang = clamp(Math.atan2(2 * view.tilt, 200) * 3, -0.22, 0.22);
-  g.save();
-  g.translate(cx, cy + R * 1.22);
-  g.rotate(-ang);
-  g.beginPath();
-  g.moveTo(-plateHalf, 0); g.lineTo(plateHalf, 0);
-  g.lineWidth = 3 * dpr;
-  g.lineCap = "round";
-  g.strokeStyle = cssv("--baseline");
-  g.stroke();
-  g.restore();
-
-
-  // glow: how hard the cradle is working, wrapped around the body
-  const aura = g.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 1.8);
-  aura.addColorStop(0, rgba(col, 0.13 + 0.20 * view.env));
-  aura.addColorStop(1, rgba(col, 0));
-  g.fillStyle = aura;
-  g.beginPath(); g.arc(cx, cy, R * 1.8, 0, Math.PI * 2); g.fill();
-
-  // body, an inner outline turning the other way for depth, then the edge
-  blob(cx, cy, R, t, amp, speed);
-  g.fillStyle = rgba(col, 0.07);
-  g.fill();
-
-  blob(cx, cy, R * 0.62, -t, amp * 1.35, speed);
-  g.lineWidth = 1.5 * dpr;
-  g.strokeStyle = rgba(col, 0.30);
-  g.stroke();
-
-  blob(cx, cy, R, t, amp, speed);
-  g.lineWidth = 5 * dpr;
-  g.strokeStyle = col;
-  if (!S.tag.present) g.setLineDash([12 * dpr, 10 * dpr]);
-  g.stroke();
-  g.setLineDash([]);
+  // hover: crosshair + tooltip on the nearest sample
+  if (hoverX !== null) {
+    const tx = tNow - WINDOW_S + ((hoverX * dpr - padL) / pw) * WINDOW_S;
+    let best = null, bestD = 1e9;
+    for (const s of HIST) {
+      const d = Math.abs(s.t - tx);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    if (best && bestD < 30) {
+      const xx = x(best.t);
+      tg.strokeStyle = cssv("--muted");
+      tg.lineWidth = 1;
+      tg.beginPath(); tg.moveTo(xx, padT); tg.lineTo(xx, padT + ph); tg.stroke();
+      tg.fillStyle = cssv("--ink");
+      tg.beginPath(); tg.arc(xx, y(best.ema), 3.5 * dpr, 0, Math.PI * 2); tg.fill();
+      const ago = Math.max(0, Math.round(tNow - best.t));
+      tip.innerHTML = `<b>${ago < 60 ? ago + " s" : Math.round(ago / 60) + " min"} ago</b><br>`
+        + `level ${best.level.toFixed(2)} · trend ${best.ema.toFixed(2)} `
+        + `(${RANK_SHORT[rankOf(best.ema)]})<br>`
+        + (best.motion ? `playing ${best.motion}` : "cradle still")
+        + (best.alarm ? " · ⚠ safety" : "");
+      tip.hidden = false;
+      const wrap = $("tlwrap").getBoundingClientRect();
+      const px = clamp(xx / dpr + 12, 4, wrap.width - tip.offsetWidth - 4);
+      tip.style.left = px + "px";
+      tip.style.top = Math.max(4, y(best.ema) / dpr - tip.offsetHeight - 12) + "px";
+    } else { tip.hidden = true; }
+  }
 }
-requestAnimationFrame(drawBaby);
+requestAnimationFrame(drawTimeline);
+new ResizeObserver(() => { tlDirty = true; }).observe($("tlwrap"));
