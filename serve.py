@@ -7,6 +7,8 @@ One stdlib HTTP server:
     /events      Server-Sent Events: the whole state as JSON, ~20 Hz
     /history     the last ~15 min as 1 Hz samples (seeds the emotion timeline)
     /frame       MJPEG camera stream with the sensing overlay
+    /baby        full-screen virtual infant + iPad motion capture
+    /motion-sensor  iPad -> server motion feature packets (POST)
     /motions     the M01-M50 library from the evidence report, once
     /jam         simulate a mechanism fault (trips the safety gate)
     /motion      queue a library command by id (R grade needs --research)
@@ -53,8 +55,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import socket
+import ssl
 import threading
 import time
 from collections import deque
@@ -71,6 +75,78 @@ from core.cradle import LIBRARY_BY_ID, CradleMachine, MotionEngine, catalog
 from core.rig import cradle_angles, cradle_joint_state
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
+
+
+class IPadMotion:
+    """Latest physical cradle motion reported by the tablet web page.
+
+    Browser ``DeviceMotionEvent.acceleration`` is expressed in m/s^2 and its
+    rotation rate in deg/s.  The tablet reduces its high-rate samples into a
+    100 ms feature packet; the server deliberately accepts only a small,
+    finite numeric surface.  A stale tablet can never keep soothing the
+    virtual infant: ``fresh`` expires after one second.
+    """
+
+    FRESH_S = 1.0
+    MAX_BODY = 4096
+
+    def __init__(self) -> None:
+        self.received_at = 0.0
+        self.samples = 0
+        self.accel_rms = 0.0
+        self.rotation_rms = 0.0
+        self.jerk_rms = 0.0
+        self.dominant_hz = 0.0
+        self.permission = "waiting"
+
+    @staticmethod
+    def _number(payload: dict, key: str, high: float) -> float:
+        value = float(payload.get(key, 0.0))
+        if not math.isfinite(value):
+            raise ValueError(f"{key} must be finite")
+        return max(0.0, min(high, value))
+
+    def update(self, payload: dict, now: float) -> None:
+        if not isinstance(payload, dict):
+            raise ValueError("JSON object required")
+        self.samples = int(self._number(payload, "samples", 500.0))
+        self.accel_rms = self._number(payload, "accelRms", 20.0)
+        self.rotation_rms = self._number(payload, "rotationRms", 2000.0)
+        self.jerk_rms = self._number(payload, "jerkRms", 500.0)
+        self.dominant_hz = self._number(payload, "dominantHz", 20.0)
+        permission = str(payload.get("permission", "granted"))[:24]
+        self.permission = permission
+        self.received_at = now
+
+    def fresh(self, now: float) -> bool:
+        return self.received_at > 0.0 and now - self.received_at <= self.FRESH_S
+
+    def strength(self, now: float) -> float:
+        """0..1 measured motion exposure for the virtual infant.
+
+        0.12 m/s^2 RMS is a useful demo-scale reference for the gentle
+        horizontal library; angular motion also counts for AP/tilt entries.
+        This is a virtual-infant input, never a physical safety measurement.
+        """
+        if not self.fresh(now):
+            return 0.0
+        linear = self.accel_rms / 0.12
+        angular = self.rotation_rms / 8.0
+        return max(0.0, min(1.0, max(linear, angular)))
+
+    def snapshot(self, now: float) -> dict:
+        age = None if self.received_at == 0.0 else max(0.0, now - self.received_at)
+        return {
+            "connected": self.fresh(now),
+            "age_s": None if age is None else round(age, 2),
+            "samples": self.samples,
+            "accel_rms": round(self.accel_rms, 4),
+            "rotation_rms": round(self.rotation_rms, 3),
+            "jerk_rms": round(self.jerk_rms, 3),
+            "dominant_hz": round(self.dominant_hz, 3),
+            "strength": round(self.strength(now), 3),
+            "permission": self.permission,
+        }
 
 
 # --------------------------------------------------------------------------- #
@@ -93,6 +169,7 @@ class Shared:
         self.policy = None      # core/policy.py SoothePolicy when a brain is on
         self.llm_model = None   # --llm-model override for ollama/claude
         self.baby = None        # the VirtualBaby, so /taste can retune it
+        self.ipad_motion = IPadMotion()
         # 1 Hz samples for the dashboard's emotion timeline: a fresh page
         # seeds the last ~15 min from /history instead of starting empty.
         self.history: deque[dict] = deque(maxlen=900)
@@ -293,8 +370,13 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
             # Closed loop: the engine's live amplitude is the soothing input,
             # and the frame IS the baby -- a circle riding the plate offset.
             time.sleep(1.0 / 30.0)
+            commanded = shared.engine.env * shared.engine.amp_scale
+            # When the tablet is alive, its IMU is the physical truth.  With
+            # no tablet the established desk simulation remains unchanged.
+            measured = shared.ipad_motion.strength(now)
+            soothing = measured if shared.ipad_motion.fresh(now) else commanded
             reading = infant.update(
-                now, soothing=shared.engine.env * shared.engine.amp_scale,
+                now, soothing=soothing,
                 motion=shared.engine.mode.id if shared.engine.mode else None)
             frame = baby_frame(reading, shared.engine.offsets_mm())
         elif scenario is not None:
@@ -401,6 +483,7 @@ def build_state(shared: Shared, reading, now: float) -> dict:
                 "alarm": bool(getattr(reading, "alarm", False)),
                 "phase": getattr(reading, "phase", "")},
         "jam": shared.jam,
+        "ipad": shared.ipad_motion.snapshot(now),
         "cradle": {**shared.engine.snapshot(), **shared.machine.snapshot(now)},
         "events": list(shared.events),
     }
@@ -426,12 +509,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         url = urlparse(self.path)
         try:
-            if url.path in ("/", "/style.css", "/app.js"):
+            if url.path in ("/", "/style.css", "/app.js",
+                            "/baby", "/baby.css", "/baby.js"):
                 # a fixed whitelist, not a static dir -- nothing to traverse
                 name, ctype = {
                     "/": ("index.html", "text/html; charset=utf-8"),
                     "/style.css": ("style.css", "text/css; charset=utf-8"),
                     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                    "/baby": ("baby.html", "text/html; charset=utf-8"),
+                    "/baby.css": ("baby.css", "text/css; charset=utf-8"),
+                    "/baby.js": ("baby.js", "text/javascript; charset=utf-8"),
                 }[url.path]
                 body = (WEB_DIR / name).read_bytes()
                 self.send_response(200)
@@ -471,6 +558,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(404)
         except (BrokenPipeError, ConnectionResetError):
             pass   # a browser tab closed; entirely normal
+
+    def do_POST(self) -> None:
+        """Receive the iPad's reduced IMU features; no motion commands here."""
+        url = urlparse(self.path)
+        if url.path != "/motion-sensor":
+            return self.send_error(404)
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return self.send_error(400, "invalid Content-Length")
+        if length <= 0 or length > IPadMotion.MAX_BODY:
+            return self.send_error(413, "motion packet too large or empty")
+        try:
+            payload = json.loads(self.rfile.read(length))
+            with self.shared.lock:
+                self.shared.ipad_motion.update(payload, time.monotonic())
+            self._json({"ok": True})
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            self.send_error(400, str(exc))
 
     def _motion(self, url) -> None:
         """Validate here, so the browser hears why; execute on the sensor loop."""
@@ -628,6 +734,10 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--certfile", metavar="PEM",
+                        help="TLS certificate for iPad motion sensors (HTTPS)")
+    parser.add_argument("--keyfile", metavar="PEM",
+                        help="TLS private key paired with --certfile")
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--verify", "--fake", dest="fake", action="store_true",
                         help="no camera: the acted verification episode "
@@ -677,6 +787,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="unlock the R-grade library modes (sim only; "
                              "--fake already implies it)")
     args = parser.parse_args(argv)
+    if bool(args.certfile) != bool(args.keyfile):
+        parser.error("--certfile and --keyfile must be supplied together")
     if args.sense and args.fake:
         parser.error("--sense needs a real camera; it cannot run with --verify")
     if args.baby and (args.sense or args.fake):
@@ -711,10 +823,20 @@ def main(argv: Optional[list[str]] = None) -> int:
                                        baby_seed=args.baby_seed,
                                        robot_target=args.robot,
                                        personality=args.personality)
+    if args.certfile:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(args.certfile, args.keyfile)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
     source = ("virtual infant" if args.baby
               else "verification scenario" if args.fake
               else f"camera {args.camera_index} (real sensing)")
-    print(f"SIGMA dashboard:  http://{lan_ip()}:{args.port}   ({source})")
+    scheme = "https" if args.certfile else "http"
+    host = lan_ip()
+    print(f"SIGMA dashboard:  {scheme}://{host}:{args.port}   ({source})")
+    print(f"iPad baby:       {scheme}://{host}:{args.port}/baby")
+    if not args.certfile:
+        print("iPad IMU note: motion permission normally requires HTTPS; "
+              "the display still works over HTTP")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -15,3 +15,6 @@ __pycache__/
 # Recorded output from `run.py --save`
 *.mp4
 *.avi
+
+# Local HTTPS identity for the iPad motion-sensor page (contains private keys)
+.local-certs/

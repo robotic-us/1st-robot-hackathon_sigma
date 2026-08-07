@@ -439,7 +439,7 @@ def test_serve() -> None:
     """Every HTTP endpoint against a real server on a random port."""
     import json
     import threading
-    from urllib.request import urlopen
+    from urllib.request import Request, urlopen
 
     from serve import Shared, start
 
@@ -461,19 +461,46 @@ def test_serve() -> None:
         js = urlopen(base + "/app.js", timeout=5).read()
         # The library selector is built from /motions at runtime: its mount
         # points live in the markup, its one fetch in the script.
-        for hook in (b'id="motions"', b'id="mfilter"'):
+        for hook in (b'id="motions"', b'id="mfilter"', b'id="ipad-card"'):
             assert hook in page, f"the M01-M50 selector lost {hook!r}"
-        for hook in (b'fetch("/motions")', b'"/motion?id=" + cell.dataset.id'):
+        for hook in (b'fetch("/motions")', b'"/motion?id=" + cell.dataset.id',
+                     b"S.ipad"):
             assert hook in js, f"the M01-M50 selector lost {hook!r}"
         print(f"  GET /        {len(page)}b html + {len(css)}b css + "
               f"{len(js)}b js, library selector wired  -- ok")
+
+        # The cradle-mounted iPad has its own full-screen infant view.  It
+        # receives state over the established SSE path and posts reduced IMU
+        # features back; it never gets a motion-command endpoint of its own.
+        baby_page = urlopen(base + "/baby", timeout=5).read()
+        baby_js = urlopen(base + "/baby.js", timeout=5).read()
+        baby_css = urlopen(base + "/baby.css", timeout=5).read()
+        for hook in (b'id="face"', b'id="start"', b'/baby.js'):
+            assert hook in baby_page, f"iPad page lost {hook!r}"
+        for hook in (b'DeviceMotionEvent.requestPermission',
+                     b'fetch("/motion-sensor"', b'new EventSource("/events")'):
+            assert hook in baby_js, f"iPad sensor path lost {hook!r}"
+        assert b"#face" in baby_css
+        packet = json.dumps({
+            "samples": 30, "accelRms": 0.06, "rotationRms": 1.5,
+            "jerkRms": 0.8, "dominantHz": 0.45,
+            "permission": "granted",
+        }).encode()
+        req = Request(base + "/motion-sensor", data=packet,
+                      headers={"Content-Type": "application/json"},
+                      method="POST")
+        assert json.loads(urlopen(req, timeout=5).read()) == {"ok": True}
+        snap = shared.ipad_motion.snapshot(time.monotonic())
+        assert snap["connected"] and snap["samples"] == 30, snap
+        assert snap["dominant_hz"] == 0.45 and 0 < snap["strength"] <= 1
+        print("  iPad IMU      page + permission + POST features -> server  -- ok")
 
 
         with urlopen(base + "/events", timeout=5) as stream:
             line = stream.readline().decode()
             assert line.startswith("data: "), f"not SSE: {line[:40]!r}"
             state = json.loads(line[6:])
-        for key in ("pose", "tag", "jam", "events", "cradle"):
+        for key in ("pose", "tag", "jam", "events", "cradle", "ipad"):
             assert key in state, f"state missing {key!r}"
         # The dashboard words motion by axis (ML sways, Z lifts, AP tilts), so
         # the frame must carry it and the script must branch on it -- without

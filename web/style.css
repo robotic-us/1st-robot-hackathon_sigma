@@ -77,6 +77,8 @@ header { max-width:1320px; margin:0 auto; padding:14px 18px 12px;
 .card h2, details.card summary {
   font-size:11px; font-weight:600; color:var(--muted);
   text-transform:uppercase; letter-spacing:.09em; margin-bottom:10px; }
+.card a { color:var(--accent); text-decoration:none; }
+.card a:hover { text-decoration:underline; }
 .card h2 .legend, .card h2 .sub2 { text-transform:none; letter-spacing:0;
   font-weight:400; }
 .big { color:var(--paper); display:flex; align-items:center; gap:9px; font-size:21px;

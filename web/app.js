@@ -256,6 +256,20 @@ function updatePanels() {
                     : "within safe limits");
   $("scen").textContent = S.tag.phase ? `scenario · ${S.tag.phase}` : "";
 
+  // cradle-mounted iPad IMU; this is physical exposure for the virtual baby,
+  // not a substitute for the safety envelope above.
+  const ipad = S.ipad || {connected:false, strength:0};
+  $("ipaddot").style.background = ipad.connected ? cssv("--good") : cssv("--faint");
+  put("ipadstate", ipad.connected ? "sensor live" : "not connected");
+  put("ipadstrength", ipad.connected
+      ? `${Math.round(ipad.strength * 100)} <small>%</small>` : "–");
+  setMeter("ipadbar", ipad.connected ? ipad.strength : 0,
+           ipad.connected ? cssv("--accent") : cssv("--faint"));
+  put("ipadaccel", ipad.connected
+      ? `${ipad.accel_rms.toFixed(3)} <small>m/s²</small>` : "–");
+  put("ipadhz", ipad.connected
+      ? `${ipad.dominant_hz.toFixed(2)} <small>Hz</small>` : "–");
+
   // header controls + alert
   $("alert").textContent = c.alert ? "⚠ " + c.alert : "";
   $("alert").classList.toggle("on", !!c.alert);
