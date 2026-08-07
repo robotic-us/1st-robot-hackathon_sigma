@@ -3,6 +3,7 @@
 const canvas = document.getElementById("face");
 const g = canvas.getContext("2d");
 const start = document.getElementById("start");
+const setup = document.getElementById("setup");
 const sensorText = document.getElementById("sensor");
 const linkText = document.getElementById("link");
 const linkDot = document.getElementById("linkdot");
@@ -29,6 +30,12 @@ const previewRaw = new URLSearchParams(location.search).get("level");
 const previewLevel = previewRaw === null ? NaN : Number(previewRaw);
 const previewState = new URLSearchParams(location.search).get("state");
 const hasPreview = Number.isFinite(previewLevel);
+// ?pose=crying pins one *pure* pose, no blend.  ?level= can only reach the
+// five rungs of the live ladder, and the other twelve need a hand on the
+// wheel -- which makes a repeatable capture of all seventeen impossible to
+// script.  This is the bench hook the camera-side recognizer is graded with
+// (perception/nubzuki.py); like ?level= it never touches server state.
+const previewPose = new URLSearchParams(location.search).get("pose");
 
 function stateWord(state, level) {
   if (state === "SLEEP") return "Sleeping";
@@ -42,6 +49,20 @@ function setCaption(words, levelText_) {
   if (words !== captionWords) emotionText.textContent = captionWords = words;
   if (levelText_ !== captionLevel) levelText.textContent = captionLevel = levelText_;
 }
+
+// The fixed layer is sized from the visible rectangle for the same reason the
+// canvas is; without this the CSS box and the backing store disagree on a phone.
+function fitViewport() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const root = document.querySelector("main");
+  if (root) { root.style.height = vv.height + "px"; root.style.width = vv.width + "px"; }
+}
+if (window.visualViewport) {
+  visualViewport.addEventListener("resize", fitViewport);
+  visualViewport.addEventListener("scroll", fitViewport);
+}
+fitViewport();
 
 const events = new EventSource("/events");
 events.onopen = () => {
@@ -75,6 +96,24 @@ function motionHandler(event) {
     rg: Number(r?.gamma) || 0
   });
   while (samples.length && samples[0].t < now - KEEP_MS) samples.shift();
+}
+
+/* ---- rough handling -> outrage ------------------------------------------
+   The cradle's own envelope tops out at a_peak 0.05 g (~0.5 m/s2), so a
+   sustained acceleration well above it can only be a hand shaking the
+   device.  The meter rises fast and falls slow -- one hard shake reads as a
+   few seconds of indignation, not a single flickered frame -- and it feeds
+   the same live ladder as everything else, so shaking harder walks the face
+   through crying -> angry -> rage exactly like a rising distress level. */
+let lastFeat = null;
+let shake = 0;
+const SHAKE_FROM = 2.0, SHAKE_FULL = 7.0;   // m/s2 RMS: begins / full rage
+function shakeUpdate() {
+  const rmsNow = (motionStarted && lastFeat) ? lastFeat.accelRms : 0;
+  const target = clamp((rmsNow - SHAKE_FROM) / (SHAKE_FULL - SHAKE_FROM), 0, 1);
+  shake += (target - shake) * (target > shake ? 0.30 : 0.015);
+  if (shake < 0.005) shake = 0;
+  return shake;
 }
 
 function rms(values) {
@@ -129,10 +168,12 @@ async function postFeatures() {
   if (!motionStarted || posting) return;
   posting = true;
   try {
+    const feat = features();
+    lastFeat = feat;                    // the shake meter reads this too
     await fetch("/motion-sensor", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(features()),
+      body: JSON.stringify(feat),
       cache: "no-store"
     });
   } catch (_) {
@@ -206,6 +247,9 @@ const ART = {
 // Design box the figure is fitted into: the head plus room for a held heart,
 // a lying pose's sideways reach, falling tears and rising "z"s.
 const BOX = {x: -168, y: -92, w: 336, h: 272};
+// Where the figure's middle sits inside the clear band above the setup card,
+// as a fraction of that band.  Slightly high so the head reads first.
+const FACE_CENTRE_Y = .46;
 
 // Every parameter a pose can set.  Poses list only what they change; the rest
 // stay at these, and the live value of each is a spring easing toward the
@@ -261,6 +305,9 @@ const POSES = [
 
 const POSE_BY_KEY = {};
 for (const pose of POSES) POSE_BY_KEY[pose.key] = pose;
+
+// Resolved here rather than at parse time: POSES does not exist yet up there.
+const pinnedPose = previewPose ? POSE_BY_KEY[previewPose] || null : null;
 
 function fullParams(pose) {
   const out = Object.assign({}, BASE);
@@ -1305,7 +1352,16 @@ function frame(nowMs) {
   lastFrame = t;
 
   const dpr = clamp(window.devicePixelRatio || 1, 1, 3);
-  const w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+  // visualViewport, not innerWidth/innerHeight.  On a phone browser the layout
+  // viewport is taller than what you can actually see -- the dynamic URL bar
+  // and the gesture bar sit over it -- so a face centred in `innerHeight` is
+  // centred on a rectangle that extends past the glass, and the top of the
+  // head is simply not on screen.  A clipped figure can never match a whole
+  // template, which is what "it cannot detect the nubzuki" turned out to be.
+  const vv = window.visualViewport;
+  const vw = vv ? vv.width : innerWidth;
+  const vh = vv ? vv.height : innerHeight;
+  const w = Math.round(vw * dpr), h = Math.round(vh * dpr);
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w;
     canvas.height = h;
@@ -1313,9 +1369,12 @@ function frame(nowMs) {
 
   // A hand on the wheel outranks the preview hook, which outranks the Jetson.
   const held = manual;
+  // rough handling outranks the Jetson (the shake is real and local), but
+  // never a hand on the wheel -- a person steering keeps authorship
+  const rough = shakeUpdate();
   const level = held ? held.level
               : hasPreview ? clamp(previewLevel, 0, 1)
-              : clamp(live?.tag?.level ?? 0, 0, 1);
+              : clamp(Math.max(live?.tag?.level ?? 0, rough), 0, 1);
   const serverState = hasPreview
     ? (previewState || (level < .12 ? "CALM" : level < .45 ? "FUSS" : "CRY"))
     : (live?.tag?.emotion || "CALM");
@@ -1326,6 +1385,11 @@ function frame(nowMs) {
   if (held) {
     spot = {x: held.x, y: held.y};
     want = poseAt(spot.x, spot.y);
+  } else if (pinnedPose) {
+    // The anchor's own parameters, not poseAt() at its coordinates: a bench
+    // capture has to be the pose itself, not whatever its neighbours blend to.
+    spot = {x: pinnedPose.at[0], y: pinnedPose.at[1]};
+    want = fullParams(pinnedPose);
   } else {
     const look = liveLook(level, serverState === "SLEEP" ? 1 : 0);
     spot = look.at;
@@ -1457,9 +1521,28 @@ function frame(nowMs) {
   g.fillStyle = aura;
   g.fillRect(0, 0, w, h);
 
-  const scale = Math.min(w * .86 / BOX.w, h * .82 / BOX.h);
+  // The face is laid out in the band *above* the setup card, whose height is
+  // measured rather than assumed -- it changes with orientation, with the
+  // safe-area inset, and with how long the status line happens to be.  Guessing
+  // a reserve put the figure's feet behind the card in landscape on every iPad
+  // size checked.  A fraction of the viewport cannot know any of that; the
+  // element does.
+  const cardTop = setup ? setup.getBoundingClientRect().top * dpr : h;
+  const band = clamp(cardTop - 8 * dpr, h * .45, h);
+  // .96, up from .86/.88.  Two reasons pulling the same way: on the cradle
+  // iPad the face is the whole point of the surface, and the camera reading it
+  // back gets its accuracy from pixels on the figure -- a live capture had it
+  // at 76 px across, small enough that two poses holding a heart beside the
+  // head could not be told apart.  Filling the clear band is free resolution.
+  const scale = Math.min(w * .96 / BOX.w, band * .96 / BOX.h);
+  // Sitting the figure at FACE_CENTRE_Y is a preference, not a licence to go
+  // off-screen: once it fills 96% of the band there is no room left to bias it
+  // upward, and in landscape the head went past the top edge.  Clamp the
+  // centre so the whole figure stays inside the band it was scaled to fit.
+  const half = BOX.h * scale / 2;
+  const midY = clamp(band * FACE_CENTRE_Y, half, Math.max(half, band - half));
   g.translate(w / 2 - (BOX.x + BOX.w / 2) * scale,
-              h / 2 - (BOX.y + BOX.h / 2) * scale);
+              midY - (BOX.y + BOX.h / 2) * scale);
   g.scale(scale, scale);
   g.globalAlpha = present ? 1 : .12;
   drawNubzuki(g, P);
@@ -1480,6 +1563,8 @@ function frame(nowMs) {
   if (held) {
     setCaption(dominantPose(held.x, held.y).label,
                level.toFixed(2) + " manual");
+  } else if (pinnedPose) {
+    setCaption(pinnedPose.label, pinnedPose.key + " pinned");
   } else if (hasPreview) {
     setCaption(stateWord(serverState, level), level.toFixed(2) + " preview");
   } else if (live) {

@@ -62,7 +62,6 @@ python3 serve.py --baby --robot sim:demo # 같은 경로를 ./sim.sh 상대로 (
 | `perception/face/` | 얼굴 검출(YuNet) · 인식(SFace) · 감정(FER+) |
 | `apps/animate.py` · `core/rig.py` | RViz 재생(`--tour`) · 5절 링키지 기구학+RosSide |
 | `tools/` | make_motions(--library) · make_urdf · fetch_models |
-| `bench/` | VERIFY.md 3단계용 실물 아기 사진 (라이선스는 bench/README.md) |
 | `motions_m50/` | M01–M50을 pcm 슬롯으로 컴파일한 것 (`./sim.sh`가 기본 사용) |
 | `web/` · `cad/` | 대시보드 · URDF/메시(RViz) |
 | `webapp/` | 같은 대시보드의 Next.js 판. `serve.py`의 **클라이언트**일 뿐, 대체가 아님(Node 필요) |

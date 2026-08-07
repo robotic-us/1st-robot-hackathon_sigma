@@ -9,16 +9,20 @@ reversibly, when that default may be broken.
 ## The live loop
 
 ```
-                 SENSING (one of three modes)
-  ┌──────────────────────┬──────────────────────┬──────────────────────┐
-  │ --verify (scripted)  │ --sense (real)       │ --baby (closed loop) │
-  │ serve.py episode     │ watch.py + listen.py │ perception/baby.py   │
-  │ acted sensor signals │ five-state watcher / │ random infant state; │
-  │ through the real     │ YuNet→FER+ ⊕ mic     │ the engine's sway    │
-  │ AudioTrack→judge     │ through InfantJudge  │ feeds back as        │
-  │ chain (VERIFY.md L1) │ (report §4.2-5)      │ soothing             │
-  └──────────┬───────────┴──────────┬───────────┴──────────┬───────────┘
-             └───────────── present, level 0..1 ───────────┘
+                 SENSING (one of two modes)
+  ┌──────────────────────────────┬──────────────────────────────┐
+  │ --verify (scripted, default) │ --baby (closed loop)         │
+  │ serve.py episode; each phase │ perception/baby.py; random    │
+  │ asserts its own state+level  │ infant state, and the engine's│
+  │ (machine test, not a         │ sway feeds back as soothing   │
+  │  recognizer test)            │                               │
+  └──────────────┬───────────────┴───────────────┬──────────────┘
+                 └────── present, level 0..1 ────┘
+
+  (--sense and the infant recognizer were removed 2026-08-08.  The only
+   camera path left is perception/nubzuki.py, which reads the *iPad* --
+   it verifies the display loop and is capped in the fuss band, so it
+   never feeds this input.  See docs/VERIFY.md.)
                                 │
                     CradleMachine  (core/cradle.py, report §5)
         gate_fail > pain > stable_sleep > quiet_awake > cry trial

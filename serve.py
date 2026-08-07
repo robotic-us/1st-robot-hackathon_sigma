@@ -20,15 +20,13 @@ Motion behaviour follows docs/infant_robotic_cradle_evidence_report_ko.pdf
 (see core/cradle.py): the default is *not moving*.  Two sensing modes feed
 the CradleMachine's 0..1 distress input:
 
-* **Real sensing** (``--sense``): the five-state watcher / FER+ fused with
-  the microphone drives the report-spec judge (perception/watch.py); a lost
-  face or a posture alarm trips the safety gate.
-* **Verification scenario** (``--verify``, alias ``--fake``): no camera.  A
-  scripted nursery episode is rendered as the *sensor signals* a real baby
-  would produce (whimpers, wails, closed eyes, a rollover) and pushed through
-  the real AudioTrack -> InfantJudge -> CradleMachine chain -- the dashboard
-  and the webapp visualise docs/VERIFY.md layer 1 live.  The camera panel
-  shows a drawn baby acting the script, clearly watermarked as synthetic.
+* **Verification scenario** (``--verify``, alias ``--fake``, and the default):
+  no camera.  A scripted nursery episode asserts its state and level phase by
+  phase and drives the real CradleMachine with them -- the ladder, the trials,
+  the taper and the gate are all exercised.  The camera panel shows a drawn
+  baby acting the script, clearly watermarked as synthetic.  Since the
+  infant-face stack was removed (2026-08-08) the phases are scripted ground
+  truth rather than judged signals; docs/VERIFY.md says what that costs.
 * **Virtual infant** (``--baby``, closed-loop sim): a random state process
   (perception/baby.py) that the sway genuinely soothes -- or, for hunger
   cries, does not.
@@ -44,7 +42,6 @@ stdlib server is enough.  Open it from any laptop on the same network.
 
 Run::
 
-    python3 serve.py --sense       # webcam + mic: the real recognizer
     python3 serve.py --verify      # no camera: the acted verification episode
     python3 serve.py --baby        # no camera: a virtual infant, closed loop
     python3 serve.py --research    # unlock the R-grade modes (sim only!)
@@ -74,6 +71,7 @@ import numpy as np
 
 from core.cradle import LIBRARY_BY_ID, CradleMachine, MotionEngine, catalog
 from core.rig import cradle_angles, cradle_joint_state
+from perception import nubzuki as nz
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -210,6 +208,27 @@ def infant_level(reading) -> float:
     return float(reading.distress) if reading.present else 0.0
 
 
+def mascot_reading(seen: list) -> SimpleNamespace:
+    """Camera sightings -> the machine's sensor contract.
+
+    The vision link, in one place so tests can hit it without a camera.  The
+    largest figure in frame is the reading (the iPad fills most of the view;
+    anything smaller is clutter).  ``distress`` is the sighting's
+    *asserted* level -- capped inside the fuss band by construction, because
+    §5 says vision alone may never cross CRY_LEVEL -- and an empty frame maps
+    to UNKNOWN with ``present=False``, which is the safety gate's input, not
+    a distress claim.
+    """
+    if not seen:
+        return SimpleNamespace(present=False, distress=0.0,
+                               emotion=nz.UNKNOWN, alarm=False,
+                               name="nubzuki", x=0.0, phase="")
+    s = max(seen, key=lambda q: q.box[2] * q.box[3])
+    return SimpleNamespace(present=True, distress=s.asserted_level,
+                           emotion=s.state, alarm=False, name="nubzuki",
+                           x=0.0, phase=s.label, echo=s.recovered_level)
+
+
 def desired_slot(engine: MotionEngine) -> Optional[int]:
     """The PCM slot the engine's mode maps to, or ``None`` when parked.
 
@@ -221,37 +240,41 @@ def desired_slot(engine: MotionEngine) -> Optional[int]:
 
 
 class ScenarioPlayer:
-    """A scripted nursery episode, pushed through the real recognizer chain.
+    """A scripted nursery episode: the stand-in infant, driving the machine.
 
-    Nothing here shortcuts to a distress number: each phase emits the raw
-    signals (voiced chunks, eye state, body flow, head roll) and the same
-    AudioTrack -> InfantJudge machinery used on a live camera turns them into
-    states.  What the dashboard shows in this mode is therefore the actual
-    section-4/5 logic running, not a canned animation of it.
+    **This used to be a recognizer test and is now a machine test.**  It fed
+    raw signals through the AudioTrack -> InfantJudge chain, so what the
+    dashboard showed was the report's section-4/5 logic actually running.  That
+    chain was removed with the infant-face stack (2026-08-08), and nothing here
+    pretends to replace it: each phase now *asserts* its state and level as
+    scripted ground truth.  What is still verified end to end is everything
+    downstream -- the escalation ladder, the trial logic, the taper, the gate.
+
+    One consequence worth stating plainly: the scenario reaches the cry band
+    because it declares it, not because anything perceived it.  Since the
+    removal there is no live path that can cross CRY_LEVEL on its own --
+    `perception/nubzuki.py` is vision, and vision is capped in the fuss band by
+    the same §5 rule that always capped it.
     """
 
     # The quiet opener is deliberately short: it only has to establish the
-    # QUIET_AWAKE baseline, and 20 s of nothing read as "is this even on?".
-    # The fussing phase absorbs the difference so every later phase keeps its
+    # awake baseline, and 20 s of nothing read as "is this even on?".  The
+    # fussing phase absorbs the difference so every later phase keeps its
     # wall-clock position (tests.py::serve times its trial check against it).
-    #        name                    dur  audio      eyes    flow  roll
-    PHASES = (("quiet and awake",      8, "quiet",   "open", 0.03,  0),
-              ("starts fussing",      42, "whimper", "open", 0.10,  0),
-              ("soothed by M10",      20, "quiet",   "open", 0.05,  0),
-              ("crying hard",         35, "wail",    "open", 0.30,  0),
-              ("the trial works",     25, "quiet",   "open", 0.05,  0),
-              ("drifting off",        15, "quiet",   "shut", 0.03,  0),
-              ("stable sleep",        70, "quiet",   "shut", 0.02,  0),
-              ("rolls onto the side",  6, "quiet",   "shut", 0.25, 75),
-              ("caregiver resettles", 30, "quiet",   "open", 0.05,  0))
+    #        name                    dur  level  state              eyes   flow roll
+    PHASES = (("quiet and awake",      8, 0.05, nz.AWAKE,           "open", .03,  0),
+              ("starts fussing",      42, 0.34, nz.DISTRESS_FACE,   "open", .10,  0),
+              ("soothed by M10",      20, 0.06, nz.AWAKE,           "open", .05,  0),
+              ("crying hard",         35, 0.62, nz.DISTRESS_FACE,   "open", .30,  0),
+              ("the trial works",     25, 0.08, nz.AWAKE,           "open", .05,  0),
+              ("drifting off",        15, 0.02, nz.EYES_CLOSED,     "shut", .03,  0),
+              ("stable sleep",        70, 0.00, nz.SLEEP_CANDIDATE, "shut", .02,  0),
+              ("rolls onto the side",  6, 0.00, nz.SLEEP_CANDIDATE, "shut", .25, 75),
+              ("caregiver resettles", 30, 0.06, nz.AWAKE,           "open", .05,  0))
     CYCLE_S = sum(d for _, d, *_ in PHASES)
+    ROLL_ALARM_DEG = 60      # report §1.1: a sustained roll is not a squirm
 
     def __init__(self) -> None:
-        from perception.watch import AudioTrack, InfantJudge, PostureTrack, Signals
-        self.Signals = Signals
-        self.audio = AudioTrack()
-        self.judge = InfantJudge()
-        self.posture = PostureTrack()
         self.reading = None
         # The parts of the frame that never change, drawn once: canvas, the
         # cradle ellipse and the watermark.  30 Hz redraws of static pixels
@@ -265,38 +288,33 @@ class ScenarioPlayer:
 
     def _phase(self, t: float):
         into = t % self.CYCLE_S
-        for name, dur, audio, eyes, flow, roll in self.PHASES:
-            if into < dur:
-                return name, into, audio, eyes, flow, roll
-            into -= dur
-        return self.PHASES[-1][0], 0.0, "quiet", "open", 0.05, 0
+        for row in self.PHASES:
+            if into < row[1]:
+                return row, into
+            into -= row[1]
+        return self.PHASES[-1], 0.0
 
     @staticmethod
-    def _chunk(kind: str, t: float):
-        """(level, cry) for this instant -- whimpers are short and sparse,
-        wails long and chained, exactly the 4.2 distinction."""
-        if kind == "whimper":
-            voiced = (t % 2.5) < 0.3
-        elif kind == "wail":
-            voiced = (t % 2.2) < 1.5
-        else:
-            voiced = False
-        return (0.35, 0.8) if voiced else (0.02, 0.1)
+    def _voiced(level: float, t: float) -> bool:
+        """Is the mouth open this instant?  Drawing only -- nothing judges it.
+
+        The rhythm still tells the two apart the way §4.2 did, because it is
+        what the acted baby should *look* like: a fuss is short and sparse, a
+        wail is long and chained.
+        """
+        if level >= .45:
+            return (t % 2.2) < 1.5
+        if level >= .12:
+            return (t % 2.5) < 0.3
+        return False
 
     def update(self, now: float):
-        name, into, audio_kind, eyes, flow, roll = self._phase(now)
-        level, cry = self._chunk(audio_kind, now)
-        feats = self.audio.feed(level, cry, now)
-        risk = self.posture.feed(now, float(roll) if roll else 0.0, None, 0.0)
-        judged = self.judge.update(self.Signals(
-            ts=now, face_conf=1.0, emotion=None,
-            eyes_closed=(eyes == "shut"), pain_face=False, body_arch=None,
-            posture_risk=risk, body_flow=flow, audio=feats))
+        (name, _dur, level, state, eyes, flow, roll), into = self._phase(now)
         self.reading = SimpleNamespace(
-            present=judged.present, distress=judged.level,
-            emotion=judged.state, alarm=judged.alarm, name="scenario",
-            x=0.0, y=0.0, phase=name, phase_t=into, voiced=feats.voiced,
-            eyes=eyes, roll=roll)
+            present=True, distress=level, emotion=state,
+            alarm=roll >= self.ROLL_ALARM_DEG, name="scenario",
+            x=0.0, y=0.0, phase=name, phase_t=into,
+            voiced=self._voiced(level, now), eyes=eyes, roll=roll)
         return self.reading
 
     def frame(self, now: float):
@@ -328,12 +346,13 @@ class ScenarioPlayer:
 
 
 def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
-                sense: bool = False, audio_device: str = "plughw:WEBCAM,0",
-                no_sound: bool = False, baby_seed: int | None = None,
+                baby_seed: int | None = None,
                 baby: bool = False, bridge=None,
-                personality: bool = False) -> None:
-    sensor = mic = infant = scenario = None
-    if baby:
+                personality: bool = False, sense_cap=None) -> None:
+    infant = scenario = None
+    if sense_cap is not None:
+        pass                       # the camera arrived open, from main()
+    elif baby:
         from perception.baby import Personality, VirtualBaby
         quirks = (Personality.random(random.Random(baby_seed))
                   if personality else None)
@@ -343,41 +362,20 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                    + (f" (seed {baby_seed})" if baby_seed is not None else ""))
         if quirks is not None:
             shared.log("hidden temperament: " + quirks.describe())
-    elif sense:
-        # Real sensing.  The five-state watcher (perception/watch.py) is the
-        # primary visual channel; YuNet+FER+ is the fallback without mediapipe.
-        from perception.listen import Microphone
-        from perception.sense import Sense
-        if not no_sound:
-            mic = Microphone(audio_device)
-            mic.start()
-        try:
-            from perception.watch import Watcher
-            sensor = Sense(microphone=mic, watcher=Watcher())
-            shared.log("real sensing: five-state watcher"
-                       + ("" if no_sound else " + microphone"))
-        except ImportError:
-            from perception.face.pipeline import SigmaPipeline
-            sensor = Sense(SigmaPipeline(), mic)
-            shared.log("real sensing: face+emotion (no mediapipe -- "
-                       "watcher unavailable)"
-                       + ("" if no_sound else " + microphone"))
-    else:
+    elif sense_cap is None:
         scenario = ScenarioPlayer()
         shared.log("verification scenario: docs/VERIFY.md layer 1, live")
-    cap = None
-    if not fake and not baby and sense:
-        cap = cv2.VideoCapture(camera_index)
-        if not cap.isOpened():
-            shared.log(f"camera {camera_index} failed -- verification scenario "
-                       "instead")
-            sensor, cap = None, None
-            scenario = ScenarioPlayer()
+    # The capture is opened in main() and passed in still open: a probe-and-
+    # release preflight races anything else on the device, and a failed open
+    # in this thread could only die quietly while the server kept serving a
+    # frozen page.
+    cap = sense_cap
+    if cap is not None:
+        shared.log(f"vision link: camera {camera_index} -> perception/nubzuki "
+                   "(reading the iPad's drawn face)")
 
     if infant is not None:
         from perception.baby import baby_frame
-    if sensor is not None:
-        from perception.sense import draw as sense_draw
     # The linkage solve is pure in (ap, ml, z, gain), and the cradle spends
     # most of its life parked at (0, 0, 0) -- cache the last solve instead of
     # running 8 leg IKs per tick to recompute an unchanged pose.
@@ -410,11 +408,27 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
             reading = scenario.update(now - t0)
             frame = scenario.frame(now - t0)
         else:
-            ok, frame = cap.read()
-            if not ok:
-                shared.log("camera stream ended")
-                break
-            reading = sensor.update(frame, now)
+            # The vision link: the camera watches the iPad the machine itself
+            # draws on, perception/nubzuki names the pose, and the reading
+            # goes through the same contract as every other source.  A frame
+            # with no figure maps to present=False and the 0.7 s safety gate
+            # does the stopping -- never this loop.
+            ok_cam, raw = cap.read()
+            if not ok_cam:
+                reading = mascot_reading([])
+                frame = np.zeros((480, 640, 3), np.uint8)
+                cv2.putText(frame, "camera lost", (24, 46),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                            (60, 60, 220), 2, cv2.LINE_AA)
+                time.sleep(0.2)
+            else:
+                seen = nz.read(raw)
+                reading = mascot_reading(seen)
+                frame = nz.annotate(raw, seen)
+                cv2.putText(frame, f"{reading.emotion}  "
+                            f"asserts {reading.distress:.2f}",
+                            (16, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                            (40, 200, 60), 2, cv2.LINE_AA)
 
         # Manual requests from the browser win over any automatic decision.
         with shared.lock:
@@ -470,11 +484,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                 "alarm": bool(fault or shared.machine.state == "gate_fail"),
             })
 
-        if infant is not None or scenario is not None:
-            canvas = frame                     # these draw themselves
-        else:
-            canvas = sense_draw(frame, reading, sensor)
-        ok, encoded = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        # Both remaining sources draw their own frame.
+        ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
         state = build_state(shared, reading, now)
         with shared.lock:
             if ok:
@@ -483,8 +494,6 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
 
     if cap is not None:
         cap.release()
-    if mic is not None:
-        mic.close()
 
 
 def _ipad_state(shared: Shared, now: float) -> dict:
@@ -599,6 +608,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(body)))
                 if ctype == "font/woff2":   # never changes under its own name
                     self.send_header("Cache-Control", "public, max-age=604800")
+                else:
+                    # The dashboard trio is edited constantly and carries no
+                    # ETag or Last-Modified, so a browser is free to invent its
+                    # own freshness window and serve a stale app.js -- which
+                    # looks exactly like "my change did nothing".
+                    self.send_header("Cache-Control", "no-cache, must-revalidate")
                 self.end_headers()
                 self.wfile.write(body)
             elif url.path == "/motions":
@@ -766,10 +781,9 @@ def lan_ip() -> str:
 
 
 def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: bool,
-          sense: bool = False, audio_device: str = "plughw:WEBCAM,0",
-          no_sound: bool = False, baby: bool = False,
+          baby: bool = False,
           baby_seed: int | None = None, robot_target: str | None = None,
-          personality: bool = False):
+          personality: bool = False, sense_cap=None):
     ros = None
     if use_ros:
         try:
@@ -798,8 +812,8 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
             ) from exc
     worker = threading.Thread(
         target=sensor_loop,
-        args=(shared, camera_index, fake, ros, sense, audio_device, no_sound,
-              baby_seed, baby, bridge, personality),
+        args=(shared, camera_index, fake, ros,
+              baby_seed, baby, bridge, personality, sense_cap),
         daemon=True)
     worker.start()
     Handler.shared = shared
@@ -810,10 +824,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--certfile", metavar="PEM",
-                        help="TLS certificate for iPad motion sensors (HTTPS)")
+                        help="TLS certificate (default: a local one is made "
+                             "and reused from .local-certs/)")
     parser.add_argument("--keyfile", metavar="PEM",
                         help="TLS private key paired with --certfile")
+    parser.add_argument("--http", action="store_true",
+                        help="serve plain HTTP (no iPad motion permission)")
     parser.add_argument("--camera-index", type=int, default=0)
+    parser.add_argument("--sense", action="store_true",
+                        help="real camera: read the iPad's drawn face through "
+                             "perception/nubzuki -- the vision link")
     parser.add_argument("--verify", "--fake", dest="fake", action="store_true",
                         help="no camera: the acted verification episode "
                              "through the real recognizer (docs/VERIFY.md)")
@@ -848,13 +868,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "and alerts the caregiver.  Off by default -- the "
                              "cradle keeps trying other motions instead.  The "
                              "safety gate (jam / face lost / pain) always runs")
-    parser.add_argument("--sense", action="store_true",
-                        help="real sensing: face+emotion (+mic) drives the "
-                             "machine instead of tag state cards")
-    parser.add_argument("--audio-device", default="plughw:WEBCAM,0",
-                        help="ALSA capture device for --sense")
-    parser.add_argument("--no-sound", action="store_true",
-                        help="with --sense: face only, no microphone")
     parser.add_argument("--no-ros", action="store_true",
                         help="do not mirror joints to RViz")
     parser.add_argument("--robot", nargs="?", const="robot", default=None,
@@ -873,10 +886,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
     if bool(args.certfile) != bool(args.keyfile):
         parser.error("--certfile and --keyfile must be supplied together")
-    if args.sense and args.fake:
-        parser.error("--sense needs a real camera; it cannot run with --verify")
-    if args.baby and (args.sense or args.fake):
-        parser.error("--baby is its own world; drop --sense/--verify")
+    if args.baby and args.fake:
+        parser.error("--baby is its own world; drop --verify")
     if args.personality and not args.baby:
         parser.error("--personality is a virtual-infant trait; add --baby")
 
@@ -884,8 +895,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     # nothing an R-grade mode can hurt.  Unlock the whole library there so the
     # dashboard's selector can drive all 50 without a second flag.  This does
     # not put R into automatic behaviour -- TRIAL_LADDER is P1 only, and the
-    # machine never commands anything outside it plus M05/M06/M08.  Every other
-    # mode (real camera, --sense, --baby) still needs --research explicitly.
+    # machine never commands anything outside it plus M05/M06/M08.  --baby
+    # still needs --research explicitly.
     research = args.research or args.fake
     shared = Shared(allow_research=research, pace_s=args.pace,
                     give_up=args.give_up)
@@ -903,23 +914,66 @@ def main(argv: Optional[list[str]] = None) -> int:
         shared.machine.advisor = shared.policy.pick
         shared.log(f"decision brain: {args.policy} "
                    f"({len(shared.policy.scenarios)} taught scenarios)")
-    if not (args.fake or args.baby):
-        args.sense = True       # a bare launch means the real recognizer
+    # A bare launch means the verification episode; the camera is asked for
+    # explicitly (--sense), because a missing camera should be a loud failure
+    # on the mode that needs it, not a silent fallback on the mode that don't.
+    if not (args.fake or args.baby or args.sense):
+        args.fake = True
+    sense_cap = None
+    if args.sense:
+        # Opened HERE and handed to the loop still open: a probe-and-release
+        # preflight races anything else on the device, and a failed open in
+        # the worker could only kill that thread quietly while the server
+        # kept serving a frozen page.  Open once, fail loudly.
+        sense_cap = cv2.VideoCapture(args.camera_index)
+        if not sense_cap.isOpened():
+            raise SystemExit(
+                f"--sense: camera {args.camera_index} would not open "
+                f"(in use? try --camera-index 1; ls /dev/video*)")
     server, worker, ros, robot = start(shared, args.port, args.camera_index,
                                        args.fake, use_ros=not args.no_ros,
-                                       sense=args.sense,
-                                       audio_device=args.audio_device,
-                                       no_sound=args.no_sound, baby=args.baby,
+                                       baby=args.baby,
                                        baby_seed=args.baby_seed,
                                        robot_target=args.robot,
-                                       personality=args.personality)
+                                       personality=args.personality,
+                                       sense_cap=sense_cap)
+    # HTTPS is the default, because the demo's most fragile feature -- the
+    # iPad motion permission -- silently refuses on plain HTTP.  A local CA +
+    # server cert pair is minted once (tools/make_https_cert.sh) into
+    # .local-certs/ and reused; it is re-minted when the LAN IP changes,
+    # since the cert names the IP the tablet will actually dial.
+    if args.http:
+        if args.certfile:
+            parser.error("--http and --certfile contradict each other")
+    elif not args.certfile:
+        import subprocess
+        cert_dir = Path(".local-certs")
+        crt, key = cert_dir / "server.crt", cert_dir / "server.key"
+        ip = lan_ip()
+        good = False
+        if crt.exists() and key.exists():
+            text = subprocess.run(
+                ["openssl", "x509", "-in", str(crt), "-noout", "-text"],
+                capture_output=True, text=True).stdout
+            good = f"IP Address:{ip}" in text
+        if not good:
+            made = subprocess.run(
+                ["bash", "tools/make_https_cert.sh", ip],
+                capture_output=True, text=True)
+            if made.returncode != 0:
+                raise SystemExit(
+                    "could not mint a local HTTPS certificate:\n"
+                    + made.stderr.strip()
+                    + "\n(pass --http to serve without TLS)")
+            print(f"minted HTTPS certificate for {ip} -> {cert_dir}/")
+        args.certfile, args.keyfile = str(crt), str(key)
     if args.certfile:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(args.certfile, args.keyfile)
         server.ssl_context = context     # per-connection wrap: DashboardServer
     source = ("virtual infant" if args.baby
               else "verification scenario" if args.fake
-              else f"camera {args.camera_index} (real sensing)")
+              else f"camera {args.camera_index} -> nubzuki (vision link)")
     scheme = "https" if args.certfile else "http"
     host = lan_ip()
     print(f"SIGMA dashboard:  {scheme}://{host}:{args.port}   ({source})")
@@ -927,6 +981,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not args.certfile:
         print("iPad IMU note: motion permission normally requires HTTPS; "
               "the display still works over HTTP")
+    else:
+        print(f"iPad trust:      install .local-certs/sigma-ca.crt once "
+              "(Settings > General > About > Certificate Trust)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

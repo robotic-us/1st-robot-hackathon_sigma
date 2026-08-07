@@ -68,107 +68,6 @@ def test_listen() -> None:
           f"noise {level_n * cry_n:.3f}, quiet {level_q * cry_q:.3f}  -- ok")
 
 
-def test_sense() -> None:
-    """Check the two bits of maths that decide how the robot behaves."""
-    import numpy as np
-    from perception.sense import DISTRESS_WEIGHT, emotion_distress, fuse
-    from perception.face import config as face_config
-
-    print("emotion -> distress")
-    n = len(face_config.EMOTIONS)
-
-    def one_hot(label: str) -> np.ndarray:
-        v = np.zeros(n, np.float32)
-        v[face_config.EMOTIONS.index(label)] = 1.0
-        return v
-
-    for label in face_config.EMOTIONS:
-        d = emotion_distress(one_hot(label))
-        assert abs(d - DISTRESS_WEIGHT[label]) < 1e-6, f"{label} weight wrong"
-        print(f"  {label:<9} -> {d:.2f}")
-
-    assert emotion_distress(one_hot("HAPPY")) == 0.0, "a smile must not summon the robot"
-    assert emotion_distress(one_hot("ANGRY")) > emotion_distress(one_hot("NEUTRAL"))
-
-    # The mixed case that motivated using probabilities instead of the label.
-    mixed = np.zeros(n, np.float32)
-    mixed[face_config.EMOTIONS.index("ANGRY")] = 0.45
-    mixed[face_config.EMOTIONS.index("SAD")] = 0.40
-    mixed[face_config.EMOTIONS.index("NEUTRAL")] = 0.15
-    d = emotion_distress(mixed)
-    assert 0.7 < d < 0.9, f"45% angry + 40% sad should read clearly upset, got {d:.3f}"
-    print(f"  45% ANGRY + 40% SAD + 15% NEUTRAL -> {d:.2f} (stable across a label flip)")
-
-    print("noisy-OR fusion")
-    assert fuse(0.0, 0.0) == 0.0
-    assert abs(fuse(0.8, 0.0) - 0.8) < 1e-6, "sound silent -> face alone decides"
-    assert abs(fuse(0.0, 0.8) - 0.8) < 1e-6, "face absent -> sound alone decides"
-    assert fuse(0.5, 0.5) > 0.5, "both channels must reinforce"
-    assert fuse(0.9, 0.9) <= 1.0, "fusion must stay bounded"
-    for a, b in ((0.3, 0.4), (0.9, 0.1), (0.0, 1.0)):
-        assert fuse(a, b) >= max(a, b) - 1e-9, "fusion must never lower distress"
-    print(f"  face only  0.80 + 0.00 -> {fuse(0.8, 0.0):.2f}")
-    print(f"  sound only 0.00 + 0.80 -> {fuse(0.0, 0.8):.2f}")
-    print(f"  both       0.50 + 0.50 -> {fuse(0.5, 0.5):.2f}")
-
-
-def test_models() -> None:
-    """The ONNX models load and infer -- the real-testing stack, headless."""
-    import cv2
-    import numpy as np
-    from perception.face import config
-    from perception.face.detect import FaceDetector
-    from perception.face.emotion import EmotionClassifier
-    from perception.face.recognize import FaceRecognizer
-
-    for path in (config.YUNET, config.SFACE, config.FERPLUS):
-        assert path.exists(), \
-            f"{path} missing -- run: python3 tools/fetch_models.py"
-    print("  files        all three ONNX models present  -- ok")
-
-    from perception.face.emotion import _softmax
-
-    detector = FaceDetector((config.FRAME_W, config.FRAME_H))
-    emotion = EmotionClassifier()
-    FaceRecognizer()   # loading IS the test: a bad file throws here
-    print("  load         YuNet + FER+ + SFace load under cv2  -- ok")
-
-    blank = np.full((config.FRAME_H, config.FRAME_W, 3), 110, np.uint8)
-    assert len(detector.detect(blank)) == 0, "a blank frame must contain no faces"
-    rng = np.random.default_rng(0)
-    crop = rng.integers(0, 255, (config.FER_INPUT, config.FER_INPUT), np.uint8)
-    blob = crop.astype(np.float32).reshape(1, 1, config.FER_INPUT, config.FER_INPUT)
-    emotion.net.setInput(blob)
-    probs5 = _softmax(emotion.net.forward().ravel()) @ emotion.fold
-    assert len(probs5) == len(config.EMOTIONS) and abs(float(probs5.sum()) - 1.0) < 1e-4
-    label, conf = EmotionClassifier.label(probs5)
-    assert label in config.EMOTIONS + ["?"] and 0.0 <= conf <= 1.0
-    print(f"  infer        blank frame -> 0 faces; FER+ -> {len(probs5)} probs "
-          f"summing to 1 ({label} {conf:.2f})  -- ok")
-
-    # The whole real-sensing stack, exactly as serve.py --sense drives it.
-    from perception.face.pipeline import SigmaPipeline
-    from perception.sense import Sense
-
-    sense = Sense(SigmaPipeline(), microphone=None)
-    reading = sense.update(blank, ts=0.0)
-    assert not reading.present and reading.distress < 0.05, \
-        f"an empty room must read absent and calm, got {reading}"
-    print(f"  sense        empty frame -> present={reading.present}, "
-          f"distress={reading.distress:.2f}  -- ok")
-
-    # BlazePose must parse AND run under this box's cv2 (the YuNet-2023
-    # lesson: parsing alone is not the bar).  Random input; shape is the test.
-    from perception.watch import PostureNet
-    net = PostureNet()
-    shoulders = net.infer(np.full((480, 640, 3), 110, np.uint8), (280, 180, 360, 260))
-    assert shoulders is not None and len(shoulders) == 2
-    for x, y, vis in shoulders:
-        assert 0.0 <= vis <= 1.0, f"visibility must be a probability, got {vis}"
-    print("  posture      BlazePose parses + runs under cv2 "
-          f"{cv2.__version__}, 2 shoulders  -- ok")
-
-
 def test_cradle() -> None:
     """The M01-M50 library, the engine's ramps, and the report's ladder."""
     from core.cradle import LIBRARY, CradleMachine, MotionEngine, a_peak_g
@@ -238,15 +137,38 @@ def test_cradle() -> None:
             box.tick(t, present, level, jam)
             eng.tick(t)
 
+    assert box.snapshot(t)["trend"] == "", "quiet has no trend to report"
     run(5.0, 0.6)
     assert box.state == "trial" and eng.mode.id == "M12", \
         f"cry must open a trial at M12, got {box.state}/{eng.mode}"
+    assert box.snapshot(t)["trend"] == "new", "a fresh trial starts at 'new'"
     run(38.0, 0.6)
     assert eng.mode.id == "M13", "30 s without improvement must step up once"
+    # the rung step is a new motion, so measurement -- and the clock -- restart
+    assert box.snapshot(t)["trend"] == "new", "a step up re-anchors the trend"
+    assert box.snapshot(t)["trend_s"] < 10.0, "the step up restarts the clock"
     run(70.0, 0.6)
     assert box.state == "settling" and "no improvement" in box.alert
     assert eng.tapering or not eng.active
+    assert box.snapshot(t)["trend"] == "", "a trend belongs to a live trial"
     print("  machine      cry: M12 trial, M13 at 30 s, alert+taper at 60 s -- ok")
+
+    # the trend headline: the machine's own checkpoint verdict, kept rather
+    # than only logged, so the dashboard and the branch taken cannot disagree
+    eng = MotionEngine()
+    box = CradleMachine(eng)
+    t = 0.0
+    run(5.0, 0.6)
+    assert box.snapshot(t)["trend"] == "new"
+    run(40.0, 0.05)            # the baby settles: the checkpoint sees it
+    assert box.snapshot(t)["trend"] == "improving", \
+        f"a settling baby must read improving, got {box.snapshot(t)['trend']!r}"
+    held = box.snapshot(t)["trend_s"]
+    run(45.0, 0.05)
+    assert box.snapshot(t)["trend_s"] > held, \
+        "an unchanged verdict keeps counting instead of resetting each tick"
+    print("  machine      trend: new -> improving, clock runs with the verdict"
+          " -- ok")
 
     # ...and with give_up off (serve.py's default) the same unimproving baby
     # is never handed over: the trial stays up, the motion keeps changing,
@@ -479,7 +401,31 @@ def test_serve() -> None:
     import threading
     from urllib.request import Request, urlopen
 
-    from serve import Shared, start
+    from serve import Shared, mascot_reading, start
+
+    # -- the vision link's contract, no camera needed -------------------------
+    # An empty frame is the safety gate's input, not a distress claim...
+    from types import SimpleNamespace as _NS
+
+    from perception import nubzuki as nz
+    empty = mascot_reading([])
+    assert empty.present is False and empty.emotion == nz.UNKNOWN
+    assert empty.distress == 0.0
+    # ...a distress pose asserts only what vision may (§5: the fuss band,
+    # never across CRY_LEVEL) even though the echo recovers the sent level...
+    def sight(pose, box=(0, 0, 100, 100), eyes=2):
+        return nz.Sighting(pose=pose, why="test", box=box,
+                           valence=nz.POSES[pose][0], arousal=nz.POSES[pose][1],
+                           feat=_NS(eyes=eyes))
+    r = mascot_reading([sight("rage")])
+    assert r.emotion == nz.DISTRESS_FACE and 0.30 <= r.distress < 0.45, vars(r)
+    assert r.echo == nz.LIVE_LEVEL["rage"] and r.echo > r.distress
+    # ...sleep reads as the taper input, and the larger figure wins the frame.
+    assert mascot_reading([sight("sleeping")]).emotion == nz.SLEEP_CANDIDATE
+    two = mascot_reading([sight("rage", box=(0, 0, 10, 10)),
+                          sight("neutral", box=(0, 0, 200, 200))])
+    assert two.emotion == nz.AWAKE, "the largest figure is the reading"
+    print("  vision link   sightings -> §5-capped readings, UNKNOWN gates  -- ok")
 
     shared = Shared()
     shared.machine.auto = False   # deterministic: no organic trials mid-test
@@ -606,16 +552,29 @@ def test_serve() -> None:
         # The dashboard words motion by axis (ML sways, Z lifts, AP tilts), so
         # the frame must carry it and the script must branch on it -- without
         # this, a Z mode reads as "rocking" and the see-saw as a sideways slide.
-        for key in ("axis", "kind", "offset_mm", "research"):
+        for key in ("axis", "kind", "offset_mm", "research",
+                    "trend", "trend_s"):
             assert key in state["cradle"], f"cradle frame missing {key!r}"
+        # the trend headline: the machine's own checkpoint verdict, rendered on
+        # the baby card.  Both halves have to ship or the line reads blank.
+        # the three working bands share exactly one viewport
+        for hook in (b'id="screen"', b'id="workrow"', b'id="vitals"'):
+            assert hook in page, f"the one-screen layout lost {hook!r}"
+        for hook in (b'id="trend"', b'id="ipaddetail"'):
+            assert hook in page, f"the dashboard lost {hook!r}"
+        # the bridge card appears only once a tablet streams -- with no tablet
+        # it was five dashes holding a column of the vitals row
+        for hook in (b"trendWords", b"c.trend", b'$("ipad-card").hidden'):
+            assert hook in js, f"the dashboard script lost {hook!r}"
         for hook in (b'c.axis === "Z"', b"see-saw", b"bobbing",
                      b"offset_mm.ml", b"offset_mm.z"):
             assert hook in js, f"dashboard lost its axis wording: {hook!r}"
-        # The scenario opens quiet: the judge must say so, under the fuss line.
-        assert state["tag"]["emotion"] == "QUIET_AWAKE", \
+        # The scenario opens quiet, under the fuss line, in the five-state
+        # vocabulary the machine still speaks (perception/nubzuki.py).
+        assert state["tag"]["emotion"] == "AWAKE", \
             f"the scenario opens quiet, got {state['tag']}"
         assert state["tag"]["level"] < 0.12 and state["tag"]["present"]
-        print(f"  GET /events  keys ok, judge={state['tag']['emotion']} "
+        print(f"  GET /events  keys ok, state={state['tag']['emotion']} "
               f"level={state['tag']['level']:.2f}  -- ok")
 
         # The emotion timeline seeds itself from /history: 1 Hz samples,
@@ -693,311 +652,224 @@ def test_serve() -> None:
         urlopen(base + "/jam", timeout=5).read()
         print("  GET /auto    machine on; jam trips the safety gate  -- ok")
 
-        # The verification scenario's fussing phase (whimper bursts through the
-        # real AudioTrack -> judge) opens at t=8 s; after the jam gate above
-        # recovers and cools down, the machine must trial M10 off it -- the
-        # dashboard is now visualising VERIFY.md layer 1 live.
+        # The verification scenario's fussing phase opens at t=8 s; after the
+        # jam gate above recovers and cools down, the machine must trial M10
+        # off it.  The phase asserts its own level now that the judge is gone,
+        # so what this still proves is the *machine's* ladder, not a recognizer.
+
         snap = wait_for(lambda c: c["state"] == "trial", 60,
                         "the fussing phase to open a trial")
         assert snap["motion"] == "M10", f"fuss must trial M10, got {snap['motion']}"
         print(f"  scenario     fussing phase -> {snap['motion']} trial "
-              f"(judge: FUSS_WEAK)  -- ok")
+              f"(scripted DISTRESS_FACE)  -- ok")
     finally:
         shared.stop.set()
         server.shutdown()
 
 
-def test_watch() -> None:
-    """The five-state watcher (the team's baby recognition + motion plan)."""
-    from core.cradle import (CALM_LEVEL, CRY_LEVEL, CradleMachine, MotionEngine)
-    from perception.sense import fuse
-    from perception.watch import (AWAKE, DISTRESS_FACE, EYES_CLOSED,
-                                  MOTION_HINTS, SLEEP_CANDIDATE, STATES,
-                                  UNKNOWN, TemporalStateClassifier,
-                                  VisualObservation, distress_of)
+def test_nubzuki() -> None:
+    """The mascot recognizer, graded against the reference sheet it was built on."""
+    import re
+    from pathlib import Path
 
-    # -- the classifier itself: the teammate's own self-test, kept ---------- #
-    clf = TemporalStateClassifier(sleep_seconds=3.0)
-    t = 100.0
-    assert clf.update(VisualObservation(valid_face=False), t).state == UNKNOWN
+    import cv2
+    import numpy as np
 
-    awake = VisualObservation(valid_face=True, eye_mode="open", eye_ratio=0.27)
-    clf.update(awake, t + 0.1)
-    assert clf.update(awake, t + 0.7).state == AWAKE
+    from perception import nubzuki as nz
 
-    closed = VisualObservation(valid_face=True, eye_mode="closed",
-                               eye_ratio=0.13, mouth_ratio=0.04, motion=0.002)
-    clf.update(closed, t + 1.0)
-    assert clf.update(closed, t + 1.6).state == EYES_CLOSED
-    clf.update(closed, t + 4.1)
-    assert clf.update(closed, t + 5.0).state == SLEEP_CANDIDATE
+    sheet_path = Path("docs/Nubzuki.jpg")
+    assert sheet_path.exists(), "docs/Nubzuki.jpg is the graded fixture"
+    sheet = cv2.imread(str(sheet_path))
+    assert sheet is not None
 
-    distress = VisualObservation(valid_face=True, eye_mode="tight",
-                                 eye_ratio=0.08, mouth_ratio=0.25, motion=0.02)
-    clf.update(distress, t + 6.0)
-    clf.update(distress, t + 6.7)
-    r = clf.update(distress, t + 7.4)
-    assert r.state == DISTRESS_FACE and r.motion_hint == "GENTLE_TEST_ONLY"
-    print("  classifier   unknown/awake/closed/sleep/distress, hints  -- ok")
+    print("reference sheet")
+    seen = nz.read(sheet)
+    named = [s.pose for s in seen]
+    assert len(seen) == 17, f"the sheet draws 17 figures, found {len(seen)}"
+    # Distinctness is the real assertion.  Seventeen boxes with two of them
+    # called the same thing means a rule stopped separating something, and a
+    # count alone would not notice.
+    assert len(set(named)) == 17, \
+        f"every figure is a different pose; repeated {sorted({p for p in named if named.count(p) > 1})}"
+    assert set(named) == set(nz.POSES), f"unnamed: {sorted(set(nz.POSES) - set(named))}"
+    print(f"  segmentation {len(seen)} figures, 17 distinct poses  -- ok")
 
-    # Hysteresis: one distressed frame must not flip a committed AWAKE label,
-    # but a lost face commits UNKNOWN immediately -- the gate cannot wait.
-    clf2 = TemporalStateClassifier()
-    for i in range(4):
-        clf2.update(awake, 200.0 + 0.2 * i)
-    assert clf2.update(distress, 201.0).state == AWAKE, \
-        "one frame must not flip the committed state"
-    assert clf2.update(VisualObservation(valid_face=False), 201.1).state == UNKNOWN, \
-        "a lost face must commit UNKNOWN with no dwell"
-    print("  hysteresis   one frame cannot flip, UNKNOWN is immediate  -- ok")
+    # The grade nothing else can give us: the sheet *is* an emotion chart, so
+    # where a figure is printed states the answer independently of how it is
+    # drawn.  A misread pose lands its anchor in the wrong place, and no rule is
+    # allowed to look at position, so this cannot be satisfied by construction.
+    worst, worst_key = 0.0, ""
+    for s in seen:
+        sv, sa = nz.sheet_position(s.box)
+        err = float(np.hypot(sv - s.valence, sa - s.arousal))
+        if s.pose == "star":
+            # The one deliberate disagreement: the celebrating figure is
+            # printed *outside* the circle (radius 1.37), and web/baby.js pulls
+            # it inside so the wheel can still reach it by hand.
+            assert err < .60, f"star drifted from its clamped anchor: {err:.2f}"
+            continue
+        assert err < .25, f"{s.pose} sits {err:.2f} from where the sheet prints it"
+        if err > worst:
+            worst, worst_key = err, s.pose
+    print(f"  placement    every pose within .25 of its printed spot "
+          f"(worst {worst_key} {worst:.2f})  -- ok")
 
-    # -- the bridge: five states -> the report machine's thresholds --------- #
-    assert set(MOTION_HINTS) == set(STATES)
-    for st in (AWAKE, EYES_CLOSED, SLEEP_CANDIDATE):
-        assert distress_of(st) < CALM_LEVEL, f"{st} must leave the machine quiet"
-    for strength in (0.0, 0.45, 0.90, 1.0):
-        lvl = distress_of(DISTRESS_FACE, strength)
-        assert CALM_LEVEL <= lvl < CRY_LEVEL, (
-            f"DISTRESS_FACE alone must stay in the fuss band (gentle test "
-            f"only), got {lvl} at strength {strength}")
-    # ...and only the sound channel may cross into the cry ladder.
-    quiet = fuse(distress_of(DISTRESS_FACE, 0.9), 0.0)
-    loud = fuse(distress_of(DISTRESS_FACE, 0.9), 0.55)
-    assert quiet < CRY_LEVEL <= loud, \
-        "audio, not the face, must be what escalates past CRY_LEVEL"
-    print("  bridge       visual-only stays sub-cry; audio escalates  -- ok")
+    # Traceability: web/baby.js draws these poses and this names them.  Two
+    # tables, one sheet -- if they drift, the iPad shows one thing and the
+    # camera reports another, which is precisely the loop this exists to close.
+    js = Path("web/baby.js").read_text()
+    rig = {m[0]: (m[1], float(m[2]), float(m[3])) for m in re.findall(
+        r'\{key: "(\w+)", label: "([^"]+)", at: \[\s*([-+]?[.\d]+),\s*([-+]?[.\d]+)\]', js)}
+    assert len(rig) == 17, f"parsed {len(rig)} poses out of web/baby.js, expected 17"
+    assert set(rig) == set(nz.POSES), "pose keys differ between the rig and the recognizer"
+    for key, (label, x, y) in rig.items():
+        assert nz.LABELS[key] == label, f"{key}: rig says {label!r}, recognizer {nz.LABELS[key]!r}"
+        assert abs(nz.POSES[key][0] - x) < 1e-9 and abs(nz.POSES[key][1] - y) < 1e-9, \
+            f"{key}: anchor drifted, rig {(x, y)} vs recognizer {nz.POSES[key]}"
+    # ...and the ladder that turns a distress number into a pose, inverted here,
+    # must still be the ladder the rig climbs.
+    ladder = {m[1]: float(m[0]) for m in re.findall(
+        r'\{at: ([\d.]+), key: "(\w+)"\}', js)}
+    assert ladder == nz.LIVE_LEVEL, f"live ladder drifted: rig {ladder} vs {nz.LIVE_LEVEL}"
+    print(f"  traceability 17 anchors + {len(ladder)}-rung live ladder match web/baby.js  -- ok")
 
-    # -- through the actual machine: the motion plan, executed -------------- #
-    # DISTRESS_FACE alone: a gentle M10 trial that never climbs the ladder.
-    eng = MotionEngine()
-    box = CradleMachine(eng)
-    t2 = 0.0
+    # A camera will not hand us the sheet at print resolution.  These are the
+    # distortions a cradle-mounted lens actually applies.
+    trials = {
+        "half size": (cv2.resize(sheet, None, fx=.5, fy=.5,
+                                 interpolation=cv2.INTER_AREA), .5),
+        "1.5x": (cv2.resize(sheet, None, fx=1.5, fy=1.5), 1.5),
+        "blur 5": (cv2.GaussianBlur(sheet, (5, 5), 0), 1.0),
+        "bright": (cv2.convertScaleAbs(sheet, beta=40), 1.0),
+        "dark": (cv2.convertScaleAbs(sheet, beta=-40), 1.0),
+        "jpeg q30": (cv2.imdecode(cv2.imencode(".jpg", sheet,
+                                               [cv2.IMWRITE_JPEG_QUALITY, 30])[1], 1), 1.0),
+    }
+    for name, (img, scale) in trials.items():
+        got = nz.read(img, int(nz.MIN_FIGURE_PX * scale * scale))
+        keys = [s.pose for s in got]
+        assert len(got) == 17, f"{name}: found {len(got)} figures, not 17"
+        assert set(keys) == set(nz.POSES), \
+            f"{name}: missing {sorted(set(nz.POSES) - set(keys))}"
+    print(f"  robustness   17/17 under {', '.join(trials)}  -- ok")
 
-    def run(box, eng, until, level, present=True):
-        nonlocal t2
-        while t2 < until:
-            t2 += 0.05
-            box.tick(t2, present, level, False)
-            eng.tick(t2)
+    # docs/poses/ is what web/baby.js actually renders, which is what a camera
+    # pointed at the iPad actually sees -- the sheet above is a different
+    # drawing of the same seventeen poses.  This corpus is the one that decides
+    # whether the recogniser works in the field, and it is where the hand-written
+    # rule ladder died: 7/17, retuned to 11/17, then replaced.
+    import re
+    poses_dir = Path("docs/poses")
+    alias = {"sitheart": "sitHeart"}
+    rig = []
+    for path in sorted(poses_dir.glob("nubzuki-[0-9]*.png")):
+        key = re.match(r"nubzuki-\d+-(\w+)\.png", path.name).group(1)
+        rig.append((alias.get(key, key), cv2.imread(str(path))))
+    assert len(rig) == 17, f"expected 17 rig renderings, found {len(rig)}"
+    assert {k for k, _ in rig} == set(nz.POSES), "rig corpus does not cover the sheet"
 
-    face_only = distress_of(DISTRESS_FACE, 0.9)
-    run(box, eng, 5.0, face_only)
-    assert box.state == "trial" and eng.mode.id == "M10", \
-        f"GENTLE_TEST_ONLY must open at M10, got {box.state}/{eng.mode}"
-    run(box, eng, 45.0, face_only)
-    assert eng.mode.id in ("M10", "M05"), \
-        f"visual-only distress must never escalate, got {eng.mode.id}"
+    def name_biggest(img):
+        """What the recogniser makes of the largest figure in a frame."""
+        m = nz.figure_mask(img)
+        boxes = [b for b in nz.find_figures(img)
+                 if nz.is_nubzuki(nz.features(img, b, m))]
+        if not boxes:
+            return None
+        return nz.classify(img, max(boxes, key=lambda b: b[2] * b[3]), m)[0]
 
-    # The same face plus a crying microphone: the ladder opens one rung up.
-    eng2 = MotionEngine()
-    box2 = CradleMachine(eng2)
-    t2 = 0.0
-    run(box2, eng2, 5.0, fuse(face_only, 0.55))
-    assert eng2.mode.id == "M12", \
-        f"face+audio over CRY_LEVEL must start at M12, got {eng2.mode.id}"
+    wrong = [(k, name_biggest(img)) for k, img in rig if name_biggest(img) != k]
+    assert not wrong, f"rig renderings misread: {wrong}"
+    print(f"  rig corpus   17/17 on what web/baby.js actually draws  -- ok")
 
-    # SLEEP_CANDIDATE reads calm -> the machine's sleep taper, no alert.
-    eng3 = MotionEngine()
-    box3 = CradleMachine(eng3)
-    t2 = 0.0
-    run(box3, eng3, 4.0, 0.3)                      # a fuss opens a trial...
-    run(box3, eng3, 70.0, distress_of(SLEEP_CANDIDATE))   # ...then sleep
-    assert box3.state == "settling" and not box3.alert, \
-        f"TAPER_TO_STOP must settle quietly, got {box3.state}/{box3.alert!r}"
+    # The page draws more than the mascot: a dark "Start motion sensor" button,
+    # body text, and the feelings wheel with its own coloured ring.  Exactly one
+    # figure may come back, or the loopback reads furniture as an infant.
+    for key, img in rig:
+        assert len(nz.read(img)) == 1, f"{key}: page furniture read as a figure"
+    print("  page gate    the button, the text and the wheel all rejected  -- ok")
 
-    # UNKNOWN is not a level: present=False trips the safety gate.
-    eng4 = MotionEngine()
-    box4 = CradleMachine(eng4)
-    t2 = 0.0
-    run(box4, eng4, 3.0, 0.3)
-    run(box4, eng4, 5.0, 0.0, present=False)       # STOP_AND_CHECK
-    assert box4.state == "gate_fail", \
-        f"UNKNOWN must stop the cradle via the gate, got {box4.state}"
-    print("  machine      M10 only, +audio M12, sleep taper, gate  -- ok")
+    # Degraded past usefulness, it must *abstain* rather than guess.  A wrong
+    # confident answer propagates into the five-state mapping; a refusal reads
+    # as UNKNOWN and stops the cradle, which is the failure we want.
+    def harsh(img):
+        h, w = img.shape[:2]
+        out = cv2.warpAffine(img, cv2.getRotationMatrix2D((w / 2, h / 2), 9, 1),
+                             (w, h), borderValue=(255, 255, 255))
+        out = cv2.convertScaleAbs(out, alpha=.7, beta=45)
+        out = cv2.GaussianBlur(out, (9, 9), 0)
+        out = cv2.resize(cv2.resize(out, None, fx=.3, fy=.3), (w, h))
+        return cv2.imdecode(cv2.imencode(".jpg", out,
+                                         [cv2.IMWRITE_JPEG_QUALITY, 25])[1], 1)
 
-    # -- the report-spec layer (report sections 4.2, 4.3, 5) ---------------- #
-    from core.cradle import CALM_LEVEL as _CALM, CRY_LEVEL as _CRY
-    from perception.watch import (CRY as J_CRY, FUSS_WEAK, PAIN_SUSPECT,
-                                  QUIET_AWAKE, SLEEP_STABLE, SLEEP_TENTATIVE,
-                                  STATE_UNCLEAR, AudioFeatures, AudioTrack,
-                                  InfantJudge, Signals)
+    guessed = [(k, name_biggest(harsh(img))) for k, img in rig
+               if name_biggest(harsh(img)) not in (None, k)]
+    # The poses the machine can actually command are the ones a wrong answer
+    # would matter for; the other twelve need a hand on the wheel to appear at
+    # all.  Lounging survives this transform as Sleeping -- rotated 9 degrees
+    # and blurred, a figure lying with its eyes open is a figure lying with its
+    # eyes shut, and the eyes are the first thing the blur takes.  It is
+    # allowed because reading a hand-posed Lounging as Sleeping costs nothing;
+    # reading a *commanded* pose wrongly would.
+    reachable = set(nz.LIVE_LEVEL) | {"sleeping"}
+    bad = [g for g in guessed if g[0] in reachable]
+    assert not bad, f"a machine-reachable pose was guessed wrong: {bad}"
+    assert len(guessed) <= 1, f"too many guesses on unreadable frames: {guessed}"
+    print(f"  abstains     unreadable frames refused, not guessed "
+          f"({len(guessed)} hand-only slip: {guessed[0][0]}->{guessed[0][1]}"
+          f")  -- ok" if guessed else
+          "  abstains     0 wrong answers on frames degraded past reading  -- ok")
 
-    # 4.2: quiet / fuss / cry off duty cycle and unit length, not loudness.
-    def pattern(track, spec, t0=0.0, dt=0.1):
-        t = t0
-        feat = None
-        for seconds, level, cry in spec:
-            for _ in range(int(seconds / dt)):
-                feat = track.feed(level, cry, t)
-                t += dt
-        return feat, t
+    # The point of the whole exercise: a level goes out to the iPad, the rig
+    # draws a pose, a camera reads it back, and the number survives the trip.
+    for pose, level in nz.LIVE_LEVEL.items():
+        sighting = next(s for s in seen if s.pose == pose)
+        assert sighting.recovered_level == level
+        assert not sighting.asleep
+    assert next(s for s in seen if s.pose == "sleeping").asleep
+    assert next(s for s in seen if s.pose == "cool").recovered_level is None, \
+        "poses off the live ladder must report no level -- only a hand reaches them"
+    recovered = sorted(s.recovered_level for s in seen
+                       if s.recovered_level is not None)
+    assert recovered == [0.0, .22, .50, .78, 1.0], recovered
+    print(f"  round trip   5 ladder poses recover {recovered}, "
+          f"12 hand-only poses report no level  -- ok")
 
-    quiet_track = AudioTrack()
-    feat, _ = pattern(quiet_track, [(12.0, 0.02, 0.1)])
-    assert feat.label == "quiet" and feat.duty_10s < 0.05
+    # The mascot reader is now the only thing that fills in the cradle's
+    # five-state vocabulary, so its output has to *be* that vocabulary -- not a
+    # second, parallel opinion the decision layer would have to reconcile.
+    from core.cradle import CALM_LEVEL, CRY_LEVEL
+    states = {s.pose: s.state for s in seen}
+    assert set(states.values()) <= set(nz.STATES), \
+        f"pose mapped outside the vocabulary: {set(states.values()) - set(nz.STATES)}"
+    assert nz.five_state(None) == nz.UNKNOWN, "an empty frame must read UNKNOWN"
+    reachable = set(states.values()) | {nz.UNKNOWN}
+    assert reachable == set(nz.STATES), f"unreachable states: {set(nz.STATES) - reachable}"
+    for pose in ("rage", "angry", "crying"):
+        assert states[pose] == nz.DISTRESS_FACE, f"{pose} must be DISTRESS_FACE"
+    for pose in ("sleeping", "dreaming"):
+        assert states[pose] == nz.SLEEP_CANDIDATE, f"{pose} must be SLEEP_CANDIDATE"
+    assert states["neutral"] == nz.AWAKE and states["cool"] == nz.EYES_CLOSED
+    print(f"  five-state   all {len(nz.STATES)} reachable, "
+          f"{sum(v == nz.DISTRESS_FACE for v in states.values())} poses distress  -- ok")
 
-    fuss_track = AudioTrack()
-    # 0.3 s whimpers, long gaps: short units, low duty -> fuss, never cry
-    feat, _ = pattern(fuss_track, [(3.0, 0.02, 0.1)] +
-                      [(0.3, 0.3, 0.8), (2.7, 0.02, 0.1)] * 4)
-    assert feat.label == "fuss", f"short sparse units must read fuss, got {feat.label}"
-
-    cry_track = AudioTrack()
-    # 1.5 s wails with 0.7 s gaps: long chained units, duty >= 30% -> cry
-    feat, _ = pattern(cry_track, [(3.0, 0.02, 0.1)] +
-                      [(1.5, 0.4, 0.85), (0.7, 0.02, 0.1)] * 6)
-    assert feat.label == "cry" and feat.duty_10s >= 0.30, \
-        f"sustained chained wails must read cry, got {feat.label} {feat.duty_10s:.2f}"
-    print("  audio 4.2    quiet/fuss/cry by duty + unit length  -- ok")
-
-    # 4.3: the sleep ladder.  A blink is not closure; closure near a cry is
-    # not sleep; 10 quiet closed seconds are tentative; +60 s of stillness is
-    # stable sleep.  Feed the judge directly with synthetic Signals.
-    def sig(ts, closed, flow=0.02, voiced=False, conf=1.0, emotion=None,
-            pain=False):
-        return Signals(ts=ts, face_conf=conf, emotion=emotion,
-                       eyes_closed=closed, pain_face=pain, body_arch=None,
-                       posture_risk=None, body_flow=flow,
-                       audio=AudioFeatures(voiced=voiced))
-
-    judge = InfantJudge()
-    t3 = 0.0
-    for _ in range(20):                      # eyes open, quiet
-        r = judge.update(sig(t3, False)); t3 += 0.5
-    assert r.state == QUIET_AWAKE and r.level < _CALM
-    r = judge.update(sig(t3, True)); t3 += 0.4      # a blink
-    assert r.closed_s == 0.0, "a closure under 1 s is a blink, not sleep"
-    r = judge.update(sig(t3, False)); t3 += 0.1
-    for _ in range(30):                      # 15 s closed, quiet, still
-        r = judge.update(sig(t3, True)); t3 += 0.5
-    assert r.state == SLEEP_TENTATIVE, f"10 s closed+quiet -> tentative, got {r.state}"
-    for _ in range(130):                     # +65 s of low body flow
-        r = judge.update(sig(t3, True)); t3 += 0.5
-    assert r.state == SLEEP_STABLE, f"+60 s stillness -> stable, got {r.state}"
-    assert r.level == 0.0 and r.present
-    print("  sleep 4.3    blink filtered, 10 s tentative, 60 s stable  -- ok")
-
-    # Closure right after a cry must NOT be labelled sleep (the 2 s guard).
-    judge2 = InfantJudge()
-    t3 = 0.0
-    for _ in range(24):
-        r = judge2.update(sig(t3, True, voiced=True)); t3 += 0.5
-    assert r.state != SLEEP_TENTATIVE and r.state != SLEEP_STABLE, \
-        f"closure during vocalisation must not be sleep, got {r.state}"
-
-    # Section 5 rows: cry -> the ladder band, fuss -> gentle band, pain -> alarm,
-    # hidden face -> not present.
-    judge3 = InfantJudge()
-    cryf = AudioFeatures(voiced=True, duty_10s=0.5, unit_s=1.2, label="cry")
-    r = judge3.update(Signals(ts=1.0, face_conf=1.0, emotion="ANGRY",
-                              eyes_closed=False, pain_face=False,
-                              body_arch=None, posture_risk=None,
-                              body_flow=0.1, audio=cryf))
-    assert r.state == J_CRY and r.level >= _CRY, \
-        "audio-confirmed cry must reach the machine's cry band"
-    fussf = AudioFeatures(voiced=False, duty_10s=0.1, unit_s=0.3, label="fuss")
-    r = judge3.update(Signals(ts=2.0, face_conf=1.0, emotion="SAD",
-                              eyes_closed=False, pain_face=False,
-                              body_arch=None, posture_risk=None,
-                              body_flow=0.1, audio=fussf))
-    assert r.state == FUSS_WEAK and _CALM <= r.level < _CRY
-    r = judge3.update(sig(3.0, False, pain=True))
-    assert r.state == PAIN_SUSPECT and r.alarm, "pain must raise the alarm"
-    r = judge3.update(sig(4.0, False, conf=0.0))
-    assert r.state == STATE_UNCLEAR and not r.present
-    print("  rows 5       cry>=0.45, fuss in band, pain alarms, hidden gates  -- ok")
-
-    # The alarm through the machine: it rides the fault input and trips the
-    # gate -- interrupt and call, never soothe (5.1 rules 1-2).
-    eng5 = MotionEngine()
-    box5 = CradleMachine(eng5)
-    tt = 0.0
-    while tt < 4.0:
-        tt += 0.05
-        box5.tick(tt, True, 0.3, False)
-        eng5.tick(tt)
-    while tt < 6.0:
-        tt += 0.05
-        box5.tick(tt, True, 0.0, True)   # alarm as the fault input
-        eng5.tick(tt)
-    assert box5.state == "gate_fail", f"the alarm must trip the gate, got {box5.state}"
-    print("  alarm        pain/posture rides the fault input, gate trips  -- ok")
-
-    # -- posture rules (report 1.1), pure -- no model, no camera ------------ #
-    from perception.watch import PostureTrack, face_roll_deg
-
-    assert abs(face_roll_deg((100, 100), (160, 100))) < 1e-9
-    assert abs(abs(face_roll_deg((100, 100), (100, 160))) - 90.0) < 1e-9
-
-    pt = PostureTrack(sustain_s=2.0)
-    t4 = 0.0
-    for _ in range(10):                       # level head, good shoulders
-        risk = pt.feed(t4, 5.0, ((100, 200, 0.9), (180, 200, 0.9)), 80.0)
-        t4 += 0.3
-    assert not risk, "a supine, level baby must not raise posture risk"
-    risk = pt.feed(t4, 75.0, None, 0.0); t4 += 0.3
-    assert not risk, "one rolled frame is a squirm, not a rollover"
-    for _ in range(8):                        # sustained side-lying head
-        risk = pt.feed(t4, 75.0, None, 0.0); t4 += 0.3
-    assert risk, "2 s of side-lying head must raise posture risk"
-
-    pt2 = PostureTrack(sustain_s=2.0)
-    t4 = 0.0
-    for _ in range(10):                       # one shoulder vanished
-        risk = pt2.feed(t4, 0.0, ((100, 200, 0.9), (180, 200, 0.1)), 80.0)
-        t4 += 0.3
-    assert risk, "shoulder visibility asymmetry must raise posture risk"
-
-    pt3 = PostureTrack(sustain_s=2.0)
-    t4 = 0.0
-    for _ in range(10):                       # shoulders foreshortened
-        risk = pt3.feed(t4, 0.0, ((130, 200, 0.9), (150, 200, 0.9)), 80.0)
-        t4 += 0.3
-    assert risk, "collapsed shoulder width must raise posture risk"
-    print("  posture      supine quiet, squirm ignored, 3 cues raise risk  -- ok")
-
-    # -- the no-baby closed loop: VirtualBaby -> judge -> machine ----------- #
-    # No infant is available to test on, so the virtual one stands in: its
-    # state stream is rendered as the *sensor signals* a real baby would
-    # produce (cry duty when crying, closed eyes when asleep), judged by the
-    # report layer, fed to the machine -- and the machine's sway must actually
-    # soothe it.  This exercises recognizer + judge + machine as one loop.
-    from perception.baby import VirtualBaby
-
-    baby = VirtualBaby(seed=7)
-    eng6 = MotionEngine()
-    box6 = CradleMachine(eng6)
-    judge6 = InfantJudge()
-    trials = alerts = 0
-    prev_state = "quiet"
-    t5 = 0.0
-    while t5 < 20 * 60.0:
-        t5 += 0.25
-        b = baby.update(t5, soothing=eng6.env * eng6.amp_scale)
-        crying = b.emotion == "CRY"
-        fussing = b.emotion == "FUSS"
-        sleeping = b.emotion == "SLEEP"
-        audio6 = AudioFeatures(
-            voiced=crying, duty_10s=0.5 if crying else (0.1 if fussing else 0.0),
-            unit_s=1.2 if crying else (0.3 if fussing else 0.0),
-            label="cry" if crying else ("fuss" if fussing else "quiet"))
-        r6 = judge6.update(Signals(
-            ts=t5, face_conf=1.0, emotion="ANGRY" if crying else None,
-            eyes_closed=sleeping, pain_face=False, body_arch=None,
-            posture_risk=False, body_flow=0.3 if crying else 0.03,
-            audio=audio6))
-        box6.tick(t5, r6.present, r6.level, False)
-        eng6.tick(t5)
-        if box6.state == "trial" and prev_state != "trial":
-            trials += 1
-        prev_state = box6.state
-        if box6.alert:
-            alerts += 1
-            box6.alert = ""
-    assert trials >= 1, "20 sim-minutes with a fussy baby must open trials"
-    assert baby.state in ("CALM", "SLEEP", "FUSS", "CRY", "HUNGRY")
-    print(f"  closed loop  virtual baby -> judge -> machine: {trials} trials, "
-          f"{alerts} alerts in 20 sim-min  -- ok")
+    # The safety property the whole mapping exists to preserve: this is a
+    # *visual* channel, and §5 says vision alone never crosses CRY_LEVEL.  The
+    # recovered level may say 1.0 because that is the number the machine sent;
+    # what the reader is allowed to assert is a different, capped quantity, and
+    # conflating the two would hand the escalation ladder to a cartoon.
+    worst = max(s.asserted_level for s in seen)
+    assert worst < CRY_LEVEL, \
+        f"vision asserted {worst:.2f}, at or above CRY_LEVEL {CRY_LEVEL}"
+    for pose in ("sleeping", "dreaming", "lounging", "sitHeart"):
+        assert next(s for s in seen if s.pose == pose).asserted_level < CALM_LEVEL
+    # ...and the three upset poses keep their order inside the band they share.
+    upset = [next(s for s in seen if s.pose == p).asserted_level
+             for p in ("crying", "angry", "rage")]
+    assert upset[0] < upset[1] < upset[2], f"distress order lost: {upset}"
+    rage = next(s for s in seen if s.pose == "rage")
+    print(f"  ceiling      worst assertable {worst:.2f} < CRY_LEVEL {CRY_LEVEL} "
+          f"(rage recovers {rage.recovered_level}, may assert "
+          f"{rage.asserted_level:.2f})  -- ok")
 
 
 def test_animate() -> None:
@@ -1669,7 +1541,17 @@ def test_policy() -> None:
         assert hook in page, f"learning panel lost {hook!r}"
     for hook in ("S.policy", "drawBrain", "RANK_BANDS", "/policy?set=",
                  "/taste?", "drawOrb", "fillTaste", "npath", "ipad.felt",
-                 "drawPlan", "plan.candidates"):
+                 "drawPlan", "plan.candidates",
+                 # the planner card follows the *brain*, not the momentary
+                 # payload -- keyed to candidates it re-flowed the row between
+                 # decisions, and the ladder branch left a stale card up
+                 'S.policy.brain === "dream"', "drawPlan(null)",
+                 # the planner's field, plotted on the timeline's own comfort
+                 # axis -- six near-identical bars showed almost nothing
+                 "dreamStrip", "plan.strip",
+                 # the taste editor re-seeds when the server's taste changes,
+                 # so Randomize cannot leave the selects contradicting it
+                 "tasteSig"):
         assert hook in js, f"learning panel script lost {hook!r}"
 
     # The planner shows its work: the plan block carries every number the
@@ -1683,6 +1565,12 @@ def test_policy() -> None:
     assert plan["chosen"] == pick and plan["dreamed"] == len(CANDIDATES)
     assert len(plan["candidates"]) == DreamBrain.SHOW
     assert plan["candidates"][0]["id"] == pick, "the drawn list must be ranked"
+    # the strip plots the *whole* field, so the reader can see whether the
+    # candidates are spread (a real preference) or bunched (a cold model)
+    assert len(plan["strip"]) == len(CANDIDATES) - len(plan["vetoed"]), \
+        "the strip must carry every motion that was actually dreamed"
+    assert plan["strip"][0] == [pick, plan["candidates"][0]["fit"]], \
+        "the strip is [id, predicted level], best first"
     assert all(k in plan["candidates"][0]
                for k in ("fit", "switch", "resist", "new", "gain", "cost")), \
         "every cost term the doc lists must reach the panel"
@@ -1768,13 +1656,11 @@ def test_policy() -> None:
 # --------------------------------------------------------------------------- #
 SUITES = {
     "listen": test_listen,
-    "sense": test_sense,
-    "models": test_models,
     "cradle": test_cradle,
     "baby": test_baby,
     "policy": test_policy,
     "m50": test_m50,
-    "watch": test_watch,
+    "nubzuki": test_nubzuki,
     "animate": test_animate,
     "serve": test_serve,
     "bridge": test_bridge,

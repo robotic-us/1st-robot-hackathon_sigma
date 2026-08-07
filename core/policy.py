@@ -900,6 +900,12 @@ class DreamBrain:
                 {"id": mid, "cost": round(cost, 3), **terms}
                 for cost, mid, terms in ranked[:self.SHOW]
             ],
+            # The whole dreamed field, two numbers per motion, so the panel can
+            # plot where *all* of them were predicted to land rather than the
+            # six that happened to win.  Compact on purpose: this rides every
+            # SSE frame, and the detailed terms above are only worth sending
+            # for the handful the reader will actually read.
+            "strip": [[mid, round(terms["fit"], 3)] for _, mid, terms in ranked],
         }
 
 

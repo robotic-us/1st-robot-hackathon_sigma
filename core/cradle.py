@@ -641,9 +641,29 @@ class CradleMachine:
         self._rung = 0
         self._resumed = False
         self._cooldown_until = 0.0
+        self._trend = ""           # "" | new | improving | holding | worse
+        self._trend_t0 = 0.0
 
     def _log(self, text: str) -> None:
         self.events.append(text)
+
+    def _set_trend(self, kind: str, now: float, restart: bool = False) -> None:
+        """Keep the checkpoint verdict instead of discarding it.
+
+        The machine already decides improving / not improving / worse -- it is
+        what every checkpoint branches on -- but it only ever said so in a log
+        line.  A caregiver's actual question is "is this working?", so the
+        verdict is worth a value.  Only a *change* restarts the clock, so the
+        dashboard counts the run rather than the tick.
+
+        ``restart`` is for the sites that put a *different motion* on: "new"
+        means "just started", so its clock has to reset even when the previous
+        verdict happened to be "new" as well.  Checkpoint verdicts don't
+        restart -- that is what lets the panel say "settling, 40 s".
+        """
+        if restart or kind != self._trend:
+            self._trend = kind
+            self._trend_t0 = now
 
     def _alert(self, text: str) -> None:
         self.alert = text
@@ -660,6 +680,10 @@ class CradleMachine:
             "no_improve_s": round(self._no_improve_s, 1) if self.give_up else 0,
             "give_up": self.give_up,
             "alert": self.alert,
+            # the checkpoint verdict, and how long it has held.  Gated on the
+            # state here, so no other branch has to remember to clear it.
+            "trend": self._trend if self.state == "trial" else "",
+            "trend_s": round(now - self._trend_t0, 1) if self.state == "trial" else 0,
         }
 
     # -- one tick of the ladder ---------------------------------------------- #
@@ -710,6 +734,7 @@ class CradleMachine:
             if self.ema > 1.3 * self._baseline + 0.05:
                 self._worse_t += dt
                 if self._worse_t >= WORSE_SUSTAIN_S:
+                    self._set_trend("worse", now)
                     if self.give_up:
                         self._abort(now, "worse during trial")
                         return
@@ -722,6 +747,7 @@ class CradleMachine:
                 self._check_t = now
                 if self.ema <= 0.7 * self._baseline:
                     self._deadline = now + self._no_improve_s
+                    self._set_trend("improving", now)
                     self._log(f"trial improving (ema {self.ema:.2f}) -- holding "
                               f"{TRIAL_LADDER[self._rung]}")
                 elif (self.ema >= CRY_LEVEL
@@ -730,6 +756,7 @@ class CradleMachine:
                     self._rung = min(self._rung + 1, len(TRIAL_LADDER) - 1)
                     step = self._trial_step(now)
                     self.engine.command(step, now, ramp_s=self._step_ramp_s)
+                    self._set_trend("new", now, restart=True)
                     self._log(f"no improvement at {self.check_s:.0f} s -- "
                               f"one step up to {step}")
                 elif not self.give_up:
@@ -738,6 +765,10 @@ class CradleMachine:
                     # the same one until the 5-minute cap
                     self._retry(now, f"no improvement at {self.check_s:.0f} s "
                                      "on")
+                else:
+                    # give_up on, below the cry line: the ladder holds what it
+                    # has and lets _deadline run out.  Nothing to do but say so.
+                    self._set_trend("holding", now)
             if self.give_up and now >= self._deadline:
                 self._abort(now, f"no improvement in {self._no_improve_s:.0f} s")
             elif now - self._trial_t0 >= TRIAL_CAP_S:
@@ -758,6 +789,7 @@ class CradleMachine:
                     self._trial_t0 = self._check_t = now
                     self._deadline = now + self._no_improve_s
                     self._baseline = max(self.ema, 0.05)
+                    self._set_trend("new", now, restart=True)
                     self._log("fussing during taper -- one micro-resume (M08)")
                     return
             if not self.engine.active:
@@ -790,6 +822,7 @@ class CradleMachine:
         self._check_t = now
         self._worse_t = 0.0
         self._baseline = max(self.ema, 0.05)
+        self._set_trend("new", now, restart=True)
         if step != was:
             self.engine.command(step, now, ramp_s=self._step_ramp_s)
             self._log(f"{why} {was} -- trying {step}, not handing over")
@@ -807,6 +840,7 @@ class CradleMachine:
         self._baseline = max(self.ema, 0.05)
         self._worse_t = 0.0
         self._resumed = False
+        self._set_trend("new", now, restart=True)
         # the banner states a *live* condition: the machine has taken the baby
         # back, so the previous hand-over is history, not the current ask
         self.alert = ""

@@ -19,16 +19,25 @@ function put(id, html) {
 
 /* CSS tokens, cached until the colour scheme flips. */
 let TOKENS = {};
-const cssv = name => name in TOKENS ? TOKENS[name]
-  : (TOKENS[name] = getComputedStyle(document.documentElement)
-                      .getPropertyValue(name).trim());
+/* A miss is never cached.  getPropertyValue returns "" if it is asked before
+   the stylesheet has resolved, and the old cache stored that "" for the life
+   of the page -- so one unlucky first frame permanently killed a token.  It
+   showed up as the safety meters falling back to the accent blue: setProperty
+   with "" *removes* the custom property, so `var(--fill, var(--accent))` took
+   the fallback and the bar read "cradle action" instead of "inside limits". */
+const cssv = name => {
+  if (TOKENS[name]) return TOKENS[name];
+  const v = getComputedStyle(document.documentElement)
+              .getPropertyValue(name).trim();
+  if (v) TOKENS[name] = v;
+  return v;
+};
 matchMedia("(prefers-color-scheme: dark)")
   .addEventListener("change", () => { TOKENS = {}; tlDirty = true; });
 
 /* Report thresholds, mirrored from core/cradle.py and core/policy.py so the
    words on this page and the machine's decisions agree. */
 const CALM_LEVEL = 0.12, CRY_LEVEL = 0.45;
-const GATE_RECOVER_S = 2;   // trial cadence now rides in c.check_s / c.no_improve_s
 const SWAY_CAP_MM = 30, ACC_CAP_G = 0.05;
 const RANK_BANDS = [0.12, 0.30, 0.45, 0.62];          // rank edges (policy.py)
 const RANK_WORD = ["happy", "fussing", "crying", "crying hard", "very upset"];
@@ -110,36 +119,46 @@ function cradleWords(c) {
   return [`${pace}${wide} rocking`, `one sway every ${every} s · ${mm} mm each way`];
 }
 
-function nextWords(c) {
+/* The panel's headline answer to "is this working?".
+   `c.trend` is the machine's own checkpoint verdict (CradleMachine._set_trend),
+   not a second opinion computed here -- the words on screen and the branch the
+   cradle actually took can never disagree.  Identity is carried three ways,
+   glyph + word + colour, so it survives colour-blindness and a dead pixel.
+   Every state answers, so the line is always present and the card never
+   re-flows underneath it. */
+const TREND = {improving: ["↓", "settling", "--r0"],
+               holding:   ["→", "not improving yet", "--warn"],
+               worse:     ["↑", "getting worse", "--r3"],
+               new:       ["·", "just started", "--faint-text"]};
+
+function trendWords(c) {
   if (c.state === "gate_fail")
-    return "Stopped for safety. Rocking only restarts once the baby has been "
-         + `visible again for ${GATE_RECOVER_S} seconds.`;
-  if (!c.auto)
-    return "Automatic care is off. The cradle does only what you press, "
-         + "though the safety gate still overrides it.";
-  if (c.state === "trial") {
-    const check = c.check_s ?? 30, noImp = c.no_improve_s ?? 2 * check;
-    const trying = `Trying this for ${Math.round(c.trial_s)} s. Re-decided `
-                 + `every ${Math.round(check)} s`;
-    // give_up off (serve.py's default): there is no hand-over to count down to
-    if (c.give_up === false)
-      return trying + "; a motion that is not helping gets swapped for "
-           + "another rather than stopping.";
-    const left = Math.max(0, noImp - c.trial_s);
-    return trying + `; if nothing helps for ${Math.round(left)} s `
-         + "the cradle stops and calls for you.";
-  }
+    return ["!", "stopped for safety", "--critical", ""];
   if (c.state === "settling")
-    return "The baby has been calm for a while, so the cradle is winding "
-         + "down towards sleep.";
-  return "Watching. If the baby starts fussing, the cradle begins rocking "
-       + "on its own.";
+    return ["↓", "winding down to sleep", "--sleep", ""];
+  if (c.state !== "trial")
+    return ["·", "watching — not rocking", "--faint-text", ""];
+  const [glyph, word, tok] = TREND[c.trend] || TREND.new;
+  // under a second reads as noise on a 1 Hz refresh, so it stays blank
+  const secs = (c.trend_s ?? 0) >= 1 ? `${Math.round(c.trend_s)} s` : "";
+  return [glyph, word, tok, secs];
 }
 
 function setMeter(id, frac, color) {
   const fill = $(id);
   fill.style.width = (clamp(frac, 0, 1) * 100) + "%";
-  fill.parentNode.style.setProperty("--fill", color);
+  /* Only write the colour when it actually changes.  Re-setting the custom
+     property on every frame restarted the 0.3 s background transition ~20
+     times a second, so the fill never got more than a percent away from its
+     starting value -- the safety meters sat on the `var(--fill, var(--accent))`
+     fallback and read "cradle action" blue while the machine was reporting
+     "inside limits" green.  Measured: rgb(1,103,199) against a target of
+     rgb(31,125,54), with the safety dot beside them already correct. */
+  const box = fill.parentNode;
+  if (box.dataset.fill !== color) {
+    box.dataset.fill = color;
+    box.style.setProperty("--fill", color);
+  }
 }
 
 /* ---- the motion library drawer ------------------------------------------ */
@@ -192,7 +211,8 @@ function markActiveMotion() {
 
 /* ---- the stream ---------------------------------------------------------- */
 const es = new EventSource("/events");
-es.onopen  = () => { $("conn").textContent = "live";
+// healthy is just the green dot; only trouble gets words
+es.onopen  = () => { $("conn").textContent = "";
                      $("conn").classList.add("live");
                      $("conn").classList.remove("down"); };
 es.onerror = () => { $("conn").textContent = "reconnecting — numbers may be stale";
@@ -218,17 +238,19 @@ function updatePanels() {
   // baby card
   $("hdot").style.background = c.state === "gate_fail" ? cssv("--critical") : col;
   put("hbaby", esc(babyWord(S.tag)));
-  put("hbabysub", esc(`recognizer: ${S.tag.emotion || "level only"}`
-                      + (S.tag.name ? ` · ${S.tag.name}` : "")));
+  const [tGlyph, tWord, tTok, tSecs] = trendWords(c);
+  $("trend").style.setProperty("--tc", cssv(tTok));
+  put("trend", `<span class="g" aria-hidden="true">${tGlyph}</span>`
+             + `${esc(tWord)}${tSecs ? `<b>${tSecs}</b>` : ""}`);
   put("lvlval", lvl.toFixed(2));
   setMeter("lvlbar", lvl, !S.tag.present ? cssv("--faint")
     : lvl >= CRY_LEVEL ? cssv("--r3")
     : lvl >= CALM_LEVEL ? cssv("--r1") : cssv("--r0"));
+  /* The rank used to paint a 3px stripe along the card's top edge.  DESIGN.md
+     allows no decorative chrome, and the hero already carries rank three
+     other ways -- the orb's colour, the state word, and the filled ladder
+     step -- so the stripe went rather than being restyled. */
   const rank = rankOf(ema);
-  /* the card's top edge carries the rank: the one thing on this panel that is
-     legible from the far side of the room, before any of the words are */
-  $("card-baby").style.setProperty("--edge",
-    c.state === "gate_fail" ? cssv("--critical") : rankColor(rank));
   put("ladder", RANK_SHORT.map((w, i) =>
       `<span class="r${i}${i === rank ? " on" : ""}">${w}</span>`).join(""));
 
@@ -254,22 +276,28 @@ function updatePanels() {
   setMeter("swaybar", swayFrac, safeCol);
   put("accval", `${c.a_peak_g.toFixed(3)} <small>of ${ACC_CAP_G} g</small>`);
   setMeter("accbar", accFrac, safeCol);
-  put("hwhy", esc(nextWords(c)));
 
   const alarm = !!S.tag.alarm;
+  /* the chip appears only when it has something to say -- "within safe
+     limits" all day is wallpaper, and wallpaper trains the eye to skip the
+     one chip that must never be skipped */
+  const safeMsg = alarm ? "pain/posture alarm — stopping"
+      : c.state === "gate_fail" ? "safety gate tripped — winding down"
+      : worst > 0.8 ? "close to the limit, still inside it" : "";
+  $("safechip").hidden = !safeMsg;
   $("safedot").style.background =
       alarm || c.state === "gate_fail" ? cssv("--critical") : safeCol;
-  put("safesay", alarm ? "pain/posture alarm — stopping"
-      : c.state === "gate_fail" ? "safety gate tripped — winding down"
-      : worst > 0.8 ? "close to the limit, still inside it"
-                    : "within safe limits");
-  $("scen").textContent = S.tag.phase ? `scenario · ${S.tag.phase}` : "";
+  if (safeMsg) put("safesay", safeMsg);
 
   // cradle-mounted iPad IMU; this is physical exposure for the virtual baby,
   // not a substitute for the safety envelope above.
   const ipad = S.ipad || {connected:false, strength:0};
   $("ipaddot").style.background = ipad.connected ? cssv("--good") : cssv("--faint");
   put("ipadstate", ipad.connected ? "sensor live" : "not connected");
+  /* Nothing to say until a tablet streams: without one -- every --baby and
+     --verify run -- the card was five dashes and a paragraph of instructions
+     holding a column of the vitals row.  It appears when it has data. */
+  $("ipad-card").hidden = !ipad.connected;
   put("ipadstrength", ipad.connected
       ? `${Math.round(ipad.strength * 100)} <small>%</small>` : "–");
   setMeter("ipadbar", ipad.connected ? ipad.strength : 0,
@@ -294,8 +322,7 @@ function updatePanels() {
   put("jam", S.jam ? "<b>Jammed — release</b><i>j</i>"
                    : "<b>Simulate a jam</b><i>j</i>");
   $("auto").classList.toggle("on", c.auto);
-  $("auto").setAttribute("aria-pressed", c.auto);
-  put("auto", `<b>Automatic care</b><i>${c.auto ? "on" : "off"}</i>`);
+  $("auto").setAttribute("aria-checked", c.auto);
 
   // event log (newest first; identical on most frames)
   const logKey = S.events.length + "|" + (S.events[0] || "");
@@ -304,7 +331,7 @@ function updatePanels() {
     put("log", S.events.map(t => `<div>${esc(t)}</div>`).join(""));
   }
 
-  drawBrain(rank);
+  drawBrain();
   drawTaste();
 
   if (mResearch !== c.research) { mResearch = c.research; drawMotions(); }
@@ -326,31 +353,20 @@ const BRAIN_NAME = {reflex: "Local algorithm",
                     dream: "DREAM-Chunk planner",
                     ollama: "Local LLM",
                     claude: "Claude (Anthropic API)"};
-const BRAIN_SUB = {reflex: "taught strategy in code — free, offline, deterministic",
-                   dream: "dreams all 26 motions forward through a learned "
-                        + "comfort model and takes the best — free, offline",
-                   ollama: "LLM on this machine via Ollama — free, private; "
-                         + "falls back to the ladder if unreachable",
-                   claude: "paid cloud LLM — falls back to the ladder on any "
-                         + "API failure"};
 
 /* Switch brains live: /policy swaps the advisor (fresh memory each time). */
 document.querySelectorAll("#brainsel [data-b]").forEach(b => b.onclick = () =>
   fetch("/policy?set=" + b.dataset.b));
 
-function drawBrain(rank) {
+function drawBrain() {
   const p = S.policy;
   const current = p ? p.brain : "off";
   document.querySelectorAll("#brainsel [data-b]").forEach(b =>
     b.classList.toggle("on", b.dataset.b === current));
   if (!p) {
     put("brainname", "Fixed ladder");
-    put("brainkind", "the report's own escalation (M10 → M12 → M13 → M16) — "
-                   + "safe, but it never learns this baby");
     put("brainerr", "");
-    put("brainrank", esc(RANK_WORD[rank]));
     put("brainlast", "—");
-    put("brainscen", "—");
     put("feed", `<div class="empty">Fixed-ladder mode: the report's state
       machine picks motions (M10 → M12 → M13 → M16) with no memory of this
       baby. Start serve.py with <b>--policy reflex</b> (local algorithm) or
@@ -358,15 +374,15 @@ function drawBrain(rank) {
       + ladderEvents());
     put("scores", `<div class="empty">nothing to learn in fixed-ladder mode</div>`);
     put("trail", "");
+    // this branch used to return without ever calling drawPlan, so switching
+    // Planner -> Ladder left a stale planner card sitting on the row
+    drawPlan(null);
     return;
   }
 
   // the brain card
   put("brainname", esc(BRAIN_NAME[p.brain] || p.brain));
-  put("brainkind", esc(BRAIN_SUB[p.brain] || ""));
   put("brainerr", p.error ? "⚠ " + esc(p.error) + " — using the ladder" : "");
-  put("brainrank", esc(RANK_WORD[rank]));
-  put("brainscen", String(p.scenarios));
   const last = p.steps[p.steps.length - 1];
   put("brainlast", last
       ? esc(`${last.motion} — ${last.after === null ? "playing now"
@@ -384,19 +400,19 @@ function drawBrain(rank) {
     const after = pending ? "…" : RANK_WORD[s.after];
     return `<div class="dcard"><div class="mid">tried <b>${s.motion}</b>
         <div class="why">${RANK_WORD[s.before]} → ${after}</div></div>${badge}</div>`;
-  }).join("") : `<div class="empty">no decisions yet — the brain is asked
-      when the baby first fusses</div>`);
+  }).join("") : `<div class="empty">Armed — the brain is asked the moment the
+      baby starts fussing.</div>`);
 
-  // learned preferences: diverging bars, helps right / worsens left
+  // learned preferences: one pill per motion, coloured by its verdict --
+  // green helped, red made it worse, grey did nothing
   const rows = Object.entries(p.scores).sort((a, b) => b[1] - a[1]);
-  put("scores", rows.length ? rows.map(([m, v]) => {
-    const w = clamp(Math.abs(v) / 2, 0, 1) * 50;
-    const bar = v >= 0 ? `<i class="up" style="width:${w}%"></i>`
-                       : `<i class="dn" style="width:${w}%"></i>`;
-    return `<div class="srow"><b>${m}</b><span class="dbar">${bar}</span>
-        <span class="verdict">${v > 0 ? "+" : ""}${v.toFixed(1)} · ${verdictWord(v)}</span></div>`;
-  }).join("") : `<div class="empty">nothing tried yet — learning starts at
-      the first fuss</div>`);
+  put("scores", rows.length ? `<div class="pills">` + rows.map(([m, v]) => {
+    const cls = v > 0 ? "up" : v < 0 ? "dn" : "flat";
+    return `<span class="spill ${cls}"
+        title="${m}: ${v.toFixed(2)} mean comfort change · ${verdictWord(v)}">
+        ${m}<b>${v > 0 ? "+" : ""}${v.toFixed(1)}</b></span>`;
+  }).join("") + `</div>` : `<div class="empty">Nothing scored yet — a motion
+      earns a score once it has played at strength.</div>`);
   put("trail", p.steps.slice(-6).map(s =>
       `${s.motion} ${s.before}→${s.after ?? "…"}`).join("  ·  "));
   drawPlan(p.plan);
@@ -407,49 +423,110 @@ const verdictWord = d => d > 0 ? "helps" : d < 0 ? "worse" : "no effect";
 /* The one brain that can show its work: every candidate it dreamed, the
    comfort each was predicted to reach, and the three cost terms that moved
    it off that prediction.  Only the numbers the pick actually used. */
+/* ---- the dream, as a field ----------------------------------------------
+   What DREAM-Chunk actually does is score *every* candidate against a
+   predicted comfort, then take the best.  The old drawing showed six of them
+   as near-identical bars and, at DEPTH=1, a "tree" whose branches were all
+   straight lines to the same horizon -- it looked like deliberation and
+   carried almost none.
+
+   This plots the whole field on the axis the reader already knows: the
+   timeline's comfort scale, same bands, same colours, same direction.  One
+   tick per dreamed motion at its predicted level; the pick is labelled, what
+   is playing is ringed, and where the baby is now is a line.  You can see at
+   a glance whether the field is spread (a real preference) or bunched (a cold
+   model with nothing to say yet), which is the one thing the bars hid. */
+function dreamStrip(plan) {
+  const field = plan.strip && plan.strip.length ? plan.strip
+              : (plan.candidates || []).map(c => [c.id, c.fit]);
+  if (!field.length) return "";
+  const W = 300, H = 72, L = 4, R = 4, TOP = 20, ROW = 30;
+  const hi = Math.max(plan.level, ...field.map(f => f[1]), 0.7);
+  const x = v => L + (W - L - R) * clamp(v / hi, 0, 1);
+  const out = [];
+
+  // the comfort bands, as on the timeline -- the reader's existing axis
+  RANK_BANDS.forEach((edge, i) => {
+    if (edge > hi) return;
+    out.push(`<rect x="${x(i ? RANK_BANDS[i - 1] : 0).toFixed(1)}" y="${TOP}"
+        width="${(x(edge) - x(i ? RANK_BANDS[i - 1] : 0)).toFixed(1)}"
+        height="${ROW}" fill="${rankColor(i)}" opacity=".11"/>`);
+  });
+  const lastEdge = RANK_BANDS[RANK_BANDS.length - 1];
+  if (lastEdge < hi)
+    out.push(`<rect x="${x(lastEdge).toFixed(1)}" y="${TOP}"
+        width="${(x(hi) - x(lastEdge)).toFixed(1)}" height="${ROW}"
+        fill="${rankColor(RANK_BANDS.length)}" opacity=".11"/>`);
+
+  // where the baby is right now: everything left of this is an improvement
+  out.push(`<line class="nowline" x1="${x(plan.level).toFixed(1)}" y1="${TOP - 6}"
+      x2="${x(plan.level).toFixed(1)}" y2="${TOP + ROW + 5}"/>`);
+  out.push(`<text class="tlab" x="${x(plan.level).toFixed(1)}" y="${TOP - 10}"
+      text-anchor="middle">now</text>`);
+
+  // one tick per dreamed motion, the pick and the playing one called out
+  for (const [id, fit] of field) {
+    const win = id === plan.chosen, playing = id === plan.playing;
+    out.push(`<line class="tick${win ? " win" : playing ? " playing" : ""}"
+        x1="${x(fit).toFixed(1)}" y1="${TOP + 3}"
+        x2="${x(fit).toFixed(1)}" y2="${TOP + ROW - 3}">
+        <title>${esc(id)} → ${fit.toFixed(2)} (${RANK_WORD[rankOf(fit)]})</title></line>`);
+  }
+  const pick = field.find(f => f[0] === plan.chosen);
+  if (pick)
+    out.push(`<text class="pick" x="${x(pick[1]).toFixed(1)}" y="${TOP + ROW + 17}"
+        text-anchor="middle">${esc(pick[0])}</text>`);
+
+  // the blueprint frame: the band reads as an instrument, not a smear
+  out.push(`<rect class="frame" x="${L}" y="${TOP}" width="${W - L - R}"
+      height="${ROW}" fill="none"/>`);
+
+  return `<svg class="strip" viewBox="0 0 ${W} ${H}" role="img"
+      aria-label="predicted comfort for every dreamed motion">${out.join("")}</svg>`;
+}
+
 function drawPlan(plan) {
   const card = $("card-plan");
-  card.hidden = !plan || !plan.candidates || !plan.candidates.length;
-  $("brainrow").classList.toggle("wide3", !card.hidden);
-  if (card.hidden) return;
-
-  put("planwhen", `${plan.dreamed} motions · ${plan.seqLabel
-      || (plan.plans && plan.plans.length
-          ? `${plan.plans[0].seq.length} × ${plan.slot_s}s`
-          : "")} · ${plan.horizon_s}s ahead`);
+  /* Visibility follows the *brain*, which is stable, not the momentary plan
+     payload: keyed to plan.candidates the card vanished between decisions and
+     re-flowed the whole row every few seconds. */
+  const on = !!S.policy && S.policy.brain === "dream";
+  card.hidden = !on;
+  // the stage band goes two-up or three-up with it
+  $("stage").classList.toggle("withplan", on);
+  if (!on) return;
+  if (!plan || !plan.candidates || !plan.candidates.length) {
+    put("plans", ""); put("plan", ""); put("planveto", "");
+    return;
+  }
   // A cold model predicts the same future for everything it has not tried.
   // Say so — a list of equal costs is not a considered ranking, and the
   // panel should not let it look like one.
   const tied = plan.candidates.length > 1
     && Math.abs(plan.candidates[0].cost
                 - plan.candidates[plan.candidates.length - 1].cost) < 0.001;
-  put("planhead", `From <b>${RANK_WORD[rankOf(plan.level)]}</b>
-      (level ${plan.level.toFixed(2)}) it dreamed whole schedules forward and
-      committed the first motion, <b>${esc(plan.chosen || "—")}</b>.`
-      + (tied ? ` The leaders all score the same — these are still untried,
-          so it is exploring in taught order.` : "")
-      + ` <span class="sub2">Only the first motion is played; the rest is
-          re-dreamed at the next decision.</span>`);
 
-  put("plans", planTree(plan));
+  put("plans", dreamStrip(plan));
 
-  // bars are the *predicted* level, so shorter is calmer; the ranking is by
-  // total cost, which is why a shorter bar can still lose
-  const worst = Math.max(plan.level, ...plan.candidates.map(c => c.fit)) || 1;
-  put("plan", plan.candidates.map(c => {
+  /* The podium, as a ruled table.  The old rows drew a bar per candidate --
+     but the bar restated the strip's x-position in a worse encoding, three
+     near-identical lengths in the same rank colour, with the verdict text
+     wrapping to three lines beside them.  A table row carries the same four
+     facts flat: id, predicted level, the rank word in its colour, and the
+     one reason that actually decided it. */
+  put("plan", plan.candidates.slice(0, 3).map(c => {
     const win = c.id === plan.chosen;
-    const why = [];
-    if (c.new) why.push("untried");
-    if (c.switch) why.push("a change"); else if (c.id === plan.playing) why.push("playing now");
-    if (c.resist > 0.001) why.push("used lately");
+    const tag = win ? "picked"
+        : c.id === plan.playing ? "playing now"
+        : c.new ? "untried"
+        : c.resist > 0.001 ? "used lately" : "";
     const title = `predicted ${c.fit.toFixed(2)} · gain ${c.gain}`
                 + ` · cost ${c.cost.toFixed(2)}`;
     return `<div class="prow${win ? " win" : ""}" title="${title}">
         <b>${c.id}</b>
-        <span class="dbar plain"><i style="width:${clamp(c.fit / worst, 0, 1) * 100}%;
-             background:${rankColor(rankOf(c.fit))}"></i></span>
-        <span class="verdict">→ ${RANK_WORD[rankOf(c.fit)]}${
-          why.length ? ` · ${why.join(", ")}` : ""}</span></div>`;
+        <span class="plvl">${c.fit.toFixed(2)}
+          <em style="color:${rankColor(rankOf(c.fit))}">${RANK_WORD[rankOf(c.fit)]}</em></span>
+        ${tag ? `<span class="ptag">${tag}</span>` : ""}</div>`;
   }).join(""));
   // taste and wear are drawn apart on purpose: recording "worn out" as
   // "disliked" is what made a carried model talk itself out of every motion
@@ -457,7 +534,7 @@ function drawPlan(plan) {
   const worn = d && d.wear ? Object.entries(d.wear)
       .sort((a, b) => b[1] - a[1]).slice(0, 4) : [];
   put("planveto",
-      (worn.length ? `worn right now (recovers with rest): ` + worn.map(
+      (worn.length ? `worn: ` + worn.map(
           ([m, w]) => `${m} ${Math.round(w * 100)}%`).join(", ") : "")
       + (plan.vetoed.length
          ? `${worn.length ? " · " : ""}vetoed as disliked: `
@@ -465,95 +542,6 @@ function drawPlan(plan) {
          : ""));
 }
 
-/* The dream, drawn as the tree it actually is.
-   A plain node tree would waste the strongest axis, so the geometry carries
-   the data: x is time ahead, y is the comfort each future is predicted to
-   reach, and the branches fan from where the baby is right now.  The
-   steepest line down is the plan it committed to — the shape *is* the
-   argument.  Paths sharing a prefix share their edges, which is what makes
-   it a tree and not a fan. */
-function planTree(plan) {
-  const plans = plan.plans || [];
-  if (!plans.length) return "";
-  const depth = Math.max(...plans.map(q => q.seq.length));
-  const W = 300, H = 34 + depth * 34, L = 6, R = 40, TOP = 16, BOT = 10;
-  const maxY = Math.max(plan.level, ...plans.map(q => Math.max(...q.trace)));
-  const scale = v => TOP + (H - TOP - BOT) * (1 - clamp(v / (maxY || 1), 0, 1));
-  const xAt = i => L + (W - L - R) * (i / depth);
-  const rootY = scale(plan.level);
-
-  // nodes keyed by their path prefix, so shared prefixes share a point
-  const nodes = new Map([["", {x: xAt(0), y: rootY, id: "now", win: true}]]);
-  const edges = [];
-  plans.forEach((q, qi) => {
-    let key = "";
-    q.seq.forEach((m, k) => {
-      const parent = key;
-      key += (key ? "," : "") + m;
-      if (!nodes.has(key))
-        nodes.set(key, {x: xAt(k + 1), y: scale(q.trace[k]), id: m,
-                        win: qi === 0, lvl: q.trace[k]});
-      else if (qi === 0) nodes.get(key).win = true;
-      if (!edges.some(e => e.to === key))
-        edges.push({from: parent, to: key, win: qi === 0,
-                    tip: `${q.seq.slice(0, k + 1).join(" → ")} · dreamed `
-                       + `${RANK_WORD[rankOf(q.trace[k])]}`});
-      else if (qi === 0) edges.find(e => e.to === key).win = true;
-    });
-  });
-
-  // the comfort bands the rest of the dashboard already uses as its ladder
-  let svg = `<svg viewBox="0 0 ${W} ${H}" class="tree" role="img"
-      aria-label="the futures the planner dreamed, best first">`;
-  RANK_BANDS.forEach((edge, i) => {
-    const y = scale(edge);
-    if (y > TOP && y < H - BOT)
-      svg += `<line x1="${L}" y1="${y.toFixed(1)}" x2="${W - R}"
-              y2="${y.toFixed(1)}" class="band"/>`
-           + `<text x="${W - R + 4}" y="${(y + 3).toFixed(1)}"
-              class="bandlab">${RANK_SHORT[i]}</text>`;
-  });
-  edges.forEach(e => {
-    const a = nodes.get(e.from), b = nodes.get(e.to);
-    svg += `<path d="M${a.x.toFixed(1)} ${a.y.toFixed(1)}
-            C${((a.x + b.x) / 2).toFixed(1)} ${a.y.toFixed(1)},
-             ${((a.x + b.x) / 2).toFixed(1)} ${b.y.toFixed(1)},
-             ${b.x.toFixed(1)} ${b.y.toFixed(1)}"
-            class="edge${e.win ? " win" : ""}"><title>${esc(e.tip)}</title></path>`;
-  });
-  // Labels last, and only where they fit. Early on every future is identical,
-  // so the branches sit on top of each other — drawing all 18 ids there gives
-  // an unreadable pile. The committed path is labelled first and keeps its
-  // place; anything landing on top of an existing label is dropped.
-  const placed = [];
-  const fits = (x, y) => !placed.some(p =>
-    Math.abs(p.x - x) < 22 && Math.abs(p.y - y) < 14);
-  let labels = "";
-  const lastX = xAt(depth);
-  const label = (n, key) => {
-    if (key === "") return;                    // the root is the axis's "now"
-    const y = n.y - 6;
-    if (!fits(n.x, y)) return;
-    placed.push({x: n.x, y});
-    // the final column would run into the ladder labels in the right margin,
-    // so those ids hang back off their node instead of straddling it
-    const end = Math.abs(n.x - lastX) < 0.5;
-    labels += `<text x="${(end ? n.x - 5 : n.x).toFixed(1)}"
-               y="${y.toFixed(1)}" class="nlab${n.win ? " win" : ""}"
-               ${end ? 'text-anchor="end"' : ""}>${esc(n.id)}</text>`;
-  };
-  nodes.forEach((n, key) => {
-    svg += `<circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}"
-            r="${n.win ? 3.4 : 2.4}" class="node${n.win ? " win" : ""}"/>`;
-  });
-  nodes.forEach((n, key) => { if (n.win) label(n, key); });
-  nodes.forEach((n, key) => { if (!n.win) label(n, key); });
-  svg += labels;
-  svg += `<text x="${L}" y="${H - 1}" class="tlab">now</text>`
-       + `<text x="${(W - R).toFixed(1)}" y="${H - 1}" class="tlab"
-          text-anchor="end">+${plan.horizon_s}s</text></svg>`;
-  return svg;
-}
 
 /* Fixed-ladder mode still shows its decisions: the machine's own log lines. */
 function ladderEvents() {
@@ -585,21 +573,21 @@ $("t-apply").onclick = () => {
 };
 $("t-rand").onclick = () => fetch("/taste?random=1");
 
-let tasteSeeded = false;
+let tasteSig = "";
 function drawTaste() {
   const t = S.taste;
   $("card-taste").hidden = t === undefined;
   if (t === undefined) return;
-  put("t-now", t.love
-    ? "now: loves " + t.love
-      + (t.hate && t.hate.length ? " · hates " + t.hate.join("/") : "")
-      + (t.combo && t.combo.length === 2
-         ? ` · likes ${t.combo[0]}→${t.combo[1]}` : "")
-      + " · motions also wear out with use (habituation)"
-    : "no temperament yet — every motion feels the same; hit Randomize");
-  if (!tasteSeeded && t.love) {    // seed the selects once from the live truth
-    tasteSeeded = true;
-    $("t-love").value = t.love;
+  /* Re-seed when the *server's* taste changes -- Randomize, or an Apply from
+     another browser -- but not every frame, which would fight a user halfway
+     through a dropdown.  Seeding once (the old rule) let Randomize leave the
+     selects showing a temperament the baby no longer has, so the card
+     contradicted its own summary line. */
+  const sig = JSON.stringify([t.love, t.hate, t.combo]);
+  if (sig !== tasteSig) {
+    tasteSig = sig;
+    // #t-love is built with no blank option (fillTaste), so "" cannot be set
+    if (t.love) $("t-love").value = t.love;
     $("t-hate1").value = (t.hate && t.hate[0]) || "";
     $("t-hate2").value = (t.hate && t.hate[1]) || "";
     $("t-c1").value = (t.combo && t.combo[0]) || "";
@@ -662,18 +650,21 @@ function drawOrb() {
   const col = S.tag.present ? stateColor(S.tag.emotion) : cssv("--critical");
 
   og.clearRect(0, 0, w, h);
+  /* Alphas re-cut for a white canvas.  A glow that read as light spilling off
+     a dark page reads as dirt on paper, so the aura is halved and the body
+     fill is raised instead -- the shape carries where the halo used to. */
   const aura = og.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 1.9);
-  aura.addColorStop(0, rgba(col, 0.16 + 0.22 * ov.env));
+  aura.addColorStop(0, rgba(col, 0.07 + 0.13 * ov.env));
   aura.addColorStop(1, rgba(col, 0));
   og.fillStyle = aura;
   og.beginPath(); og.arc(cx, cy, R * 1.9, 0, Math.PI * 2); og.fill();
 
   blobPath(cx, cy, R, t, amp, speed);
-  og.fillStyle = rgba(col, 0.10);
+  og.fillStyle = rgba(col, 0.16);
   og.fill();
   blobPath(cx, cy, R * 0.62, -t, amp * 1.35, speed);
   og.lineWidth = 1.2 * dpr;
-  og.strokeStyle = rgba(col, 0.35);
+  og.strokeStyle = rgba(col, 0.45);
   og.stroke();
   blobPath(cx, cy, R, t, amp, speed);
   og.lineWidth = 3 * dpr;
@@ -735,13 +726,20 @@ function drawTimeline() {
   const x = t => padL + clamp((t - (tNow - WINDOW_S)) / WINDOW_S, 0, 1) * pw;
   const y = v => padT + (1 - clamp(v, 0, 1)) * ph;
   tg.clearRect(0, 0, w, h);
-  tg.font = `${10 * dpr}px ${getComputedStyle(document.body).fontFamily}`;
+  // canvas text is outside the CSS ladder, so it carries its own floor:
+  // 10px here was the least readable thing on the page
+  tg.font = `${13 * dpr}px ${getComputedStyle(document.body).fontFamily}`;
 
   // comfort bands: the ladder as the backdrop, named on the right edge
   const edges = [0, ...RANK_BANDS, 1];
   for (let i = 0; i < 5; i++) {
     const yTop = y(edges[i + 1]), yBot = y(edges[i]);
-    tg.globalAlpha = 0.14;                    // tuned for the black page
+    /* On the old black page these bands ran at 0.14 and still read as a
+       backdrop.  On DESIGN.md's white canvas the same alpha turns the chart
+       into four coloured slabs with a thin line lost on top, so the bands
+       drop to a tint and the data carries.  The right-edge labels keep the
+       ordinal reading either way. */
+    tg.globalAlpha = 0.11;
     tg.fillStyle = rankColor(i);
     tg.fillRect(padL, yTop, pw, yBot - yTop);
     tg.globalAlpha = 1;
@@ -754,12 +752,27 @@ function drawTimeline() {
     tg.beginPath(); tg.moveTo(padL, yTop); tg.lineTo(padL + pw, yTop); tg.stroke();
   }
 
-  // time axis: a tick every 5 minutes (edge labels hug their edge)
-  tg.fillStyle = cssv("--faint");
+  // time axis: a tick every 5 minutes (edge labels hug their edge).
+  // --faint draws rules; anything carrying words takes --faint-text.
+  tg.fillStyle = cssv("--faint-text");
   for (let back = WINDOW_S; back >= 0; back -= 300) {
     const xx = x(tNow - back);
     tg.textAlign = back === WINDOW_S ? "left" : back === 0 ? "right" : "center";
     tg.fillText(back ? `${back / 60}m ago` : "now", xx, h - 6 * dpr);
+  }
+
+  /* The span before the first sample is *no data*, not a flat calm baby --
+     on a freshly started server that is most of the chart, and unlabelled it
+     reads as fifteen quiet minutes that never happened. */
+  const t0 = HIST.length ? HIST[0].t : tNow;
+  if (t0 > tNow - WINDOW_S + 20) {
+    const xEnd = x(t0), gap = xEnd - padL;
+    if (gap > 90 * dpr) {
+      tg.fillStyle = cssv("--faint-text");
+      tg.textAlign = "center";
+      tg.fillText("no history yet — the monitor started here",
+                  padL + gap / 2, padT + ph / 2);
+    }
   }
 
   // motion starts: dashed accent flags with the motion id
@@ -791,9 +804,15 @@ function drawTimeline() {
     }
   }
 
-  // the two series: raw level dotted, decision trend solid
-  const line = (key, color, width, dash) => {
+  /* The wave IS the picture: the raw level carries the baby's actual
+     texture -- sway ripple, every startle -- and it used to be a faint
+     dotted whisper under a bold EMA whose plateaus read as straight lines.
+     Swapped: the raw level is the crisp ink line, and the decision trend is
+     a wide soft band behind it, still legible as "what decisions use"
+     without flattening the story. */
+  const line = (key, color, width, dash, alpha = 1) => {
     tg.strokeStyle = color; tg.lineWidth = width * dpr;
+    tg.globalAlpha = alpha;
     tg.setLineDash(dash.map(d => d * dpr));
     tg.beginPath();
     let started = false;
@@ -803,10 +822,10 @@ function drawTimeline() {
       started ? tg.lineTo(xx, yy) : tg.moveTo(xx, yy);
       started = true;
     }
-    tg.stroke(); tg.setLineDash([]);
+    tg.stroke(); tg.setLineDash([]); tg.globalAlpha = 1;
   };
-  line("level", cssv("--faint"), 1.4, [2, 3]);
-  line("ema", cssv("--ink"), 2, []);
+  line("ema", cssv("--ink"), 4.0, [], 0.18);   // the trend, as a soft band
+  line("level", cssv("--ink"), 1.6, []);       // the wave, crisp on top
 
   // hover: crosshair + tooltip on the nearest sample
   if (hoverX !== null) {
