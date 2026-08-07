@@ -480,6 +480,47 @@ def test_serve() -> None:
         for hook in (b'DeviceMotionEvent.requestPermission',
                      b'fetch("/motion-sensor"', b'new EventSource("/events")'):
             assert hook in baby_js, f"iPad sensor path lost {hook!r}"
+        # The mascot is vector, not a bitmap: it has to breathe, blink and
+        # ride the measured sway, so the page must ship the rig (a continuous
+        # expression ladder + the KAIST palette) and fetch no artwork at all.
+        for hook in (b"drawNubzuki(", b"POSES", b"poseAt(", b"liveLook(",
+                     b"cradleTilt(", b'"#3CA9E1"', b'"#241917"',
+                     b"previewRaw === null"):
+            assert hook in baby_js, f"the Nubzuki rig lost {hook!r}"
+        # Every pose the reference sheet draws, anchored where the sheet puts
+        # it on its own ACTIVE/CALM x NEGATIVE/POSITIVE chart.  The count is
+        # asserted too: a pose quietly dropped is the failure worth catching.
+        sheet = (b"rage", b"angry", b"shocked", b"kiss", b"dancing", b"star",
+                 b"bashful", b"cool", b"neutral", b"crying", b"nerdy",
+                 b"lounging", b"sitHeart", b"gloomy", b"sick", b"sleeping",
+                 b"dreaming")
+        for key in sheet:
+            assert b'{key: "' + key + b'"' in baby_js, \
+                f"the sheet's {key.decode()} pose is missing"
+        assert baby_js.count(b'{key: "') == len(sheet), "pose count changed"
+        # ...and the props that tell several of them apart.
+        for hook in (b"shades", b"specs", b"bow:", b"notes:", b"cup:",
+                     b"blanket", b"blackHeart", b"brownLegs", b"rainbow",
+                     b"stars", b"lie:", b"sit:"):
+            assert hook in baby_js, f"pose prop {hook!r} is missing"
+        # The reference sheet's circumplex, doubling as a live readout: the
+        # dot's quadrant is the infant's, so both axes must stay wired.
+        for hook in (b"drawWheel(", b'"ACTIVE"', b'"CALM"',
+                     b'"NEGATIVE"', b'"POSITIVE"'):
+            assert hook in baby_js, f"the feelings wheel lost {hook!r}"
+        # ...and it is draggable, with a marked way back to live data.  The
+        # override stays client-side: this page reports IMU features and takes
+        # state back over SSE, it never tells the judge what it saw.
+        for hook in (b"feltToState(", b'"pointerdown"', b"livePill(",
+                     b'"GO LIVE"', b"manual = null"):
+            assert hook in baby_js, f"the wheel's hand control lost {hook!r}"
+        assert b"touch-action:none" in baby_css, \
+            "dragging the wheel must not scroll the page"
+        assert b".png" not in baby_js and b".jpg" not in baby_js, \
+            "the mascot must be drawn, not blitted from reference artwork"
+        from pathlib import Path
+        assert not list(Path("web").glob("nubzuki*")), \
+            "reference artwork must not ship in web/"
         assert b"#face" in baby_css
         packet = json.dumps({
             "samples": 30, "accelRms": 0.06, "rotationRms": 1.5,

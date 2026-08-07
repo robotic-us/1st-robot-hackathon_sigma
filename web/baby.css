@@ -1,9 +1,14 @@
 :root { color-scheme:light; font-family:system-ui,-apple-system,sans-serif; }
 * { box-sizing:border-box; }
 html, body { width:100%; height:100%; margin:0; overflow:hidden; }
-body { background:#f2d8bd; color:#33251d; touch-action:manipulation; }
-main { position:fixed; inset:0; display:grid; place-items:center; }
-#face { width:100%; height:100%; display:block; }
+body { background:#fff; color:#33251d; touch-action:manipulation; }
+main { position:fixed; inset:0; }
+/* Absolute, not a centred grid item: a canvas carries an intrinsic aspect
+   ratio, and in flow `height:100%` resolves against *that* instead of the
+   viewport -- which silently made the element taller than the screen. */
+/* touch-action:none so dragging the feelings wheel does not scroll or zoom. */
+#face { position:absolute; inset:0; width:100%; height:100%; display:block;
+        touch-action:none; }
 #label { position:fixed; left:max(20px,env(safe-area-inset-left));
          bottom:max(18px,env(safe-area-inset-bottom)); display:flex;
          align-items:baseline; gap:10px; color:rgba(51,37,29,.62); }
