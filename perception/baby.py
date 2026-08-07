@@ -28,6 +28,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -100,39 +101,78 @@ class Personality:
     speed_pref: str = ""       # "fast" | "slow" | ""
     vibe_pref: int = 0         # +1 loves the tremble, -1 hates it
 
+    # Felt-motion thresholds: how IMU features (web/baby.js -> serve.py's
+    # IPadMotion) map into the taste vocabulary.  Demo-scale, like the
+    # 0.12 m/s^2 strength reference -- never a physical safety measurement.
+    FELT_FAST_HZ = 0.45      # the N system's own fast/slow boundary
+    FELT_LARGE_MS2 = 0.09    # accel RMS above this reads as a wide motion
+    FELT_VIBE_JERK = 2.5     # jerk RMS above this reads as a tremble
+
     @staticmethod
     def _features(motion):
         from core.cradle import LIBRARY_BY_ID
         return LIBRARY_BY_ID.get(motion)
 
-    def gain(self, motion, prev, mood: float = 1.0) -> float:
-        if not motion:
+    @classmethod
+    def felt(cls, sensed) -> Optional[dict]:
+        """IMU features -> the taste vocabulary, or None without a signal.
+
+        What the tablet *measures* outranks what the engine *commanded*:
+        speed from the dominant frequency, size from acceleration RMS,
+        tremble from jerk.  Shape cannot be told from one IMU, so shape
+        keeps coming from the motion id.
+        """
+        if not sensed or sensed.get("samples", 0) < 8:
+            return None
+        out: dict = {}
+        hz = float(sensed.get("dominant_hz", 0.0) or 0.0)
+        if hz > 0.05:
+            out["speed"] = "fast" if hz >= cls.FELT_FAST_HZ else "slow"
+        accel = float(sensed.get("accel_rms", 0.0) or 0.0)
+        if accel > 0.02:
+            out["size"] = "large" if accel >= cls.FELT_LARGE_MS2 else "small"
+        out["vibe"] = float(sensed.get("jerk_rms", 0.0) or 0.0) >= cls.FELT_VIBE_JERK
+        return out
+
+    def gain(self, motion, prev, mood: float = 1.0,
+             felt: Optional[dict] = None) -> float:
+        if not motion and felt is None:
             return 0.0
-        if motion in self.hate:
+        if motion and motion in self.hate:
             return -1.0
         if len(self.combo) == 2 and (prev, motion) == tuple(self.combo):
             base = 2.0
-        elif motion == self.love:
+        elif motion and motion == self.love:
             base = 3.0
         else:
             base = 1.0
-        m = self._features(motion)
-        if m is not None and m.shape:
-            if self.shape_hate and m.shape == self.shape_hate:
+        # What the motion is like: declared by its library entry, then
+        # overridden by whatever the tablet actually measured.
+        m = self._features(motion) if motion else None
+        shape = m.shape if m is not None else ""
+        size = m.size if m is not None else ""
+        speed = m.speed if m is not None else ""
+        vibe = bool(m.vibe) if m is not None else False
+        if felt:
+            size = felt.get("size", size) or size
+            speed = felt.get("speed", speed) or speed
+            vibe = bool(felt.get("vibe", vibe))
+        if shape:
+            if self.shape_hate and shape == self.shape_hate:
                 return -0.8
-            if self.shape_love and m.shape == self.shape_love:
+            if self.shape_love and shape == self.shape_love:
                 base *= 1.9
-            if self.size_pref and m.size:
-                base *= 1.3 if m.size == self.size_pref else 0.8
-            if self.speed_pref and m.speed:
-                base *= 1.3 if m.speed == self.speed_pref else 0.8
-            if self.vibe_pref:
-                if m.vibe:
-                    base *= 1.5 if self.vibe_pref > 0 else 0.35
-                elif self.vibe_pref > 0:
-                    base *= 0.9
-            if mood < 0.8 and m.speed == "fast":   # grumpy: only slow works
-                base *= 0.6
+        if self.size_pref and size:
+            base *= 1.3 if size == self.size_pref else 0.8
+        if self.speed_pref and speed:
+            base *= 1.3 if speed == self.speed_pref else 0.8
+        if self.vibe_pref:
+            if vibe:
+                base *= 1.5 if self.vibe_pref > 0 else 0.35
+            elif self.vibe_pref > 0:
+                base *= 0.9
+        if mood < 0.8 and speed == "fast":       # grumpy: only slow works
+            base *= 0.6
         return base
 
     @classmethod
@@ -245,7 +285,8 @@ class VirtualBaby:
             self._until = now + self._dwell()
 
     def update(self, now: float, soothing: float = 0.0,
-               motion: str | None = None) -> BabyReading:
+               motion: str | None = None,
+               sensed: dict | None = None) -> BabyReading:
         dt = 0.0 if self._t is None else max(0.0, min(0.2, now - self._t))
         self._t = now
         if motion != self._motion:
@@ -276,10 +317,13 @@ class VirtualBaby:
         # The closed loop: a soothable fuss/cry yields to sway, hunger does
         # not.  With a personality the motion identity matters: the loved
         # motion soothes faster, a hated one agitates instead -- and any
-        # motion, loved included, fades with heavy use.
+        # motion, loved included, fades with heavy use.  When a tablet in
+        # the cradle measures the *actual* motion, its felt character
+        # (tempo, intensity, tremble) is what the taste judges.
         gain = 1.0
         if self.personality is not None and soothing > 0.2:
-            gain = self.personality.gain(motion, self._prev_motion, self._mood)
+            gain = self.personality.gain(motion, self._prev_motion, self._mood,
+                                         felt=Personality.felt(sensed))
         if gain > 0.0 and motion:
             gain *= max(FATIGUE_FLOOR, 1.0 - self._fatigue.get(motion, 0.0))
         if self.state in ("FUSS", "CRY") and soothing > 0.2:

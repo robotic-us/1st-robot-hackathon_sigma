@@ -269,6 +269,13 @@ function updatePanels() {
       ? `${ipad.accel_rms.toFixed(3)} <small>m/s²</small>` : "–");
   put("ipadhz", ipad.connected
       ? `${ipad.dominant_hz.toFixed(2)} <small>Hz</small>` : "–");
+  // the server's felt-classification: what this motion IS to the baby's
+  // taste (speed/size/tremble), measured rather than commanded
+  const felt = ipad.felt || null;
+  put("ipadfeel", felt
+      ? [felt.speed, felt.size, felt.vibe ? "trembling" : ""]
+          .filter(Boolean).join(" · ") || "barely moving"
+      : "–");
 
   // header controls + alert
   $("alert").textContent = c.alert ? "⚠ " + c.alert : "";

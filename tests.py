@@ -493,7 +493,15 @@ def test_serve() -> None:
         snap = shared.ipad_motion.snapshot(time.monotonic())
         assert snap["connected"] and snap["samples"] == 30, snap
         assert snap["dominant_hz"] == 0.45 and 0 < snap["strength"] <= 1
-        print("  iPad IMU      page + permission + POST features -> server  -- ok")
+        # ...and the SSE frame carries the server-side felt-classification,
+        # the same vocabulary the virtual baby's taste judges.
+        time.sleep(0.4)
+        with urlopen(base + "/events", timeout=5) as stream:
+            felt_state = json.loads(stream.readline().decode()[6:])["ipad"]
+        assert felt_state["felt"] == {"speed": "fast", "size": "small",
+                                      "vibe": False}, felt_state
+        print("  iPad IMU      page + POST features -> server; felt: "
+              f"{felt_state['felt']['speed']}/{felt_state['felt']['size']}  -- ok")
 
 
         with urlopen(base + "/events", timeout=5) as stream:
@@ -1284,6 +1292,35 @@ def test_policy() -> None:
         "a grumpy stretch dulls fast motions"
     print("  temperament  ids + features + mood shape the soothing  -- ok")
 
+    # The tablet's IMU teaches the taste what a motion actually FELT like:
+    # measured tempo/intensity/tremble outrank the id's declared features,
+    # and a hand-rocked phone (no motion id at all) still counts.
+    assert Personality.felt(None) is None
+    assert Personality.felt({"samples": 3}) is None, "too little signal"
+    gentle = Personality.felt({"samples": 30, "dominant_hz": 0.3,
+                               "accel_rms": 0.15, "jerk_rms": 0.5})
+    assert gentle == {"speed": "slow", "size": "large", "vibe": False}, gentle
+    shaky = Personality.felt({"samples": 30, "dominant_hz": 1.2,
+                              "accel_rms": 0.05, "jerk_rms": 6.0})
+    assert shaky == {"speed": "fast", "size": "small", "vibe": True}, shaky
+    slow_lover = Personality(speed_pref="slow")
+    assert slow_lover.gain("N03", None, felt=gentle) > \
+        slow_lover.gain("N03", None), \
+        "measured-slow must override the id's declared fast"
+    assert slow_lover.gain(None, None, felt=gentle) > 1.0, \
+        "hand-rocking with no motion id still soothes by taste"
+    assert slow_lover.gain(None, None) == 0.0, "no motion, no signal: nothing"
+    b = VirtualBaby(seed=9, personality=Personality(speed_pref="slow"))
+    b.state, b.soothable, b._until = "FUSS", True, 1e9
+    t = 0.0
+    while t < 150.0 and b.state == "FUSS":
+        t += 1.0 / 30.0
+        b.update(t, soothing=1.0,
+                 sensed={"samples": 30, "dominant_hz": 0.3,
+                         "accel_rms": 0.15, "jerk_rms": 0.4})
+    assert b.state != "FUSS", "matching hand-rocking must soothe the fuss"
+    print("  felt motion  measured IMU character overrides declared taste  -- ok")
+
     # Time-related emotion: heavy use wears a motion out, rest restores it,
     # and the mood cycle stays inside its documented band.
     b = VirtualBaby(seed=5, personality=quirks)
@@ -1428,10 +1465,11 @@ def test_policy() -> None:
     page = Path("web/index.html").read_text()
     js = Path("web/app.js").read_text()
     for hook in ('id="brain"', 'id="ladder"', 'id="scores"', 'id="trail"',
-                 'id="brainsel"', 'id="card-taste"', 'id="orb"', 'data-g="N"'):
+                 'id="brainsel"', 'id="card-taste"', 'id="orb"', 'data-g="N"',
+                 'id="ipadfeel"'):
         assert hook in page, f"learning panel lost {hook!r}"
     for hook in ("S.policy", "drawBrain", "RANK_BANDS", "/policy?set=",
-                 "/taste?", "drawOrb", "fillTaste", "npath"):
+                 "/taste?", "drawOrb", "fillTaste", "npath", "ipad.felt"):
         assert hook in js, f"learning panel script lost {hook!r}"
     from serve import Shared, build_state
     from types import SimpleNamespace

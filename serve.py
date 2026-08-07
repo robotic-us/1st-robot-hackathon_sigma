@@ -371,13 +371,18 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
             # and the frame IS the baby -- a circle riding the plate offset.
             time.sleep(1.0 / 30.0)
             commanded = shared.engine.env * shared.engine.amp_scale
-            # When the tablet is alive, its IMU is the physical truth.  With
-            # no tablet the established desk simulation remains unchanged.
-            measured = shared.ipad_motion.strength(now)
-            soothing = measured if shared.ipad_motion.fresh(now) else commanded
+            # When the tablet is alive, its IMU is the physical truth: its
+            # strength replaces the commanded envelope AND its felt character
+            # (tempo/intensity/tremble) is what the taste judges -- so the
+            # baby responds to what the cradle (or a human hand) actually
+            # does.  With no tablet the desk simulation is unchanged.
+            live_imu = shared.ipad_motion.fresh(now)
+            soothing = (shared.ipad_motion.strength(now) if live_imu
+                        else commanded)
             reading = infant.update(
                 now, soothing=soothing,
-                motion=shared.engine.mode.id if shared.engine.mode else None)
+                motion=shared.engine.mode.id if shared.engine.mode else None,
+                sensed=shared.ipad_motion.snapshot(now) if live_imu else None)
             frame = baby_frame(reading, shared.engine.offsets_mm())
         elif scenario is not None:
             time.sleep(1.0 / 30.0)
@@ -461,6 +466,17 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
         mic.close()
 
 
+def _ipad_state(shared: Shared, now: float) -> dict:
+    """The IMU snapshot plus its *felt* reading in the taste vocabulary --
+    classified once, server-side, so the dashboard and the virtual baby can
+    never disagree about what a motion felt like."""
+    snap = shared.ipad_motion.snapshot(now)
+    if snap["connected"]:
+        from perception.baby import Personality
+        snap["felt"] = Personality.felt(snap)
+    return snap
+
+
 def build_state(shared: Shared, reading, now: float) -> dict:
     baby = shared.baby
     return {
@@ -483,7 +499,7 @@ def build_state(shared: Shared, reading, now: float) -> dict:
                 "alarm": bool(getattr(reading, "alarm", False)),
                 "phase": getattr(reading, "phase", "")},
         "jam": shared.jam,
-        "ipad": shared.ipad_motion.snapshot(now),
+        "ipad": _ipad_state(shared, now),
         "cradle": {**shared.engine.snapshot(), **shared.machine.snapshot(now)},
         "events": list(shared.events),
     }
