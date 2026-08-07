@@ -399,6 +399,8 @@ def test_serve() -> None:
     """Every HTTP endpoint against a real server on a random port."""
     import json
     import threading
+
+    import numpy as np
     from urllib.request import Request, urlopen
 
     from serve import Shared, mascot_reading, start
@@ -418,14 +420,113 @@ def test_serve() -> None:
                            valence=nz.POSES[pose][0], arousal=nz.POSES[pose][1],
                            feat=_NS(eyes=eyes))
     r = mascot_reading([sight("rage")])
-    assert r.emotion == nz.DISTRESS_FACE and 0.30 <= r.distress < 0.45, vars(r)
+    assert r.emotion == "CRY" and 0.30 <= r.distress < 0.45, vars(r)
     assert r.echo == nz.LIVE_LEVEL["rage"] and r.echo > r.distress
+    # every pose on the sheet maps to a plant state, and the asserted level
+    # follows the state's own §5-safe band -- whatever costume rotation picks,
+    # the machine's input stays lawful and the display word stays exact
+    from serve import POSE_STATE
+    assert set(POSE_STATE) == set(nz.POSES), "a pose fell out of the pools"
+    for pose in nz.POSES:
+        rr = mascot_reading([sight(pose)])
+        assert rr.emotion == POSE_STATE[pose]
+        assert rr.distress < 0.45, (pose, rr.distress)
+    assert mascot_reading([sight("crying")]).emotion == "CRY"
+    assert mascot_reading([sight("gloomy")]).emotion == "FUSS"
+    assert mascot_reading([sight("gloomy")]).distress == 0.20
+    assert mascot_reading([sight("sitHeart")]).emotion == "CALM"
+    assert mascot_reading([sight("dreaming")]).emotion == "SLEEP"
     # ...sleep reads as the taper input, and the larger figure wins the frame.
-    assert mascot_reading([sight("sleeping")]).emotion == nz.SLEEP_CANDIDATE
+    assert mascot_reading([sight("sleeping")]).emotion == "SLEEP"
     two = mascot_reading([sight("rage", box=(0, 0, 10, 10)),
-                          sight("neutral", box=(0, 0, 200, 200))])
-    assert two.emotion == nz.AWAKE, "the largest figure is the reading"
-    print("  vision link   sightings -> §5-capped readings, UNKNOWN gates  -- ok")
+                          sight("neutral", box=(20, 20, 200, 200))])
+    assert two.emotion == "CALM", "the largest figure is the reading"
+    # ...but a figure that *encloses* another is the panel's dark bezel read
+    # as ink, not a mascot -- it is 4x Nubzuki's area and would win outright.
+    ring = mascot_reading([sight("sleeping", box=(0, 0, 400, 400)),
+                           sight("rage", box=(90, 90, 180, 180))])
+    assert ring.emotion == "CRY", "an enclosing frame is not a figure"
+    # a lone enclosing box is all there is: still read, never dropped to absent
+    assert mascot_reading([sight("rage", box=(0, 0, 400, 400))]).present
+    # -- the face channel: the plant's truth rides beside the camera's view - #
+    from serve import build_state
+    sh2 = Shared()
+    rd = _NS(present=True, distress=0.1, emotion="AWAKE")
+    assert "face" not in build_state(sh2, rd, 0.0), "no face channel by default"
+    sh2.face = {"level": 0.31, "state": "FUSS"}
+    assert build_state(sh2, rd, 0.0)["face"] == {"level": 0.31, "state": "FUSS"}
+    import pathlib as _pl
+    js_face = _pl.Path("web/baby.js").read_text()
+    assert "live?.face?.level" in js_face and "live?.face?.state" in js_face, \
+        "the drawn face must prefer the plant's channel"
+    assert "VirtualBaby" in _pl.Path("serve.py").read_text() \
+        .split("def sensor_loop")[1], \
+        "the sense plant must be the real VirtualBaby"
+    print("  face channel  plant truth to the iPad, camera view to the machine"
+          "  -- ok")
+
+    # -- the camera crop: the region of interest the vision link reads --------
+    from serve import crop_frame, parse_crop
+    assert parse_crop("0.25,0.1,0.5,0.8") == (0.25, 0.1, 0.5, 0.8)
+    assert parse_crop(" 320, 72, 640, 576 ") == (320.0, 72.0, 640.0, 576.0)
+    for bad in ("0.1,0.2,0.3", "a,b,c,d", "0,0,0,0.5", "0,0,0.5,-1"):
+        try:
+            parse_crop(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"parse_crop accepted {bad!r}")
+    wide = np.zeros((720, 1280, 3), np.uint8)
+    wide[72:648, 320:960] = 200                    # the "panel" in the room
+    assert crop_frame(wide, None) is wide, "no crop = the frame, untouched"
+    frac = crop_frame(wide, parse_crop("0.25,0.1,0.5,0.8"))
+    px = crop_frame(wide, parse_crop("320,72,640,576"))
+    assert frac.shape == px.shape == (576, 640, 3), (frac.shape, px.shape)
+    assert int(frac.min()) == 200, "the crop is exactly the panel"
+    # a rectangle running off the edge is clamped, never wrapped or empty
+    edge = crop_frame(wide, parse_crop("1100,600,900,900"))
+    assert edge.shape == (120, 180, 3), edge.shape
+    print("  camera crop   fractions/px, clamped, panel isolated          -- ok")
+
+    # -- --zoom: magnify the region, and read the middle when none was given -
+    from serve import centre_region, magnify
+    # One definition of the framing, shared by serve.py --sense and
+    # `nubzuki.py --camera`: a second copy is how two readers quietly stop
+    # seeing the same pixels (the JOINT_NAMES lesson, in the vision path).
+    for fn in (crop_frame, parse_crop, centre_region, magnify):
+        assert fn is getattr(nz, fn.__name__), f"{fn.__name__} has two homes"
+    assert centre_region(1.0) == (0.0, 0.0, 1.0, 1.0)
+    assert centre_region(2.0) == (0.25, 0.25, 0.5, 0.5)
+    assert magnify(wide, 1.0) is wide, "x1 is the frame, untouched"
+    assert magnify(wide, 2.0).shape == (1440, 2560, 3)
+    # the pair is cost-flat by construction: the region shrinks as the scale
+    # grows, so the recognizer keeps seeing one frame's worth of pixels
+    for z in (2.0, 3.0, 4.0):
+        zoomed = magnify(crop_frame(wide, centre_region(z)), z)
+        assert abs(zoomed.shape[0] - 720) <= 2 and abs(zoomed.shape[1] - 1280) <= 2, \
+            (z, zoomed.shape)
+    print("  camera zoom   x2 magnifies, bare --zoom reads the middle      -- ok")
+
+    # -- the 3 s state vote: flicker is suppressed, absence is not ------------
+    # A blend midpoint makes consecutive frames round to either side, so the
+    # machine is told the most-shown pose of the window rather than this
+    # frame's.  Presence is deliberately excluded: a figure that truly leaves
+    # must still reach the safety gate on its own 0.7 s, not the window's.
+    vote = nz.Tracker(3.0)
+    flicker = ["rage", "rage", "angry", "rage", "angry", "rage", "rage"]
+    out = [vote.update(0.3 * i, p) for i, p in enumerate(flicker)]
+    assert out[-1] == "rage", f"majority lost to flicker: {out}"
+    assert all(o == "rage" for o in out), f"vote wobbled with the frames: {out}"
+    # the window really is a window: a settled new pose takes over once the
+    # old votes age out, so this is a smoother and not a latch
+    for i in range(12):
+        held = vote.update(2.2 + 0.3 * i, "sleeping")
+    assert held == "sleeping", f"vote never let go of the old pose: {held}"
+    # absence is not a pose: no vote can manufacture presence
+    gone = nz.Tracker(3.0)
+    assert gone.update(0.0, None) is None
+    assert mascot_reading([]).present is False
+    print("  state vote   3 s modal pose holds; absence still ungated  -- ok")
 
     shared = Shared()
     shared.machine.auto = False   # deterministic: no organic trials mid-test
@@ -532,6 +633,15 @@ def test_serve() -> None:
         snap = shared.ipad_motion.snapshot(time.monotonic())
         assert snap["connected"] and snap["samples"] == 30, snap
         assert snap["dominant_hz"] == 0.45 and 0 < snap["strength"] <= 1
+        # the physically-derived envelope: peak g direct, travel from the
+        # rocking-sinusoid identity A = a_peak / (2 pi f)^2
+        assert abs(snap["meas_peak_g"] - 0.0087) < 0.0005, snap["meas_peak_g"]
+        assert abs(snap["meas_travel_mm"] - 10.6) < 0.5, snap["meas_travel_mm"]
+        # hand-shaken (no dominant frequency) must refuse to invent a travel
+        shared.ipad_motion.dominant_hz = 0.0
+        assert shared.ipad_motion.snapshot(
+            time.monotonic())["meas_travel_mm"] is None
+        shared.ipad_motion.dominant_hz = 0.45
         # ...and the SSE frame carries the server-side felt-classification,
         # the same vocabulary the virtual baby's taste judges.
         time.sleep(0.4)
@@ -830,7 +940,7 @@ def test_nubzuki() -> None:
         "poses off the live ladder must report no level -- only a hand reaches them"
     recovered = sorted(s.recovered_level for s in seen
                        if s.recovered_level is not None)
-    assert recovered == [0.0, .22, .50, .78, 1.0], recovered
+    assert recovered == [0.0, .22, .38, .78, 1.0], recovered
     print(f"  round trip   5 ladder poses recover {recovered}, "
           f"12 hand-only poses report no level  -- ok")
 
@@ -870,6 +980,40 @@ def test_nubzuki() -> None:
     print(f"  ceiling      worst assertable {worst:.2f} < CRY_LEVEL {CRY_LEVEL} "
           f"(rage recovers {rage.recovered_level}, may assert "
           f"{rage.asserted_level:.2f})  -- ok")
+
+    # -- aiming the camera: the advice, without a camera ----------------------
+    # tools/aim_camera.py turns one frame into the serve.py flags that read it.
+    # The camera half cannot be tested here; the two judgements can.
+    from tools.aim_camera import suggest_crop, suggest_zoom
+    assert suggest_zoom(40)[0] == 3.0 and suggest_zoom(0)[0] == 2.0
+    assert suggest_zoom(55)[0] == 2.0
+    assert suggest_zoom(80)[0] == 1.0 and suggest_zoom(400)[0] == 1.0
+    # a page that already fills the view is not worth cropping to...
+    assert suggest_crop((2, 2, 1270, 714), (720, 1280, 3)) is None
+    # ...and a panel across the room is, padded and clamped inside the frame
+    box = suggest_crop((900, 150, 300, 380), (720, 1280, 3))
+    assert box is not None
+    bx, by, bw, bh = box
+    assert bx < 900 and by < 150, "the crop pads around the page"
+    assert bx + bw <= 1280 and by + bh <= 720, f"crop left the frame: {box}"
+    edge = suggest_crop((1200, 640, 79, 79), (720, 1280, 3))
+    assert edge[0] + edge[2] <= 1280 and edge[1] + edge[3] <= 720, edge
+    # The overlay is sized to the frame it lands on.  A crop leaves the read
+    # frame small (160x144 for a distant panel), and a font fixed at 640-wide
+    # then covers the figure it labels -- which reads as "the labels were
+    # drawn before the crop", though the crop is what made the frame small.
+    assert nz.overlay_scale(np.zeros((480, 640, 3), np.uint8)) == 1.0
+    assert nz.overlay_scale(np.zeros((144, 160, 3), np.uint8)) < 0.5
+    assert nz.overlay_scale(np.zeros((2160, 3840, 3), np.uint8)) <= 1.6
+    tiny = np.zeros((144, 160, 3), np.uint8)
+    one = nz.Sighting(pose="rage", why="test", box=(20, 30, 60, 55),
+                      valence=nz.POSES["rage"][0], arousal=nz.POSES["rage"][1],
+                      feat=seen[0].feat)
+    drawn = nz.annotate(tiny, [one])
+    assert drawn.shape == tiny.shape and drawn is not tiny
+    assert drawn.any(), "the overlay drew nothing at all on a small frame"
+    print("  aim advice   crop pads+clamps, zoom follows the measured table"
+          "  -- ok")
 
 
 def test_animate() -> None:
@@ -1098,9 +1242,46 @@ def test_animate() -> None:
 # --------------------------------------------------------------------------- #
 def test_bridge() -> None:
     """SlotBridge + desired_slot: decisions become PCM slots -- no phorce, no ROS."""
+    import pathlib
+    import stat
+    import tempfile
+    import time as _t
+
     from core.cradle import MotionEngine
-    from core.phorce_iface import PlayOutcome, SlotBridge
+    from core.phorce_iface import CliRobot, PlayOutcome, SlotBridge, make_robot
     from serve import desired_slot
+
+    # -- the phorce-CLI backend, against a stub binary ----------------------- #
+    # The demo's proven path is the organizer's own `phorce play N`; the stub
+    # answers the measured --json contract so the mapping is covered headless.
+    with tempfile.TemporaryDirectory() as td:
+        stub = pathlib.Path(td) / "phorce"
+        stub.write_text(
+            '#!/bin/sh\n'
+            'case "$2" in\n'
+            '  13) echo \'{"ok": false, "decision": "REJECTED", '
+            '"recovery_required": true}\' ;;\n'
+            '  5)  echo \'{"ok": false, "decision": "REJECTED", '
+            '"decision_reason": "BUSY"}\' ;;\n'
+            '  *)  echo \'{"ok": true, "status_name": "SUCCEEDED", '
+            '"decision": "ACCEPTED"}\' ;;\n'
+            'esac\n')
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+        robot = make_robot(mock=False, target="cli")
+        assert isinstance(robot, CliRobot) and robot.target == "robot"
+        cli = CliRobot(binary=str(stub))
+        cli.start()
+        for slot, want in ((7, PlayOutcome.OK),
+                           (13, PlayOutcome.NEEDS_OPERATOR),
+                           (5, PlayOutcome.BUSY)):
+            assert cli.play(slot) is PlayOutcome.OK   # accepted and started
+            for _ in range(100):
+                if not cli.is_motion_active():
+                    break
+                _t.sleep(0.02)
+            assert cli.last_outcome() is want, (slot, cli.last_outcome())
+    print("  phorce-CLI     stubbed `phorce play --json`: OK / "
+          "NEEDS_OPERATOR / BUSY  -- ok")
 
     # -- the mode -> slot mapping ------------------------------------------ #
     eng = MotionEngine()
@@ -1168,6 +1349,64 @@ def test_bridge() -> None:
     assert len(robot.plays) == 4, "hold-off over -> one retry"
     print(f"  NEEDS_OPERATOR {SlotBridge.RETRY_OPERATOR_S:.0f} s hold-off, "
           "then retry  -- ok")
+
+    # -- the card cap: slots that do not exist are refused, said once ------- #
+    r3 = FakeRobot()
+    logs3: list[str] = []
+    capped = SlotBridge(r3, log=logs3.append, max_slot=14)
+    capped.tick(0.0, 16)                  # the ladder's M16: not on the card
+    capped.tick(0.1, 16)
+    assert r3.plays == [], "an off-card slot must never reach the robot"
+    assert sum("not on the card" in l for l in logs3) == 1, logs3
+    capped.tick(0.2, 12)
+    assert r3.plays == [12], "on-card slots still play"
+    print("  card cap       slot 16 refused once (1..14), slot 12 plays  -- ok")
+
+    # -- the demo rest: a completed slot earns rest_s of quiet -------------- #
+    r2 = FakeRobot()
+    calm = SlotBridge(r2, log=logs.append, rest_s=5.0)
+    calm.tick(0.0, 12)
+    assert r2.plays == [12]
+    r2.finish(PlayOutcome.OK)
+    calm.tick(0.2, 12)
+    assert r2.plays == [12], "a finished slot rests before replaying"
+    calm.tick(4.9, 12)
+    assert r2.plays == [12], "still resting"
+    calm.tick(5.3, 12)
+    assert r2.plays == [12, 12], "rest over -> the replay"
+    r2.finish(PlayOutcome.OK)
+    calm.tick(5.5, 3)
+    assert r2.plays == [12, 12], "a mode switch also waits out the rest"
+    calm.tick(10.5, 3)
+    assert r2.plays[-1] == 3
+    print("  rest           5 s between completed slots, switches included  -- ok")
+
+    # -- no repeat: one completed episode per decision ---------------------- #
+    r4 = FakeRobot()
+    logs4: list[str] = []
+    once = SlotBridge(r4, log=logs4.append, repeat=False)
+    once.tick(0.0, 12)
+    assert r4.plays == [12]
+    r4.finish(PlayOutcome.OK)
+    once.tick(0.1, 12)
+    once.tick(60.0, 12)
+    assert r4.plays == [12], "a completed slot must not replay while held"
+    assert any("quiet until a new decision" in l for l in logs4), logs4
+    once.tick(60.1, 3)
+    assert r4.plays == [12, 3], "a different slot is a new decision"
+    r4.finish(PlayOutcome.ERROR)
+    once.tick(60.2, 3)
+    once.tick(63.0, 3)
+    assert r4.plays == [12, 3, 3], "an ERROR was never played -- it retries"
+    r4.finish(PlayOutcome.OK)
+    once.tick(63.1, 3)
+    once.tick(90.0, 3)
+    assert r4.plays == [12, 3, 3], "now completed: held again"
+    once.tick(90.1, None)          # park...
+    once.tick(90.2, 3)             # ...and re-command the same motion
+    assert r4.plays == [12, 3, 3, 3], "park + re-command is a new decision"
+    print("  no repeat      one episode per decision; switch/park/error "
+          "replay  -- ok")
 
     logs.clear()
     bridge.tick(20.0, None)              # park while the retry is still playing
@@ -1323,6 +1562,22 @@ def test_policy() -> None:
     except ValueError:
         pass
     print("  brains       make_brain vocabulary, local LLM fails safe  -- ok")
+
+    # -- the card restriction: one call constrains every brain -------------- #
+    from core import policy as P
+    full = P.CANDIDATES
+    try:
+        keep = P.restrict_candidates([c for c in P.N_CANDIDATES
+                                      if int(c[1:]) <= 14])
+        assert keep and all(int(c[1:]) <= 14 for c in keep), keep
+        assert P.CANDIDATES == keep
+        pick = ReflexBrain()(P.render_prompt([], [], 1), [], 1)
+        assert pick in keep or pick == "STOP", \
+            f"a restricted brain still picked {pick}"
+    finally:
+        P.CANDIDATES = full                     # never leak into later tests
+    print(f"  card cap     {len(keep)} motions decidable on a 14-slot card, "
+          "restored  -- ok")
 
     # The machine validates the advisor: R-grade or garbage falls back to the
     # report ladder; a valid P1 pick is used.

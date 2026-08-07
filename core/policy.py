@@ -55,6 +55,23 @@ BANDS = (CALM_LEVEL, 0.30, CRY_LEVEL, 0.62)
 # what lets a brain generalise ("slow+large works on this baby") instead of
 # memorising 26 ids one by one.
 CANDIDATES = N_CANDIDATES
+
+
+def restrict_candidates(allowed) -> tuple:
+    """Shrink every brain's decision space to ``allowed``.
+
+    For the wired demo: the robot's SD card holds a *subset* of the library,
+    and a brain that decides a motion the card cannot play splits the demo in
+    half -- the screen rocks, the rig stands still.  One module-wide list is
+    read at call time by every brain, so one restriction here constrains them
+    all.  Returns the new tuple; raises if nothing survives.
+    """
+    global CANDIDATES
+    keep = tuple(c for c in N_CANDIDATES if c in set(allowed))
+    if not keep:
+        raise ValueError("restrict_candidates: nothing left to decide with")
+    CANDIDATES = keep
+    return keep
 FEATURES = {m.id: {"shape": m.shape, "size": m.size, "speed": m.speed,
                    "vibe": "vibe" if m.vibe else "plain"}
             for m in N_LIBRARY}

@@ -257,24 +257,37 @@ function updatePanels() {
   // cradle card
   put("hcradle", esc(c.state === "gate_fail" ? "stopping for safety" : doing));
   put("hdetail", esc(detail));
-  put("envval", c.env > 0.01
+  // measured exposure when the tablet streams (the rig may be playing SD
+  // slots the screen engine knows nothing about); commanded envelope else
+  const physEnv = S.ipad && S.ipad.connected ? S.ipad.strength : null;
+  put("envval", physEnv != null
+      ? Math.round(physEnv * 100) + " <small>% · measured</small>"
+      : c.env > 0.01
       ? Math.round(c.env * 100) + " <small>%</small>" : "– <small>idle</small>");
-  setMeter("envbar", c.env, c.tapering ? cssv("--warn") : cssv("--accent"));
+  setMeter("envbar", physEnv != null ? physEnv : c.env,
+           c.tapering ? cssv("--warn") : cssv("--accent"));
   put("rawmotion", esc(`${c.motion || "M01"} · ${c.name}`));
 
-  // safety card -- the largest of the three channels, named, vs the caps
+  /* Safety card.  When the tablet is streaming, its accelerometer IS the
+     cradle's motion -- measured beats commanded, especially with the rig
+     playing SD slots the screen engine knows nothing about.  Without a
+     tablet the engine's own numbers stand, as before. */
+  const phys = S.ipad && S.ipad.connected ? S.ipad : null;
   const chans = [[Math.abs(c.offset_mm.ml), "swing"],
                  [Math.abs(c.offset_mm.z), "lift"],
                  [Math.abs(c.offset_mm.ap), "tilt"]];
-  const [mm, chanWord] = chans.reduce((a, b) => (b[0] > a[0] ? b : a));
+  const [mmCmd, chanWord] = chans.reduce((a, b) => (b[0] > a[0] ? b : a));
+  const mm = phys && phys.meas_travel_mm != null ? phys.meas_travel_mm : mmCmd;
+  const peakG = phys ? phys.meas_peak_g : c.a_peak_g;
   const swayFrac = clamp(mm / SWAY_CAP_MM, 0, 1);
-  const accFrac = clamp(c.a_peak_g / ACC_CAP_G, 0, 1);
+  const accFrac = clamp(peakG / ACC_CAP_G, 0, 1);
   const worst = Math.max(swayFrac, accFrac);
   const safeCol = worst > 0.8 ? cssv("--warn") : cssv("--good");
   put("swayval", `${mm.toFixed(1)} <small>of ${SWAY_CAP_MM} mm`
-                 + ` ${mm > 0.05 ? chanWord : ""}</small>`);
+                 + `${phys ? " · measured" : mm > 0.05 ? " " + chanWord : ""}</small>`);
   setMeter("swaybar", swayFrac, safeCol);
-  put("accval", `${c.a_peak_g.toFixed(3)} <small>of ${ACC_CAP_G} g</small>`);
+  put("accval", `${peakG.toFixed(3)} <small>of ${ACC_CAP_G} g`
+                + `${phys ? " · measured" : ""}</small>`);
   setMeter("accbar", accFrac, safeCol);
 
   const alarm = !!S.tag.alarm;

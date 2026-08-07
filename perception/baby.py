@@ -65,6 +65,12 @@ NEXT = {
 SOOTHE_RATE = 0.08    # per second at full sway: ~12 s of good motion to settle
 SOOTHABLE_P = 0.7     # the rest are hunger/diaper -- caregiver work
 AGITATE_RATE = 0.05   # per second under a *hated* motion: fussing worsens
+# Rough handling -> outrage: the same thresholds web/baby.js uses to drive
+# the drawn face into rage (SHAKE_FROM/SHAKE_FULL, m/s^2 accel RMS).  Only a
+# real tablet can supply the measurement -- every simulated run passes
+# sensed=None and never sees this path.
+SHAKE_FROM_MS2 = 2.0
+SHAKE_FULL_MS2 = 7.0
 # Settling is *cumulative*, not a per-tick coin flip.  A real infant winds
 # down: rocking that is working shows progressive calming, and interrupting it
 # loses the progress gradually rather than instantly.  So soothing integrates
@@ -252,8 +258,14 @@ class VirtualBaby:
 
     def __init__(self, seed: int | None = None,
                  personality: Personality | None = None,
-                 cumulative: bool = True) -> None:
+                 cumulative: bool = True, tempo: float = 1.0) -> None:
         self.rng = random.Random(seed)
+        # Dwell divisor, default 1.0 = the measured dynamics every benchmark
+        # in docs/dream-chunk.md ran on.  A camera demo wants more *states
+        # per minute* than a realistic infant provides, so serve.py's --sense
+        # runs tempo > 1: same transition graph, same levels, same soothing
+        # physics -- the clock between scene changes just runs faster.
+        self.tempo = max(0.1, tempo)
         self.personality = personality
         # True: soothing accumulates and shows (the model of a real settle).
         # False: the original memoryless Poisson step-down, kept so the
@@ -280,7 +292,7 @@ class VirtualBaby:
 
     def _dwell(self) -> float:
         lo, hi = DWELL_S[self.state]
-        d = self.rng.uniform(lo, hi)
+        d = self.rng.uniform(lo, hi) / self.tempo
         # a grumpy stretch cuts the calm short; upset dwell is unaffected
         return d * self._mood if self.state in ("CALM", "SLEEP") else d
 
@@ -383,6 +395,17 @@ class VirtualBaby:
             # model or caregiver -- can tell "working" from "not yet".
             below = STATES[{"CRY": "FUSS", "FUSS": "CALM"}[self.state]][0]
             target -= (target - below) * SETTLE_SHOW * min(1.0, self.settling)
+        # A measured violent shake outranks every state's own band: the level
+        # is lifted into the top rank ("very upset", >= 0.62) exactly as the
+        # drawn face escalates crying -> angry -> rage.  No state in STATES
+        # reaches that band on its own (CRY sits at its lower edge), so this
+        # is the honest path there -- the plant screaming about real rough
+        # handling, not the sim inventing misery.
+        if sensed:
+            shake = ((float(sensed.get("accel_rms", 0.0) or 0.0) - SHAKE_FROM_MS2)
+                     / (SHAKE_FULL_MS2 - SHAKE_FROM_MS2))
+            if shake > 0.0:
+                target = max(target, 0.62 + 0.38 * min(1.0, shake))
         self.level += (target - self.level) * min(1.0, dt / 2.0)
 
         if now >= self._hidden_until and dt > 0.0 \

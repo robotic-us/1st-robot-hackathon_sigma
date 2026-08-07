@@ -278,6 +278,75 @@ class RobotInterface(ABC):
         """Actually run the motion.  Called on the worker thread; may block."""
 
 
+class CliRobot(RobotInterface):
+    """Plays the SD card's slots through the organizer's own thin client.
+
+    The path the team has actually proven on the hardware is ``phorce play N``
+    -- the CLI that ships with the rig -- not a long-lived action-server
+    client of our own.  So this backend runs exactly that command, once per
+    request, with ``--json``, and maps the reply onto the PlayOutcome
+    vocabulary.  What the CLI needs (ROS_DOMAIN_ID=21, a sourced workspace)
+    it inherits from the environment, the same as running it by hand.
+
+    Measured contract (sim, 2026-08-08): success is ``{"ok": true,
+    "status_name": "SUCCEEDED", "decision": "ACCEPTED", ...}``; the reject
+    taxonomy rides ``decision``/``decision_reason``/``recovery_required``
+    (codes 12/13 -- a human must zero or park the rig -- set
+    ``recovery_required``).
+    """
+
+    def __init__(self, target: str = "robot", binary: str = "phorce",
+                 timeout_s: float = 150.0,
+                 on_play_result: Optional[PlayCallback] = None) -> None:
+        super().__init__(on_play_result)
+        self.target = target
+        self.binary = binary
+        self.timeout_s = timeout_s
+
+    def start(self) -> None:
+        import shutil
+        if shutil.which(self.binary) is None:
+            raise RuntimeError(
+                f"{self.binary!r} is not on PATH -- source the ROS workspace "
+                "(the same shell that can run `phorce play N` by hand)")
+
+    def _play_blocking(self, slot_id: int) -> PlayOutcome:
+        import json
+        import subprocess
+        cmd = [self.binary, "play", str(slot_id),
+               "--target", self.target, "--json"]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=self.timeout_s)
+        except subprocess.TimeoutExpired:
+            LOGGER.error("phorce play %d: no reply in %.0f s",
+                         slot_id, self.timeout_s)
+            return PlayOutcome.ERROR
+        data = None
+        for line in reversed(proc.stdout.strip().splitlines()):
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    pass
+                break
+        if data is None:
+            LOGGER.error("phorce play %d: no JSON in reply (rc=%d): %s",
+                         slot_id, proc.returncode,
+                         (proc.stdout + proc.stderr).strip()[:300])
+            return PlayOutcome.ERROR
+        if data.get("ok") and data.get("status_name") == "SUCCEEDED":
+            return PlayOutcome.OK
+        reason = str(data.get("decision_reason", "")).lower()
+        if data.get("recovery_required") or "operator" in reason:
+            return PlayOutcome.NEEDS_OPERATOR
+        if "busy" in reason:
+            return PlayOutcome.BUSY
+        LOGGER.error("phorce play %d refused: %s", slot_id, data)
+        return PlayOutcome.ERROR
+
+
 # --------------------------------------------------------------------------- #
 # Mock -- no ROS, no robot, no phorce package
 # --------------------------------------------------------------------------- #
@@ -629,7 +698,9 @@ class SlotBridge:
     tick the caller passes the slot number the engine's mode maps to (or
     ``None``), and the bridge keeps the robot replaying it back-to-back --
     the robot has no queue, so "continuous rocking" is just re-requesting
-    the slot whenever the robot goes idle.
+    the slot whenever the robot goes idle.  ``repeat=False`` opts out of the
+    replay: one completed episode per decision, and the rig stays quiet
+    until the caller names a different slot (or parks and re-commands).
 
     Deliberate semantics:
 
@@ -650,22 +721,53 @@ class SlotBridge:
     RETRY_ERROR_S = 2.0
 
     def __init__(self, robot: RobotInterface,
-                 log: Optional[Callable[[str], None]] = None) -> None:
+                 log: Optional[Callable[[str], None]] = None,
+                 rest_s: float = 0.0,
+                 max_slot: Optional[int] = None,
+                 repeat: bool = True) -> None:
         self.robot = robot
+        # repeat=False: a slot that has *completed* is not re-requested while
+        # the caller keeps naming it -- one physical episode per decision.
+        # A different slot, or a park-and-recommand (None between ticks),
+        # counts as a new decision and plays.  Rejects and errors were never
+        # played, so they still retry under the hold-offs below.
+        self.repeat = repeat
+        # A rest between completed slots.  The demo's rig plays finite
+        # episodes and the team wants breathing room between them, not a
+        # seamless replay -- and a request is only ever issued after the
+        # previous play's aggregate completion came back, so the rest starts
+        # counting from a *fully finished* motion, never mid-episode.
+        self.rest_s = max(0.0, rest_s)
+        # slots above this simply do not exist on the card: the screen may
+        # still play them (the engine is continuous) but the robot must not
+        # be asked -- it is told apart from "parked" so the operator learns
+        # why the rig went quiet, once per offending slot
+        self.max_slot = max_slot
+        self._off_card: set = set()
         self._log = log if log is not None else (
             lambda text: LOGGER.info("%s", text))
         self._hold_until = 0.0
         self._awaiting = False      # a play we issued has not finished yet
         self._last_slot: Optional[int] = None
+        self._req_slot: Optional[int] = None   # slot of the outstanding play
+        self._done_slot: Optional[int] = None  # completed; held while renamed
         self._warned_no_abort = False
 
     def tick(self, now: float, slot_id: Optional[int]) -> None:
+        if (slot_id is not None and self.max_slot is not None
+                and slot_id > self.max_slot):
+            if slot_id not in self._off_card:
+                self._off_card.add(slot_id)
+                self._log(f"robot: slot {slot_id} is not on the card "
+                          f"(1..{self.max_slot}) -- screen only")
+            slot_id = None
         if slot_id is None:
             if self.robot.is_motion_active() and not self._warned_no_abort:
                 self._warned_no_abort = True
                 self._log("robot: mode parked -- current slot finishes "
                           "(the API has no abort)")
             self._last_slot = None
+            self._done_slot = None
             return
         self._warned_no_abort = False
 
@@ -682,11 +784,22 @@ class SlotBridge:
                           f"0.6 s; retrying in {self.RETRY_OPERATOR_S:.0f} s")
             elif outcome is PlayOutcome.ERROR:
                 self._hold_until = now + self.RETRY_ERROR_S
+            else:
+                if not self.repeat:
+                    self._done_slot = self._req_slot
+                    self._log(f"robot: slot {self._req_slot} done -- "
+                              "quiet until a new decision")
+                if self.rest_s > 0.0:
+                    self._hold_until = max(self._hold_until,
+                                           now + self.rest_s)
         if now < self._hold_until:
+            return
+        if not self.repeat and slot_id == self._done_slot:
             return
 
         if self.robot.play(slot_id) is PlayOutcome.OK:
             self._awaiting = True
+            self._req_slot = slot_id
             if slot_id != self._last_slot:
                 self._log(f"robot: playing slot {slot_id}")
                 self._last_slot = slot_id
@@ -708,7 +821,15 @@ def make_robot(mock: bool = True, **kwargs: object) -> RobotInterface:
                    "motion_model"}
         return MockRobot(**{k: v for k, v in kwargs.items() if k in allowed})  # type: ignore[arg-type]
     allowed = {"target", "axes", "feedback_source", "on_play_result"}
-    return PhorceRobot(**{k: v for k, v in kwargs.items() if k in allowed})  # type: ignore[arg-type]
+    kw = {k: v for k, v in kwargs.items() if k in allowed}
+    # target "cli" (or "cli:sim:demo") plays through the organizer's own
+    # `phorce play N` command instead of a live client of ours -- the path
+    # the team has actually proven on the hardware
+    tgt = str(kw.get("target") or "")
+    if tgt == "cli" or tgt.startswith("cli:"):
+        return CliRobot(target=tgt[4:] or "robot",
+                        on_play_result=kw.get("on_play_result"))  # type: ignore[arg-type]
+    return PhorceRobot(**kw)  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #

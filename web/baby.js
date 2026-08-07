@@ -306,6 +306,16 @@ const POSES = [
 const POSE_BY_KEY = {};
 for (const pose of POSES) POSE_BY_KEY[pose.key] = pose;
 
+// the machine's wardrobe per plant state -- mirrors serve.py POSE_STATE
+const STATE_POOL = {
+  CALM: ["neutral", "sitHeart", "lounging", "nerdy", "bashful", "kiss",
+         "dancing", "star"],
+  FUSS: ["gloomy", "sick", "cool", "shocked"],
+  CRY: ["crying", "angry", "rage"],
+  SLEEP: ["sleeping", "dreaming"],
+};
+let posePick = null;
+
 // Resolved here rather than at parse time: POSES does not exist yet up there.
 const pinnedPose = previewPose ? POSE_BY_KEY[previewPose] || null : null;
 
@@ -321,7 +331,11 @@ function fullParams(pose) {
 // merely fussing infant ended up wearing sunglasses.
 const LIVE_LADDER = [
   {at: 0, key: "sitHeart"}, {at: .22, key: "neutral"},
-  {at: .50, key: "crying"}, {at: .78, key: "angry"}, {at: 1, key: "rage"}
+  // crying at .38, not .50: the virtual baby's whole FUSS band (~.25-.35)
+  // used to draw ~80% neutral, which the camera correctly named neutral --
+  // so fussing was invisible through the lens and the machine reacted only
+  // to full cries.  At .38 a fussing face is half crying: legible.
+  {at: .38, key: "crying"}, {at: .78, key: "angry"}, {at: 1, key: "rage"}
 ];
 
 function liveLook(level, asleep) {
@@ -1372,12 +1386,17 @@ function frame(nowMs) {
   // rough handling outranks the Jetson (the shake is real and local), but
   // never a hand on the wheel -- a person steering keeps authorship
   const rough = shakeUpdate();
+  // live.face is the plant's ground truth (--sense mode); tag is what the
+  // machine believes it saw.  The DRAWN infant is the truth -- the camera
+  // then closes the loop by reading this very drawing back.
+  const jetLevel = live?.face?.level ?? live?.tag?.level ?? 0;
+  const jetState = live?.face?.state ?? live?.tag?.emotion ?? "CALM";
   const level = held ? held.level
               : hasPreview ? clamp(previewLevel, 0, 1)
-              : clamp(Math.max(live?.tag?.level ?? 0, rough), 0, 1);
+              : clamp(Math.max(jetLevel, rough), 0, 1);
   const serverState = hasPreview
     ? (previewState || (level < .12 ? "CALM" : level < .45 ? "FUSS" : "CRY"))
-    : (live?.tag?.emotion || "CALM");
+    : jetState;
   const present = held || hasPreview || live?.tag?.present !== false;
 
   // Where on the wheel the infant is, and therefore which poses it is made of.
@@ -1390,6 +1409,23 @@ function frame(nowMs) {
     // capture has to be the pose itself, not whatever its neighbours blend to.
     spot = {x: pinnedPose.at[0], y: pinnedPose.at[1]};
     want = fullParams(pinnedPose);
+  } else if (live?.face?.state && rough < .05) {
+    // Sense mode draws PURE poses (the camera names whole poses; a blend
+    // reads as its nearest neighbour) and ROTATES inside the state's pool,
+    // so over a session the machine genuinely wears all 17.  serve.py's
+    // POSE_STATE mirrors the pools, so any pick reads back as exactly the
+    // state that chose it.  Each pick holds 8-14 s -- long enough for the
+    // camera's anti-flicker vote to lock on.
+    const st = live.face.state;
+    const pool = STATE_POOL[st] || ["neutral"];
+    const nowS = performance.now() / 1000;
+    if (!posePick || posePick.st !== st || nowS > posePick.until) {
+      posePick = {st, key: pool[Math.floor(Math.random() * pool.length)],
+                  until: nowS + 8 + Math.random() * 6};
+    }
+    const pure = POSE_BY_KEY[posePick.key];
+    spot = {x: pure.at[0], y: pure.at[1]};
+    want = fullParams(pure);
   } else {
     const look = liveLook(level, serverState === "SLEEP" ? 1 : 0);
     spot = look.at;

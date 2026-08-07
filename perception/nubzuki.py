@@ -145,7 +145,7 @@ LABELS: dict[str, str] = {
 # of the sheet is reachable by hand on the wheel but never by the machine, so
 # reading one back means a person is driving, which is worth knowing.
 LIVE_LEVEL: dict[str, float] = {
-    "sitHeart": 0.0, "neutral": .22, "crying": .50, "angry": .78, "rage": 1.0,
+    "sitHeart": 0.0, "neutral": .22, "crying": .38, "angry": .78, "rage": 1.0,
 }
 SLEEP_POSES = ("sleeping", "dreaming")
 DISTRESS_POSES = ("rage", "angry", "crying")
@@ -647,6 +647,82 @@ def is_nubzuki(f: Features) -> bool:
     return (f.blue >= .15 or f.red >= .15 or f.purple >= .10 or f.yellow >= .05)
 
 
+# --------------------------------------------------------------------------- #
+# Framing the camera: which pixels get read at all
+# --------------------------------------------------------------------------- #
+# Lives here, not in serve.py, because both readers need it and a second copy
+# of a framing rule is how two callers quietly stop seeing the same thing --
+# the same reason JOINT_NAMES has one home.  serve.py imports these names.
+def parse_crop(spec: str) -> tuple[float, float, float, float]:
+    """``"x,y,w,h"`` -> a rectangle, as fractions of the frame.
+
+    Numbers are read as fractions when every one of them is <= 1, and as
+    pixels otherwise -- so ``0.25,0.1,0.5,0.8`` and ``320,72,640,576`` both
+    mean roughly the middle of a 1280x720 frame.  Pixels are only resolved
+    against the real frame in :func:`crop_frame`, since nothing here has seen
+    one yet.
+    """
+    parts = [p.strip() for p in spec.replace(" ", ",").split(",") if p.strip()]
+    if len(parts) != 4:
+        raise ValueError(f"crop wants x,y,w,h -- got {spec!r}")
+    try:
+        x, y, w, h = (float(p) for p in parts)
+    except ValueError:
+        raise ValueError(f"crop wants four numbers -- got {spec!r}") from None
+    if w <= 0 or h <= 0:
+        raise ValueError(f"crop width and height must be positive: {spec!r}")
+    return (x, y, w, h)
+
+
+def crop_frame(bgr: np.ndarray,
+               crop: tuple[float, float, float, float] | None) -> np.ndarray:
+    """The frame cut down to the region of interest.
+
+    This settles the page competition before it starts: :func:`find_page`
+    takes the largest bright near-neutral region, so any lit whiteboard or
+    window bigger than the iPad wins the frame and the mascot is never looked
+    at.  The size gate (a fraction of the frame) stops being diluted by wall
+    at the same time.
+    """
+    if crop is None:
+        return bgr
+    fh, fw = bgr.shape[:2]
+    x, y, w, h = crop
+    if max(crop) <= 1.0:                    # fractions of this frame
+        x, y, w, h = x * fw, y * fh, w * fw, h * fh
+    x0 = max(0, min(fw - 1, int(round(x))))
+    y0 = max(0, min(fh - 1, int(round(y))))
+    x1 = max(x0 + 1, min(fw, int(round(x + w))))
+    y1 = max(y0 + 1, min(fh, int(round(y + h))))
+    return bgr[y0:y1, x0:x1]
+
+
+def centre_region(zoom: float) -> tuple[float, float, float, float]:
+    """The middle ``1/zoom`` of a frame, as fractions -- what a bare zoom reads."""
+    side = 1.0 / max(1.0, zoom)
+    return ((1.0 - side) / 2, (1.0 - side) / 2, side, side)
+
+
+def magnify(bgr: np.ndarray, zoom: float) -> np.ndarray:
+    """The region of interest, scaled up -- digital zoom, and it does pay.
+
+    No pixel of detail is created by this, and :func:`classify` resizes every
+    figure to CROP_N anyway, so "no effect" was the honest expectation and it
+    is wrong.  The steps *before* the classifier -- the mask morphology,
+    :func:`square_crop`'s 6 px pad, the silhouette -- are written in fixed
+    pixels, and a small figure starves them.  Named-correct on a photographed
+    panel (warp, glare, blur, noise, JPEG q45), cropped to the panel, three
+    seeds: a 44 px figure 8-10/17 at x1, 14-15/17 at x2, 16/17 at x3; a 53 px
+    figure 12-14 -> 16-17; at 63 px and above all three are within noise.
+    So it is a rescue for a distant panel, not a free upgrade -- and it costs
+    real time (x3 ran ~570 ms a frame on the Jetson).
+    """
+    if zoom is None or zoom <= 1.0:
+        return bgr
+    return cv2.resize(bgr, None, fx=zoom, fy=zoom,
+                      interpolation=cv2.INTER_CUBIC)
+
+
 def read(bgr: np.ndarray, min_area: int | None = None,
          balance: bool = True) -> list[Sighting]:
     """Find and name every Nubzuki in the frame.
@@ -895,6 +971,10 @@ def _live(args) -> int:
                 continue
             if args.mirror:
                 frame = cv2.flip(frame, 1)
+            # Framed before anything reads it, so the overlay, the votes and
+            # the --dump corpus are all about the same pixels.  Same flags,
+            # same meaning, same code as serve.py --sense.
+            frame = magnify(crop_frame(frame, args.crop), args.zoom)
             frames += 1
             now = time.monotonic()
             seen = read(frame, args.min_area)
@@ -1056,16 +1136,33 @@ def sheet_position(box: tuple[int, int, int, int]) -> tuple[float, float]:
             (y + h / 2 - SHEET_CENTRE[1]) / SHEET_RADIUS)
 
 
+def overlay_scale(bgr: np.ndarray) -> float:
+    """How big to draw on this frame, relative to the 640-wide it was tuned for.
+
+    A crop makes the read frame small -- 160x144 for a panel across the room --
+    and a fixed 0.62 font on that is lettering three heads high, which the
+    dashboard then upscales to fill its card.  It looks like the labels were
+    drawn before the crop; they were not (the status line sits at (16, 30),
+    which a crop starting at x=237 would have excluded entirely).  They are
+    simply drawn at a size nothing told them to revise.  Clamped, because a
+    4K frame does not want four-fold lettering either.
+    """
+    return max(0.35, min(1.6, bgr.shape[1] / 640.0))
+
+
 def annotate(bgr: np.ndarray, seen: list[Sighting]) -> np.ndarray:
-    """Draw the boxes and names onto a copy of the frame."""
+    """Draw the boxes and names onto a copy of the frame, sized to it."""
     out = bgr.copy()
+    k = overlay_scale(bgr)
+    box_w = max(1, round(2 * k))
     for s in seen:
         x, y, w, h = s.box
-        cv2.rectangle(out, (x, y), (x + w, y + h), (60, 200, 60), 2)
-        cv2.putText(out, s.label, (x, max(14, y - 6)),
-                    cv2.FONT_HERSHEY_SIMPLEX, .45, (20, 20, 20), 3, cv2.LINE_AA)
-        cv2.putText(out, s.label, (x, max(14, y - 6)),
-                    cv2.FONT_HERSHEY_SIMPLEX, .45, (60, 200, 60), 1, cv2.LINE_AA)
+        cv2.rectangle(out, (x, y), (x + w, y + h), (60, 200, 60), box_w)
+        origin = (x, max(round(14 * k), y - round(6 * k)))
+        cv2.putText(out, s.label, origin, cv2.FONT_HERSHEY_SIMPLEX,
+                    .45 * k, (20, 20, 20), max(2, round(3 * k)), cv2.LINE_AA)
+        cv2.putText(out, s.label, origin, cv2.FONT_HERSHEY_SIMPLEX,
+                    .45 * k, (60, 200, 60), max(1, round(1 * k)), cv2.LINE_AA)
     return out
 
 
@@ -1119,6 +1216,14 @@ def _main(argv: list[str] | None = None) -> int:
                         "the frame (MIN_FIGURE_FRAC)")
     p.add_argument("--hold", type=float, default=1.0,
                    help="seconds of frames the live readout votes over")
+    # The same two flags serve.py --sense takes, and the same code behind
+    # them: tools/aim_camera.py prints values that work in either.
+    p.add_argument("--crop", metavar="X,Y,W,H",
+                   help="read only this region of each frame (fractions when "
+                        "all <= 1, else pixels).  Live modes only")
+    p.add_argument("--zoom", type=float, default=1.0, metavar="N",
+                   help="magnify what is read by N; with no --crop it reads "
+                        "the middle 1/N, so the cost stays flat")
     # 1280x720, not 640x360.  The mascot is a small object inside a screen
     # inside the frame, so capture resolution lands on it four-fold: measured on
     # a live capture the figure arrived 76x73 px, small enough that Bashful and
@@ -1142,6 +1247,17 @@ def _main(argv: list[str] | None = None) -> int:
                         "to look at when it sees nothing")
     p.add_argument("--no-display", action="store_true")
     args = p.parse_args(argv)
+    if args.crop:
+        try:
+            args.crop = parse_crop(args.crop)
+        except ValueError as exc:
+            p.error(str(exc))
+    else:
+        args.crop = None
+    if args.zoom < 1.0:
+        p.error(f"--zoom magnifies, so it starts at 1 -- got {args.zoom:g}")
+    if args.zoom > 1.0 and args.crop is None:
+        args.crop = centre_region(args.zoom)
     if args.camera is not None or args.video:
         return _live(args)
     if args.server:
