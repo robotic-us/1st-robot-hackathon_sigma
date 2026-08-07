@@ -296,6 +296,8 @@ function updatePanels() {
     put("log", S.events.map(t => `<div>${t}</div>`).join(""));
   }
 
+  drawBrain(put);
+
   // The acted scenario says so on the page, not only inside the drawer;
   // and a pain/posture alarm shows the moment the judge raises it, before
   // the machine's own alert lands.
@@ -319,6 +321,51 @@ function updatePanels() {
   $("rawphase").textContent = S.tag.phase || "live camera";
 }
 
+
+/* ---- The learning panel (docs/IDEA.md, core/policy.py).  Only exists when
+   serve.py runs with --policy: S.policy carries the advised steps and the
+   per-motion mean rank change.  The ladder mirrors core/policy.py's BANDS,
+   like CALM_LEVEL/CRY_LEVEL above; polarity in the rows is direction from
+   the centre axis + a signed number, never colour alone -- this page has no
+   hue to spend. ---- */
+const RANK_BANDS = [0.12, 0.30, 0.45, 0.62];
+const RANK_WORD = ["happy", "fuss", "cry 1", "cry 2", "awful"];
+
+function drawBrain(put) {
+  const brain = $("brain"), p = S.policy;
+  if (!p) { brain.hidden = true; return; }
+  brain.hidden = false;
+  $("brainkind").textContent =
+      `· ${p.brain} brain · ${p.scenarios} taught scenarios`;
+
+  const ema = S.cradle.ema ?? 0;
+  let rank = RANK_BANDS.length;
+  for (let i = 0; i < RANK_BANDS.length; i++)
+    if (ema < RANK_BANDS[i]) { rank = i; break; }
+  put("ladder", RANK_WORD.map((w, i) =>
+      `<span class="${i === rank ? "on" : ""}">${w}</span>`).join(""));
+
+  // One diverging row per tried motion: mean rank change per 30 s attempt.
+  // Full scale is +-2 rungs; direction and the signed number carry polarity.
+  const rows = Object.entries(p.scores)
+    .sort((a, b) => b[1] - a[1])
+    .map(([m, v]) => {
+      const w = clamp(Math.abs(v) / 2, 0, 1) * 50;
+      const bar = v >= 0 ? `<i class="up" style="width:${w}%"></i>`
+                         : `<i class="dn" style="width:${w}%"></i>`;
+      const sign = v > 0 ? "+" : "";
+      const say = v > 0 ? "helps" : v < 0 ? "makes it worse" : "no effect";
+      return `<div class="srow" title="${m}: mean rank change ${sign}${v} `
+           + `per attempt — ${say}"><b>${m}</b>`
+           + `<span class="dbar">${bar}</span>`
+           + `<span class="dval">${sign}${v.toFixed(1)}</span></div>`;
+    }).join("");
+  put("scores", rows ||
+      `<div class="note">nothing tried yet — learning starts at the first fuss</div>`);
+
+  put("trail", p.steps.slice(-5).map(s =>
+      `${s.motion} ${s.before}→${s.after ?? "…"}`).join("  ·  "));
+}
 
 /* ---- The hero: the infant as something alive.
 

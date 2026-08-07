@@ -421,6 +421,10 @@ class CradleMachine:
     def __init__(self, engine: MotionEngine) -> None:
         self.engine = engine
         self.auto = True
+        # Optional (now, ema) -> motion-id hook (core/policy.py): may suggest
+        # *which* P1 motion a trial uses; every when/abort/taper decision
+        # stays here.  Anything but a valid P1 id falls back to the ladder.
+        self.advisor = None
         self.state = "quiet"       # quiet | trial | settling | gate_fail
         self.ema = 0.0
         self.alert = ""
@@ -513,9 +517,10 @@ class CradleMachine:
                     self._log(f"trial improving (ema {self.ema:.2f}) -- holding "
                               f"{TRIAL_LADDER[self._rung]}")
                 elif (self.ema >= CRY_LEVEL
-                      and self._rung + 1 < len(TRIAL_LADDER)):
-                    self._rung += 1
-                    step = TRIAL_LADDER[self._rung]
+                      and (self._rung + 1 < len(TRIAL_LADDER)
+                           or self.advisor is not None)):
+                    self._rung = min(self._rung + 1, len(TRIAL_LADDER) - 1)
+                    step = self._trial_step(now)
                     self.engine.command(step, now, ramp_s=10.0)
                     self._log(f"no improvement at 30 s -- one step up to {step}")
             if now >= self._deadline:
@@ -545,9 +550,20 @@ class CradleMachine:
                 self._cooldown_until = max(self._cooldown_until,
                                            now + COOLDOWN_END_S)
 
+    def _trial_step(self, now: float) -> str:
+        """The ladder rung -- unless the advisor names a valid P1 motion."""
+        step = TRIAL_LADDER[self._rung]
+        if self.advisor is None:
+            return step
+        pick = self.advisor(now, self.ema)
+        m = LIBRARY_BY_ID.get(str(pick).upper()) if pick else None
+        if m is not None and m.grade == "P1":
+            return m.id
+        return step
+
     def _start_trial(self, now: float) -> None:
         self._rung = 1 if self.ema >= CRY_LEVEL else 0
-        step = TRIAL_LADDER[self._rung]
+        step = self._trial_step(now)
         self.engine.command(step, now, ramp_s=RAMP_DEFAULT_S)
         self.state = "trial"
         self._trial_t0 = self._check_t = now

@@ -5,6 +5,7 @@ One stdlib HTTP server:
 
     /            the dashboard (web/index.html; /style.css and /app.js beside it)
     /events      Server-Sent Events: the whole state as JSON, ~20 Hz
+    /history     the last ~15 min as 1 Hz samples (seeds the emotion timeline)
     /frame       MJPEG camera stream with the sensing overlay
     /motions     the M01-M50 library from the evidence report, once
     /jam         simulate a mechanism fault (trips the safety gate)
@@ -50,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import socket
 import threading
 import time
@@ -83,6 +85,10 @@ class Shared:
         self.jpeg: Optional[bytes] = None
         self.events: deque[str] = deque(maxlen=14)
         self.motion_request: Optional[str] = None
+        self.policy = None      # core/policy.py SoothePolicy when --policy
+        # 1 Hz samples for the dashboard's emotion timeline: a fresh page
+        # seeds the last ~15 min from /history instead of starting empty.
+        self.history: deque[dict] = deque(maxlen=900)
         self.viz_gain = 1.0     # RViz display exaggeration; 1.0 = honest
         self.offsets = (0.0, 0.0, 0.0)   # last (ap, ml, z) the engine produced
         self.stop = threading.Event()
@@ -219,13 +225,18 @@ class ScenarioPlayer:
 def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                 sense: bool = False, audio_device: str = "plughw:WEBCAM,0",
                 no_sound: bool = False, baby_seed: int | None = None,
-                baby: bool = False, bridge=None) -> None:
+                baby: bool = False, bridge=None,
+                personality: bool = False) -> None:
     sensor = mic = infant = scenario = None
     if baby:
-        from perception.baby import VirtualBaby
-        infant = VirtualBaby(seed=baby_seed)
+        from perception.baby import Personality, VirtualBaby
+        quirks = (Personality.random(random.Random(baby_seed))
+                  if personality else None)
+        infant = VirtualBaby(seed=baby_seed, personality=quirks)
         shared.log("virtual infant awake"
                    + (f" (seed {baby_seed})" if baby_seed is not None else ""))
+        if quirks is not None:
+            shared.log("hidden temperament: " + quirks.describe())
     elif sense:
         # Real sensing.  The five-state watcher (perception/watch.py) is the
         # primary visual channel; YuNet+FER+ is the fallback without mediapipe.
@@ -267,6 +278,7 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
     ik_key = ik_pose = ik_joints = None
 
     t0 = time.monotonic()
+    hist_t = 0.0                     # last 1 Hz timeline sample
     while not shared.stop.is_set():
         now = time.monotonic()
         if infant is not None:
@@ -274,7 +286,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
             # and the frame IS the baby -- a circle riding the plate offset.
             time.sleep(1.0 / 30.0)
             reading = infant.update(
-                now, soothing=shared.engine.env * shared.engine.amp_scale)
+                now, soothing=shared.engine.env * shared.engine.amp_scale,
+                motion=shared.engine.mode.id if shared.engine.mode else None)
             frame = baby_frame(reading, shared.engine.offsets_mm())
         elif scenario is not None:
             time.sleep(1.0 / 30.0)
@@ -293,6 +306,11 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
         if motion_req is not None:
             ok, msg = shared.engine.command(motion_req, now)
             shared.log(msg if ok else "refused: " + msg)
+
+        # The soothing policy watches the same distress the machine gets, so
+        # it can settle each advised motion's outcome (core/policy.py).
+        if shared.policy is not None:
+            shared.policy.observe(now, infant_level(reading), shared.engine)
 
         # The evidence-report ladder.  A pain/posture alarm rides the same
         # fault input as a jam: interrupt and call, never soothe (5.1).
@@ -324,6 +342,18 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
             # desired_slot() goes None and no further slot is requested.
             bridge.tick(now, desired_slot(shared.engine))
 
+        if now - hist_t >= 1.0:      # the timeline's 1 Hz sample
+            hist_t = now
+            shared.history.append({
+                "t": round(now, 2),
+                "level": round(infant_level(reading), 3),
+                "ema": round(shared.machine.ema, 3),
+                "state": getattr(reading, "emotion", "") or "",
+                "motion": shared.engine.mode.id if shared.engine.mode else None,
+                "env": round(shared.engine.env * shared.engine.amp_scale, 3),
+                "alarm": bool(fault or shared.machine.state == "gate_fail"),
+            })
+
         if infant is not None or scenario is not None:
             canvas = frame                     # these draw themselves
         else:
@@ -343,6 +373,9 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
 
 def build_state(shared: Shared, reading, now: float) -> dict:
     return {
+        # the learning panel's feed; absent unless --policy is on
+        **({"policy": shared.policy.snapshot()}
+           if shared.policy is not None else {}),
         "t": round(now, 3),
         "pose": [round(v, 4) for v in shared.pose],
         "tag": {"present": reading.present,
@@ -393,6 +426,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             elif url.path == "/motions":
                 self._json(catalog())
+            elif url.path == "/history":
+                # a snapshot copy: the sensor thread appends concurrently
+                self._json(list(self.shared.history))
             elif url.path == "/motion":
                 self._motion(url)
             elif url.path == "/auto":
@@ -473,7 +509,8 @@ def lan_ip() -> str:
 def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: bool,
           sense: bool = False, audio_device: str = "plughw:WEBCAM,0",
           no_sound: bool = False, baby: bool = False,
-          baby_seed: int | None = None, robot_target: str | None = None):
+          baby_seed: int | None = None, robot_target: str | None = None,
+          personality: bool = False):
     ros = None
     if use_ros:
         try:
@@ -503,7 +540,7 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
     worker = threading.Thread(
         target=sensor_loop,
         args=(shared, camera_index, fake, ros, sense, audio_device, no_sound,
-              baby_seed, baby, bridge),
+              baby_seed, baby, bridge, personality),
         daemon=True)
     worker.start()
     Handler.shared = shared
@@ -522,6 +559,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "process) the sway can genuinely soothe")
     parser.add_argument("--baby-seed", type=int, default=None,
                         help="seed the virtual infant for a repeatable run")
+    parser.add_argument("--personality", action="store_true",
+                        help="with --baby: give the infant a hidden motion "
+                             "temperament (docs/IDEA.md) the policy can learn")
+    parser.add_argument("--policy", choices=("reflex", "claude"), default=None,
+                        help="let a soothing policy advise which P1 motion "
+                             "each trial uses: 'reflex' = offline taught "
+                             "strategy, 'claude' = the LLM (ANTHROPIC_API_KEY)")
     parser.add_argument("--sense", action="store_true",
                         help="real sensing: face+emotion (+mic) drives the "
                              "machine instead of tag state cards")
@@ -549,6 +593,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--sense needs a real camera; it cannot run with --verify")
     if args.baby and (args.sense or args.fake):
         parser.error("--baby is its own world; drop --sense/--verify")
+    if args.personality and not args.baby:
+        parser.error("--personality is a virtual-infant trait; add --baby")
 
     # --fake is a desk demo: a synthetic tag, no camera and no rig, so there is
     # nothing an R-grade mode can hurt.  Unlock the whole library there so the
@@ -559,6 +605,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     research = args.research or args.fake
     shared = Shared(allow_research=research)
     shared.viz_gain = max(1.0, args.viz_gain)
+    if args.policy:
+        from core.policy import (ClaudeBrain, ReflexBrain, SoothePolicy,
+                                 load_scenarios)
+        brain = ClaudeBrain() if args.policy == "claude" else ReflexBrain()
+        shared.policy = SoothePolicy(brain, scenarios=load_scenarios())
+        shared.machine.advisor = shared.policy.pick
+        shared.log(f"soothe policy '{args.policy}' advises trial motions "
+                   f"({len(shared.policy.scenarios)} taught scenarios)")
     if not (args.fake or args.baby):
         args.sense = True       # a bare launch means the real recognizer
     server, worker, ros, robot = start(shared, args.port, args.camera_index,
@@ -567,7 +621,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                                        audio_device=args.audio_device,
                                        no_sound=args.no_sound, baby=args.baby,
                                        baby_seed=args.baby_seed,
-                                       robot_target=args.robot)
+                                       robot_target=args.robot,
+                                       personality=args.personality)
     source = ("virtual infant" if args.baby
               else "verification scenario" if args.fake
               else f"camera {args.camera_index} (real sensing)")

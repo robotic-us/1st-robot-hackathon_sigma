@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIGMA · does the learning work?</title>
+<style>
+:root{--page:#fff;--ink:#111;--ink2:#3d3d3d;--muted:#6f6f6f;
+      --baseline:#b5b5b5;--hairline:#e2e2e2;--raised:#f2f2f2}
+@media(prefers-color-scheme:dark){
+ :root{--page:#000;--ink:#fff;--ink2:#c9c9c9;--muted:#8a8a8a;
+       --baseline:#454545;--hairline:#1f1f1f;--raised:#161616}}
+*{box-sizing:border-box;margin:0}
+body{background:var(--page);color:var(--ink);max-width:860px;margin:0 auto;
+     padding:36px 24px 60px;
+     font:14px/1.55 "Helvetica Neue","Liberation Sans","Segoe UI",Arial,sans-serif}
+h1{font-size:22px;letter-spacing:-.01em}
+h1 small{font-weight:400;color:var(--muted);font-size:14px}
+h2{font-size:11px;color:var(--muted);text-transform:uppercase;
+   letter-spacing:.1em;border-top:1px solid var(--baseline);
+   padding-top:8px;margin:30px 0 10px}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}
+.tile{border-top:1px solid var(--baseline);padding-top:8px}
+.tile .k{font-size:10px;color:var(--muted);text-transform:uppercase;
+         letter-spacing:.1em}
+.tile .v{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums}
+.tile .v small{font-size:11px;font-weight:400;color:var(--muted)}
+.legend{display:flex;gap:18px;font-size:11px;color:var(--muted);margin:6px 0 2px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;
+          margin-right:6px;vertical-align:-1px}
+svg{width:100%;height:auto;display:block}
+svg text{font:10px ui-monospace,Menlo,Consolas,monospace;fill:var(--muted)}
+svg text.val{fill:var(--ink2)}
+svg .axis{stroke:var(--baseline)}
+svg .ladder{fill:var(--muted)}
+svg .policy{fill:var(--ink)}
+table{border-collapse:collapse;font-size:12px;width:100%;
+      font-variant-numeric:tabular-nums}
+td,th{text-align:left;padding:4px 12px 4px 0;
+      border-bottom:1px dotted var(--hairline)}
+th{font-size:10px;color:var(--muted);text-transform:uppercase;
+   letter-spacing:.08em;font-weight:500}
+td b{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:500}
+.note{font-size:11px;color:var(--muted);margin-top:8px;max-width:64ch}
+.trail{font:11px/1.8 ui-monospace,Menlo,Consolas,monospace;color:var(--ink2)}
+</style></head><body>
+<h1>SIGMA — the cradle learns this baby
+  <small>· 5 simulated nights · docs/IDEA.md pipeline</small></h1>
+<p class="note">One virtual infant with a fixed hidden temperament
+(loves M13, hates M10/M12, likes M09->M13). The learning policy carries its memory across
+nights; the control arm re-runs the identical nights with the report's fixed
+trial ladder. Same safety machine, same checkpoints, same abort rules.
+The policy is never shown the temperament — only the happiness ranks.</p>
+
+<div class="tiles">
+ <div class="tile"><div class="k">upset, night 1 → night 5
+  (policy)</div><div class="v">9 →
+  4 <small>min</small></div></div>
+ <div class="tile"><div class="k">total upset time, all nights</div>
+  <div class="v">17 <small>vs 66 min on the
+  ladder</small></div></div>
+ <div class="tile"><div class="k">distress avoided</div>
+  <div class="v">74<small> %</small></div></div>
+</div>
+
+<h2>Minutes upset (fussing + crying) per night</h2>
+<div class="legend"><span><i style="background:var(--muted)"></i>fixed
+ladder</span><span><i style="background:var(--ink)"></i>learning
+policy</span></div>
+<svg viewBox="0 0 840 240" role="img" aria-label="minutes upset per night, fixed ladder versus learning policy"><path class="ladder" d="M43.4 214.0 v-155.6 q0 -2 2 -2 h42.0 q2 0 2 2 v155.6 z"/><text class="val" x="66.4" y="52.4" text-anchor="middle">17.5</text><path class="policy" d="M91.4 214.0 v-75.1 q0 -2 2 -2 h42.0 q2 0 2 2 v75.1 z"/><text class="val" x="114.4" y="132.9" text-anchor="middle">8.6</text><text x="90.4" y="232" text-anchor="middle">night 1</text><path class="ladder" d="M208.2 214.0 v-194.0 q0 -2 2 -2 h42.0 q2 0 2 2 v194.0 z"/><text class="val" x="231.2" y="14.0" text-anchor="middle">21.8</text><path class="policy" d="M256.2 214.0 v-8.2 q0 -2 2 -2 h42.0 q2 0 2 2 v8.2 z"/><text class="val" x="279.2" y="199.8" text-anchor="middle">1.1</text><text x="255.2" y="232" text-anchor="middle">night 2</text><path class="ladder" d="M373.0 214.0 v-61.1 q0 -2 2 -2 h42.0 q2 0 2 2 v61.1 z"/><text class="val" x="396.0" y="146.9" text-anchor="middle">7.0</text><path class="policy" d="M421.0 214.0 v-13.0 q0 -2 2 -2 h42.0 q2 0 2 2 v13.0 z"/><text class="val" x="444.0" y="195.0" text-anchor="middle">1.7</text><text x="420.0" y="232" text-anchor="middle">night 3</text><path class="ladder" d="M537.8 214.0 v-44.2 q0 -2 2 -2 h42.0 q2 0 2 2 v44.2 z"/><text class="val" x="560.8" y="163.8" text-anchor="middle">5.1</text><path class="policy" d="M585.8 214.0 v-11.2 q0 -2 2 -2 h42.0 q2 0 2 2 v11.2 z"/><text class="val" x="608.8" y="196.8" text-anchor="middle">1.5</text><text x="584.8" y="232" text-anchor="middle">night 4</text><path class="ladder" d="M702.6 214.0 v-128.9 q0 -2 2 -2 h42.0 q2 0 2 2 v128.9 z"/><text class="val" x="725.6" y="79.1" text-anchor="middle">14.5</text><path class="policy" d="M750.6 214.0 v-35.8 q0 -2 2 -2 h42.0 q2 0 2 2 v35.8 z"/><text class="val" x="773.6" y="172.2" text-anchor="middle">4.2</text><text x="749.6" y="232" text-anchor="middle">night 5</text><line class="axis" x1="8" y1="214" x2="832" y2="214"/></svg>
+
+<h2>What the policy tried, night by night</h2>
+<table><tr><th>night</th><th>advised motions (rank before→after)</th>
+<th>ladder min upset</th><th>policy min upset</th></tr><tr><td>night 1</td><td class="trail">M10 1→1  M12 4→0  M12 1→3  M12 1→3  M13 2→0  M13 1→0  M13 2→0  M13 1→0</td><td>17.5</td><td>8.6</td></tr><tr><td>night 2</td><td class="trail">M13 1→0  M13 1→0  M13 1→0</td><td>21.8</td><td>1.1</td></tr><tr><td>night 3</td><td class="trail">M13 1→0  M13 1→0  M13 1→0  M13 1→0  M13 1→1</td><td>7.0</td><td>1.7</td></tr><tr><td>night 4</td><td class="trail">M13 1→0  M13 1→0  M13 1→0  M13 1→0</td><td>5.1</td><td>1.5</td></tr><tr><td>night 5</td><td class="trail">M13 1→0  M13 1→0  M13 1→3  M13 3→3  M13 1→0  M13 1→0  M13 1→0</td><td>14.5</td><td>4.2</td></tr></table>
+
+<h2>What it believes about this baby now</h2>
+<table><tr><th>motion</th><th>mean rank change</th><th>reading</th></tr>
+<tr><td><b>M13</b></td><td>+0.87</td><td>helps</td></tr><tr><td><b>M10</b></td><td>0.00</td><td>no effect</td></tr><tr><td><b>M12</b></td><td>0.00</td><td>no effect</td></tr></table>
+<p class="note">Ground truth it was never told: loves M13, hates M10/M12, likes M09->M13.
+Report generated by tools/learn_report.py --seed 2
+--nights 5 --night-s 1800.</p>
+</body></html>

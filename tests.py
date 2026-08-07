@@ -1146,6 +1146,185 @@ def test_bridge() -> None:
     print("  park mid-slot  logged once, nothing aborted  -- ok")
 
 
+def test_policy() -> None:
+    """The IDEA.md pipeline: ranks, brains, personality, advised closed loop."""
+    import contextlib
+    import io
+    import tempfile
+    from pathlib import Path
+
+    from core.cradle import TRIAL_LADDER, CradleMachine, MotionEngine
+    from core.policy import (CANDIDATES, ReflexBrain, SoothePolicy, Step,
+                             load_scenarios, parse_reply, rank_of,
+                             render_prompt)
+    from perception.baby import Personality, VirtualBaby
+
+    # The reward ladder: 행복 > 울음1 > 울음2 > 울음3 > 불행 as distress bands.
+    for level, want in ((0.05, 0), (0.20, 1), (0.35, 2), (0.50, 3), (0.80, 4)):
+        assert rank_of(level) == want, f"rank_of({level}) != {want}"
+    print("  ranks        distress 0..1 -> happiness ladder 0..4  -- ok")
+
+    # The shared language: prompts render, replies parse whatever the LLM says.
+    assert parse_reply("M13") == "M13"
+    assert parse_reply("I'd try m13 next.") == "M13"
+    assert parse_reply("stop now, baby is happy") == "STOP"
+    assert parse_reply("M45") is None and parse_reply("hmm") is None
+    prompt = render_prompt([], [Step("M10", 2, 3)], 3)
+    assert "M10: 2 -> 3" in prompt and "M18" in prompt and "STOP" in prompt
+    print("  language     prompt renders, sloppy replies parse  -- ok")
+
+    # The taught strategy IS the IDEA.md storyline: try -> worse -> switch ->
+    # improves -> keep -> happy -> STOP.
+    brain = ReflexBrain()
+    assert brain("", [], 0) == "STOP", "at HAPPY the answer is STOP"
+    steps = [Step("M10", 2, 3)]                       # first try made it worse
+    switched = brain("", steps, 3)
+    assert switched in CANDIDATES and switched != "M10", "worse must switch"
+    steps.append(Step("M12", 3, 1))                   # this one improved
+    assert brain("", steps, 1) == "M12", "an improving motion must be kept"
+    steps.append(Step("M12", 1, 0))
+    assert brain("", steps, 0) == "STOP"
+    print("  reflex       explore -> back off -> exploit -> STOP  -- ok")
+
+    # Personality: the loved motion soothes a cry, the hated one never does
+    # and worsens a fuss -- the hidden temperament the policy must discover.
+    quirks = Personality(love="M13", hate=frozenset({"M10"}))
+
+    def under(motion: str, state: str, seconds: float) -> str:
+        b = VirtualBaby(seed=5, personality=quirks)
+        b.state, b.soothable, b._until = state, True, 1e9
+        t = 0.0
+        while t < seconds and b.state == state:
+            t += 1.0 / 30.0
+            b.update(t, soothing=1.0, motion=motion)
+        return b.state
+
+    assert under("M13", "CRY", 120.0) != "CRY", "the loved motion must soothe"
+    assert under("M10", "CRY", 240.0) == "CRY", "a hated motion must not"
+    assert under("M10", "FUSS", 240.0) == "CRY", "a hated motion agitates"
+    print("  temperament  loved soothes, hated agitates  -- ok")
+
+    # The machine validates the advisor: R-grade or garbage falls back to the
+    # report ladder; a valid P1 pick is used.
+    def first_trial(advice):
+        engine = MotionEngine()
+        box = CradleMachine(engine)
+        box.advisor = lambda now, ema: advice
+        t = 0.0
+        while not engine.active and t < 60.0:
+            t += 1.0 / 15.0
+            box.tick(t, True, 0.55, jam=False)
+            engine.tick(t)
+        return engine.mode.id if engine.mode else None
+
+    assert first_trial("M45") in TRIAL_LADDER, "R-grade advice must be refused"
+    assert first_trial("nonsense") in TRIAL_LADDER
+    assert first_trial(None) in TRIAL_LADDER
+    assert first_trial("M15") == "M15", "a valid P1 pick must be used"
+    print("  advisor      P1 picks used, R/garbage fall back to ladder  -- ok")
+
+    # Closed loop: a baby that hates exactly the ladder's first rungs.  The
+    # policy must learn not to repeat a worsening motion; the plain ladder
+    # keeps walking into them, so the advised run cries no more than it.
+    def closed_loop(advise: bool, seed: int = 21):
+        temperament = Personality(love="M11", hate=frozenset({"M10", "M12"}))
+        baby = VirtualBaby(seed=seed, personality=temperament)
+        engine = MotionEngine()
+        box = CradleMachine(engine)
+        policy = None
+        if advise:
+            policy = SoothePolicy(ReflexBrain())
+            box.advisor = policy.pick
+        t, cry_s, dt = 0.0, 0.0, 1.0 / 15.0
+        while t < 1500.0:
+            t += dt
+            r = baby.update(t, soothing=engine.env * engine.amp_scale,
+                            motion=engine.mode.id if engine.mode else None)
+            if policy is not None:
+                policy.observe(t, r.distress, engine)
+            box.tick(t, r.present, r.distress, jam=False)
+            box.events.clear()
+            engine.tick(t)
+            if baby.state == "CRY":
+                cry_s += dt
+        return cry_s, policy
+
+    ladder_cry, _ = closed_loop(False)
+    policy_cry, policy = closed_loop(True)
+    assert policy.steps, "the machine must have consulted the policy"
+    picks = [s.motion for s in policy.steps]
+    for hated in ("M10", "M12"):
+        assert picks.count(hated) <= 1, \
+            f"{hated} worsened things and must not be advised twice: {picks}"
+    assert policy_cry <= ladder_cry, \
+        f"advised {policy_cry:.0f}s of crying vs ladder {ladder_cry:.0f}s"
+    print(f"  closed loop  25 sim-min: advised {policy_cry:.0f}s crying "
+          f"<= ladder {ladder_cry:.0f}s, picks {picks}  -- ok")
+
+    # The scenario corpus round-trips into the prompt (the LLM's 학습 data).
+    import tools.make_scenarios as ms
+    from tools.make_scenarios import main as make_scenarios
+    sim_s = ms.SIM_S
+    try:
+        ms.SIM_S = 400.0                       # keep the suite quick
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "scenarios.jsonl"
+            with contextlib.redirect_stdout(io.StringIO()):
+                make_scenarios(["--n", "2", "--out", str(out), "--seed", "3"])
+            scen = load_scenarios(out)
+    finally:
+        ms.SIM_S = sim_s
+    assert len(scen) == 2 and all("steps" in s and "outcome" in s for s in scen)
+    prompt = render_prompt(scen, [], 2)
+    assert "Example sessions" in prompt
+    print(f"  scenarios    generated 2, round-trip into the prompt  -- ok")
+
+    # The dashboard's learning panel: the snapshot the SSE stream carries and
+    # the markup/script hooks that draw it (web/ has no build step, so this
+    # is the only place a lost hook would surface).
+    snap = policy.snapshot()
+    assert set(snap) == {"brain", "scenarios", "scores", "steps"}
+    assert snap["brain"] == "reflex" and snap["steps"], snap
+    assert all(v <= 0 for m, v in snap["scores"].items()
+               if m in ("M10", "M12")), \
+        f"hated motions must not score positive: {snap['scores']}"
+    page = Path("web/index.html").read_text()
+    js = Path("web/app.js").read_text()
+    for hook in ('id="brain"', 'id="ladder"', 'id="scores"', 'id="trail"'):
+        assert hook in page, f"learning panel lost {hook!r}"
+    for hook in ("S.policy", "drawBrain", "RANK_BANDS"):
+        assert hook in js, f"learning panel script lost {hook!r}"
+    from serve import Shared, build_state
+    from types import SimpleNamespace
+    shared = Shared()
+    shared.policy = policy
+    state = build_state(shared, SimpleNamespace(present=True, distress=0.2,
+                                                x=0.0), now=1.0)
+    assert state["policy"]["scores"] == snap["scores"]
+    assert "policy" not in build_state(Shared(),
+                                       SimpleNamespace(present=True,
+                                                       distress=0.2, x=0.0),
+                                       now=1.0)
+    print("  panel        snapshot -> /events -> web hooks wired  -- ok")
+
+    # The nightly report: the presentation artifact renders and tells the
+    # right story (policy total <= ladder total on the tricky baby).
+    import tools.learn_report as lr
+    night_s = lr.NIGHT_S
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "learning.html"
+            with contextlib.redirect_stdout(io.StringIO()):
+                lr.main(["--nights", "2", "--night-s", "500",
+                         "--out", str(out), "--seed", "2"])
+            html = out.read_text()
+    finally:
+        lr.NIGHT_S = night_s
+    for marker in ("<svg", "night 1", "learning\npolicy", "M13"):
+        assert marker in html, f"report lost {marker!r}"
+    print("  report       learn_report renders svg + trail  -- ok")
+
+
 # --------------------------------------------------------------------------- #
 SUITES = {
     "listen": test_listen,
@@ -1153,6 +1332,7 @@ SUITES = {
     "models": test_models,
     "cradle": test_cradle,
     "baby": test_baby,
+    "policy": test_policy,
     "m50": test_m50,
     "watch": test_watch,
     "animate": test_animate,

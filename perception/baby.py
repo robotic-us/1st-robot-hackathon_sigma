@@ -48,6 +48,7 @@ NEXT = {              # weighted transitions at the end of a dwell
 }
 SOOTHE_RATE = 0.08    # per second at full sway: mean ~12 s to step down
 SOOTHABLE_P = 0.7     # the rest are hunger/diaper -- caregiver work
+AGITATE_RATE = 0.05   # per second under a *hated* motion: fussing worsens
 HIDE_MEAN_S = 600.0   # a face-lost blip roughly every 10 min
 HIDE_FOR_S = 1.5
 
@@ -55,6 +56,44 @@ COLORS_BGR = {        # matches the dashboard's palette
     "SLEEP": (255, 154, 76), "CALM": (80, 185, 63),
     "FUSS": (65, 179, 227), "CRY": (77, 72, 229),
 }
+
+
+@dataclass(frozen=True)
+class Personality:
+    """docs/IDEA.md: a fixed, hidden motion temperament (the '성격').
+
+    ``gain`` scales SOOTHE_RATE for the motion currently playing: the loved
+    motion soothes 3x, a liked transition (combo[0] then combo[1]) 2x, the
+    hated ones agitate instead (negative).  The policy never sees this --
+    it only sees the happiness ranks it produces.
+    """
+
+    love: str = ""
+    hate: frozenset = frozenset()
+    combo: tuple = ()          # (a, b): b soothes 2x right after a
+
+    def gain(self, motion, prev) -> float:
+        if not motion:
+            return 0.0
+        if motion in self.hate:
+            return -1.0
+        if len(self.combo) == 2 and (prev, motion) == tuple(self.combo):
+            return 2.0
+        if motion == self.love:
+            return 3.0
+        return 1.0
+
+    @classmethod
+    def random(cls, rng: random.Random, pool=None) -> "Personality":
+        pool = list(pool or (f"M{n:02d}" for n in range(9, 19)))
+        rng.shuffle(pool)
+        return cls(love=pool[0], hate=frozenset(pool[1:3]),
+                   combo=(pool[3], pool[4]))
+
+    def describe(self) -> str:
+        return (f"loves {self.love}, hates {'/'.join(sorted(self.hate))}, "
+                f"likes {self.combo[0]}->{self.combo[1]}" if self.combo
+                else f"loves {self.love}, hates {'/'.join(sorted(self.hate))}")
 
 
 @dataclass(frozen=True)
@@ -74,13 +113,17 @@ class BabyReading:
 class VirtualBaby:
     """Time is injected; ``soothing`` is the engine's live amplitude 0..1."""
 
-    def __init__(self, seed: int | None = None) -> None:
+    def __init__(self, seed: int | None = None,
+                 personality: Personality | None = None) -> None:
         self.rng = random.Random(seed)
+        self.personality = personality
         self.state = "CALM"
         self.soothable = True
         self.level = STATES["CALM"][0]
         self._until = 0.0
         self._hidden_until = 0.0
+        self._motion: str | None = None
+        self._prev_motion: str | None = None
         self._t: float | None = None
         # The first act is scripted, not diced: a few calm seconds, then a
         # fuss.  Left to the dice, CALM dwells 20-60 s with a 40% exit to
@@ -112,18 +155,39 @@ class VirtualBaby:
         self.state = {"CRY": "FUSS", "FUSS": "CALM"}[self.state]
         self._until = now + self._dwell()
 
-    def update(self, now: float, soothing: float = 0.0) -> BabyReading:
+    def _step_up(self, now: float) -> None:
+        worse = {"CALM": "FUSS", "FUSS": "CRY"}.get(self.state)
+        if worse is not None:          # a CRY has nowhere worse to go
+            self.state = worse
+            self._until = now + self._dwell()
+
+    def update(self, now: float, soothing: float = 0.0,
+               motion: str | None = None) -> BabyReading:
         dt = 0.0 if self._t is None else max(0.0, min(0.2, now - self._t))
         self._t = now
+        if motion != self._motion:
+            if self._motion is not None:
+                self._prev_motion = self._motion
+            self._motion = motion
         if self._until == 0.0:
             self._until = now + (self.rng.uniform(4.0, 8.0) if self._opening
                                  else self._dwell())
         if now >= self._until:
             self._transition(now)
-        # The closed loop: a soothable fuss/cry yields to sway, hunger does not.
-        if (self.state in ("FUSS", "CRY") and self.soothable and soothing > 0.2
-                and self.rng.random() < 1.0 - math.exp(-SOOTHE_RATE * soothing * dt)):
-            self._step_down(now)
+        # The closed loop: a soothable fuss/cry yields to sway, hunger does
+        # not.  With a personality the motion identity matters: the loved
+        # motion soothes faster, a hated one agitates instead.
+        gain = 1.0
+        if self.personality is not None and soothing > 0.2:
+            gain = self.personality.gain(motion, self._prev_motion)
+        if self.state in ("FUSS", "CRY") and soothing > 0.2:
+            if gain < 0.0:
+                if self.rng.random() < 1.0 - math.exp(AGITATE_RATE * gain
+                                                      * soothing * dt):
+                    self._step_up(now)
+            elif (self.soothable and gain > 0.0 and self.rng.random()
+                    < 1.0 - math.exp(-SOOTHE_RATE * gain * soothing * dt)):
+                self._step_down(now)
         base, wander = STATES[self.state]
         target = base + wander * math.sin(now * 0.9 + sum(map(ord, self.state)) % 7)
         self.level += (target - self.level) * min(1.0, dt / 2.0)

@@ -17,3 +17,6 @@
 그 다음에 시나리오에 없는 시퀀스를 제시했을때 LLM 이 어떤 모션을 하라고 명령하는지를 확인함
 
 --> 발표할때는 애기 한명만 키우는거 아니냐 / 1인1 기계임 / 개인화된 학습임 --> 더 굿 --> 5일밤 뒤면 바로 잘 진정시킴
+
+@ Webapp
+User: Select Baby's Taste of Motion -> Motion Play or Sim -> LLM Agent or Other Algorithm Changes the Motion to Fit the Baby's Feeling

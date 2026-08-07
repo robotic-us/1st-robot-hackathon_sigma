@@ -3,119 +3,153 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
-<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
-<title>SIGMA · cradle live</title>
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f7f9">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1319">
+<title>SIGMA · cradle monitor</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 
-<header>
-  <h1>SIGMA <span>· infant-responsive cradle</span></h1>
-  <span id="conn" aria-live="polite">connecting</span>
-</header>
-
 <div id="alert" role="alert"></div>
 
-<section id="hero">
-  <canvas id="babycv"></canvas>
-  <div id="safechip"><span class="dot" id="safedot" aria-hidden="true"></span>
-    <span id="safesay">waiting for the cradle</span>
-    <span id="scen"></span></div>
-  <div id="say">
-    <div id="headline">
-      <span class="dot" id="hdot" aria-hidden="true"></span>
-      <span id="hbaby">Connecting</span>
-      <span id="harrow">→</span>
-      <span id="hcradle">holding still</span>
-    </div>
-    <div id="hdetail">not moving</div>
-    <div id="hwhy">Waiting for the first reading from the cradle.</div>
+<header>
+  <div class="brand">
+    <h1>SIGMA</h1><span>infant-responsive cradle · live monitor</span>
+  </div>
+  <div class="headside">
+    <span id="safechip"><span class="dot" id="safedot" aria-hidden="true"></span>
+      <span id="safesay">waiting for the cradle</span><span id="scen"></span></span>
+    <button id="auto" aria-pressed="false"><b>Automatic care</b><i>–</i></button>
+    <span id="conn" aria-live="polite">connecting</span>
+  </div>
+</header>
+
+<main>
+
+<!-- row 1 · what is true right now -->
+<section class="cards" id="nowrow">
+  <article class="card">
+    <h2>Baby</h2>
+    <div class="big"><span class="dot lg" id="hdot" aria-hidden="true"></span>
+      <span id="hbaby">Connecting</span></div>
+    <div class="sub" id="hbabysub">waiting for the first reading</div>
+    <div class="krow"><span>upset level</span><b id="lvlval">–</b></div>
+    <div class="meter"><i id="lvlbar"></i>
+      <span class="tick" style="left:12%" title="fuss threshold 0.12"></span>
+      <span class="tick" style="left:45%" title="cry threshold 0.45"></span></div>
+    <div id="ladder"
+         title="the comfort ladder the system reasons over — the filled step is now"></div>
+  </article>
+
+  <article class="card">
+    <h2>Cradle</h2>
+    <div class="big"><span id="hcradle">holding still</span></div>
+    <div class="sub" id="hdetail">not moving</div>
+    <div class="krow"><span>rocking strength</span><b id="envval">–</b></div>
+    <div class="meter"><i id="envbar"></i></div>
+    <div class="krow"><span>motion playing</span><b id="rawmotion">M01 · STATIC</b></div>
+  </article>
+
+  <article class="card">
+    <h2>Safety envelope</h2>
+    <div class="krow"><span>travel</span><b id="swayval">0.0 <small>of 30 mm</small></b></div>
+    <div class="meter"><i id="swaybar"></i>
+      <span class="tick" style="left:80%" title="warning at 80% of the cap"></span></div>
+    <div class="krow"><span>peak push</span><b id="accval">0.000 <small>of 0.05 g</small></b></div>
+    <div class="meter"><i id="accbar"></i>
+      <span class="tick" style="left:80%" title="warning at 80% of the cap"></span></div>
+    <div class="sub" id="hwhy">Waiting for the first reading from the cradle.</div>
+  </article>
+
+  <article class="card" id="brain" hidden>
+    <h2>Decision brain</h2>
+    <div class="big" id="brainname">–</div>
+    <div class="sub" id="brainkind"></div>
+    <div class="krow"><span>baby is at</span><b id="brainrank">–</b></div>
+    <div class="krow"><span>last decision</span><b id="brainlast">none yet</b></div>
+    <div class="krow"><span>taught scenarios</span><b id="brainscen">0</b></div>
+  </article>
+</section>
+
+<!-- row 2 · the emotion process, over time -->
+<section class="card wide" id="card-timeline">
+  <h2>Emotion process — last 15 minutes
+    <span class="legend"><i class="sw raw"></i>level (raw)
+      <i class="sw ema"></i>trend (what decisions use)
+      <i class="sw mk"></i>motion starts</span></h2>
+  <div id="tlwrap">
+    <canvas id="timeline"></canvas>
+    <div id="tltip" hidden></div>
   </div>
 </section>
 
-<div id="strip">
-  <div class="stat">
-    <div class="k">Upset level</div>
-    <div class="val" id="lvlval">–</div>
-    <div class="bar"><i id="lvlbar"></i>
-      <span class="tick" style="left:12%" title="fuss threshold 0.12"></span>
-      <span class="tick" style="left:45%" title="cry threshold 0.45"></span></div>
-  </div>
-  <div class="stat">
-    <div class="k">Rocking strength</div>
-    <div class="val" id="envval">–</div>
-    <div class="bar"><i id="envbar"></i></div>
-  </div>
-  <div class="stat">
-    <div class="k">How far it moves</div>
-    <div class="val" id="swayval">0.0 <small>of 30 mm</small></div>
-    <div class="bar"><i id="swaybar"></i>
-      <span class="tick" style="left:80%" title="warning at 80% of the cap"></span></div>
-  </div>
-  <div class="stat">
-    <div class="k">How hard it pushes</div>
-    <div class="val" id="accval">0.000 <small>of 0.05 g</small></div>
-    <div class="bar"><i id="accbar"></i>
-      <span class="tick" style="left:80%" title="warning at 80% of the cap"></span></div>
-  </div>
-</div>
+<!-- row 3 · the decisions and what has been learned -->
+<section class="cards" id="brainrow">
+  <article class="card" id="card-feed">
+    <h2>Decision feed</h2>
+    <div id="feed"><div class="empty">waiting…</div></div>
+  </article>
+  <article class="card" id="card-learned">
+    <h2>Learned preferences <span class="sub2">mean comfort change per attempt</span></h2>
+    <div id="scores"><div class="empty">nothing tried yet</div></div>
+    <div id="trail" class="mono sub"></div>
+  </article>
+</section>
 
-<div id="foot">
-  <div id="zone-cam">
+<!-- row 4 · camera, hands, log -->
+<section class="cards" id="utilrow">
+  <article class="card" id="card-cam">
     <h2>Camera</h2>
     <img id="cam" src="/frame" alt="camera stream">
-  </div>
-  <div id="zone-keys">
-    <h2>Take over by hand</h2>
+  </article>
+  <article class="card" id="card-keys">
+    <h2>Manual control</h2>
     <div id="buttons">
-      <button id="auto" aria-pressed="false"><b>Automatic care</b><i>–</i></button>
       <button data-m="M10"><b>Rock slowly</b><i>M10</i></button>
       <button data-m="M12"><b>Rock steadily</b><i>M12</i></button>
       <button data-m="M16"><b>Rock wider</b><i>M16</i></button>
       <button data-m="M05"><b>Slow to a stop</b><i>M05</i></button>
       <button data-m="M01"><b>Hold still</b><i>M01</i></button>
       <button id="jam" aria-pressed="false"><b>Simulate a jam</b><i>j</i></button>
-      <span class="note">Rocking always eases in gently, and the safety gate
-        overrides anything pressed here.</span>
     </div>
-  </div>
-  <section id="library">
-    <h2>Motion library — M01–M50</h2>
-    <div id="mfilter">
-      <button data-g="" class="on">All</button>
-      <button data-g="C0" title="stop / transition commands">C0</button>
-      <button data-g="P1" title="trial candidates">P1</button>
-      <button data-g="R" title="research-only">R</button>
-      <input id="mq" type="search" placeholder="filter by name…"
-             aria-label="filter motions by name">
-      <span class="note" id="mcount"></span>
-    </div>
-    <div id="motions"></div>
-  </section>
-  <div id="zone-log">
-    <h2>What just happened</h2>
+    <p class="sub">Rocking always eases in gently; the safety gate overrides
+      anything pressed here.</p>
+  </article>
+  <article class="card" id="card-log">
+    <h2>Event log</h2>
     <div id="log" aria-live="polite">waiting…</div>
-  </div>
-</div>
+  </article>
+</section>
 
-<details>
-  <summary>Internals — machine state, and the scenario acting it</summary>
+<!-- drawers -->
+<details class="card wide" id="library">
+  <summary>Motion library — M01–M50</summary>
+  <div id="mfilter">
+    <button data-g="" class="on">All</button>
+    <button data-g="C0" title="stop / transition commands">C0</button>
+    <button data-g="P1" title="trial candidates">P1</button>
+    <button data-g="R" title="research-only">R</button>
+    <input id="mq" type="search" placeholder="filter by name…"
+           aria-label="filter motions by name">
+    <span class="sub2" id="mcount"></span>
+  </div>
+  <div id="motions"></div>
+</details>
+
+<details class="card wide">
+  <summary>Internals — raw machine state</summary>
   <div class="internals">
-    <section>
-      <h2>Machine internals</h2>
-      <div class="kv"><span>machine state</span><b id="rawstate">–</b></div>
-      <div class="kv"><span>motion / grade</span><b id="rawmotion">–</b></div>
-      <div class="kv"><span>f_hz · a_mm · env</span><b id="rawmode">–</b></div>
-      <div class="kv"><span>distress raw · ema</span><b id="rawlevel">–</b></div>
-      <div class="kv"><span>arm angle θ</span><b id="thetaval">–</b></div>
-      <div class="kv"><span>peak acceleration</span><b id="apeak">–</b></div>
-      <div class="kv"><span>judge state</span><b id="rawjudge">–</b></div>
-      <div class="kv"><span>scenario phase</span><b id="rawphase">–</b></div>
-    </section>
+    <div class="kv"><span>machine state</span><b id="rawstate">–</b></div>
+    <div class="kv"><span>f_hz · a_mm · env</span><b id="rawmode">–</b></div>
+    <div class="kv"><span>distress raw · ema</span><b id="rawlevel">–</b></div>
+    <div class="kv"><span>arm angle θ</span><b id="thetaval">–</b></div>
+    <div class="kv"><span>peak acceleration</span><b id="apeak">–</b></div>
+    <div class="kv"><span>judge state</span><b id="rawjudge">–</b></div>
+    <div class="kv"><span>scenario phase</span><b id="rawphase">–</b></div>
   </div>
 </details>
 
+</main>
 <script src="/app.js"></script>
 </body>
 </html>
