@@ -1,39 +1,30 @@
 /* The dashboard's one stylesheet.  Served by serve.py at /style.css; no
    build step.
 
-   Clean clinical-monitor treatment: a soft gray page, white cards with
-   hairline borders, one calm blue accent reserved for the cradle's own
-   actions, and a five-step comfort ramp (green -> amber -> orange -> red,
-   slate for sleep) for the baby.  Colour never carries meaning alone --
-   every coloured element sits beside its word, and the ramp is also an
-   ordered position on the ladder / timeline bands.  Light is primary;
-   prefers-color-scheme gives a soft dark twin (same ramp, lighter steps). */
+   True-black instrument panel on the Flexoki palette (stephango.com/flexoki):
+   the page is #000, cards are flexoki black #100F0F with base-tone hairlines,
+   text runs the base ramp up to paper #FFFCF0.  One blue accent is reserved
+   for the cradle's own actions; the baby wears the comfort ramp -- green ->
+   yellow -> orange -> red (flexoki 400s, 600 for the deepest) -- and slate
+   for sleep.  Colour never carries meaning alone: every coloured element
+   sits beside its word, and the ramp doubles as an ordered position on the
+   ladder / timeline bands. */
 :root {
-  --page:#f6f7f9; --card:#ffffff; --border:#e4e7ec; --track:#eef0f4;
-  --shadow:0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.04);
-  --ink:#101828; --ink-2:#344054; --muted:#667085; --faint:#98a2b3;
-  --accent:#175cd3; --accent-soft:#e8f0fd;
+  --page:#000000; --card:#100F0F; --raised:#1C1B1A; --border:#282726;
+  --track:#1C1B1A; --shadow:none;
+  --paper:#FFFCF0; --ink:#CECDC3; --ink-2:#B7B5AC;
+  --muted:#878580; --faint:#575653;
+  --accent:#4385BE; --accent-soft:#1a2c40;
   /* the comfort ramp, rank 0..4, plus sleep and the hard-stop red */
-  --r0:#12805c; --r1:#b07609; --r2:#c2570c; --r3:#d92d20; --r4:#912018;
-  --sleep:#64748b; --critical:#d92d20;
-  --good:#12805c; --warn:#b07609;
+  --r0:#879A39; --r1:#D0A215; --r2:#DA702C; --r3:#D14D41; --r4:#AF3029;
+  --sleep:#878580; --critical:#D14D41;
+  --good:#879A39; --warn:#D0A215;
   --sans:system-ui,"Segoe UI","Helvetica Neue",Arial,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --page:#0f1319; --card:#161b23; --border:#252c38; --track:#20262f;
-    --shadow:none;
-    --ink:#eef2f7; --ink-2:#c8d1dc; --muted:#8b96a5; --faint:#5d6878;
-    --accent:#6ea8fe; --accent-soft:#1b2a45;
-    --r0:#3ccb96; --r1:#eab24a; --r2:#f0873d; --r3:#f4695e; --r4:#e04848;
-    --sleep:#94a3b8; --critical:#f4695e;
-    --good:#3ccb96; --warn:#eab24a;
-  }
-}
 
 * { box-sizing:border-box; margin:0; }
-html { color-scheme:light dark; }
+html { color-scheme:dark; }
 body { background:var(--page); color:var(--ink);
        font:14px/1.5 var(--sans); padding:0 0 40px; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
@@ -60,9 +51,9 @@ header { max-width:1320px; margin:0 auto; padding:14px 18px 12px;
 #conn::before { content:"\25CF"; margin-right:6px; color:var(--faint); }
 #conn.live::before { color:var(--good); }
 /* a dead stream freezes every number -- disconnection is the loud state */
-#conn.down { background:var(--critical); color:#fff; border-radius:6px;
+#conn.down { background:var(--critical); color:#100F0F; border-radius:6px;
              padding:3px 9px; }
-#conn.down::before { color:#fff; }
+#conn.down::before { color:#100F0F; }
 
 .dot { width:10px; height:10px; border-radius:50%; background:var(--faint);
        flex:none; display:inline-block; }
@@ -72,14 +63,13 @@ header { max-width:1320px; margin:0 auto; padding:14px 18px 12px;
 #alert { display:none; }
 #alert.on { display:block; position:sticky; top:0; z-index:40;
             padding:10px 20px; text-align:center;
-            background:var(--critical); color:#fff; font-weight:600; }
+            background:var(--critical); color:#100F0F; font-weight:600; }
 
 /* ---- cards -------------------------------------------------------------- */
 .cards { display:grid; gap:14px; }
 #nowrow { grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); }
 #brainrow { grid-template-columns:1.35fr 1fr; }
-#utilrow { grid-template-columns:minmax(250px,.9fr) minmax(260px,1fr)
-                                 minmax(280px,1.2fr); }
+#utilrow { grid-template-columns:repeat(auto-fit, minmax(255px, 1fr)); }
 .card { background:var(--card); border:1px solid var(--border);
         border-radius:12px; padding:14px 16px 15px; box-shadow:var(--shadow);
         min-width:0; }
@@ -89,7 +79,7 @@ header { max-width:1320px; margin:0 auto; padding:14px 18px 12px;
   text-transform:uppercase; letter-spacing:.09em; margin-bottom:10px; }
 .card h2 .legend, .card h2 .sub2 { text-transform:none; letter-spacing:0;
   font-weight:400; }
-.big { display:flex; align-items:center; gap:9px; font-size:21px;
+.big { color:var(--paper); display:flex; align-items:center; gap:9px; font-size:21px;
        font-weight:650; letter-spacing:-.01em; min-height:30px; }
 .sub { font-size:12px; color:var(--muted); margin-top:3px; line-height:1.45; }
 .sub2 { font-size:11px; color:var(--faint); }
@@ -109,18 +99,33 @@ header { max-width:1320px; margin:0 auto; padding:14px 18px 12px;
                background:var(--faint); }
 @media (prefers-reduced-motion: reduce) { .meter i { transition:none; } }
 
+/* the living circle: state colour, distress wobble, envelope glow */
+#orb { display:block; width:100%; height:120px; margin-bottom:8px; }
+
+/* the brain switcher: state outranks pointer, like every toggle here */
+#brainsel { display:flex; gap:5px; flex-wrap:wrap; margin-bottom:10px; }
+#brainsel button { font-size:11px; padding:4px 10px; border-radius:999px; }
+#brainsel button.on:hover { background:var(--accent); color:#100F0F; }
+
+/* the temperament editor */
+.trow { display:flex; gap:6px; align-items:center; margin-top:8px; }
+.trow label { font-size:11px; color:var(--muted); width:44px; flex:none; }
+.trow select { font:inherit; font-size:12px; color:var(--ink);
+               background:var(--raised); border:1px solid var(--border);
+               border-radius:7px; padding:4px 6px; min-width:0; flex:1; }
+.trow button { flex:1; }
+
 /* the comfort ladder: five named steps, the current one filled */
 #ladder { display:flex; gap:4px; margin-top:12px; }
 #ladder span { flex:1; text-align:center; font-size:10px; padding:4px 0;
                border-radius:6px; background:var(--track); color:var(--muted);
                white-space:nowrap; overflow:hidden; }
-#ladder span.on { color:#fff; font-weight:600; }
+#ladder span.on { color:#100F0F; font-weight:600; }
 #ladder span.r0.on { background:var(--r0); }
 #ladder span.r1.on { background:var(--r1); }
 #ladder span.r2.on { background:var(--r2); }
 #ladder span.r3.on { background:var(--r3); }
 #ladder span.r4.on { background:var(--r4); }
-@media (prefers-color-scheme: dark) { #ladder span.on { color:#0f1319; } }
 
 /* ---- the timeline ------------------------------------------------------- */
 #card-timeline .legend { float:right; display:flex; gap:14px; align-items:center;
@@ -134,7 +139,7 @@ header { max-width:1320px; margin:0 auto; padding:14px 18px 12px;
 #timeline { position:absolute; inset:0; width:100%; height:100%;
             display:block; cursor:crosshair; }
 #tltip { position:absolute; z-index:5; pointer-events:none;
-         background:var(--ink); color:var(--page); border-radius:8px;
+         background:var(--raised); color:var(--ink); border:1px solid var(--border); border-radius:8px;
          padding:7px 10px; font-size:11px; line-height:1.5;
          box-shadow:0 2px 8px rgba(0,0,0,.25); white-space:nowrap; }
 #tltip b { font-weight:600; }
@@ -182,10 +187,10 @@ button { font:inherit; font-size:12px; color:var(--ink-2);
          transition:border-color .1s, background .1s; }
 button:hover { border-color:var(--accent); color:var(--accent); }
 button:active, button.on { background:var(--accent); border-color:var(--accent);
-                           color:#fff; }
+                           color:#100F0F; }
 button b { font-weight:550; }
 button i { font-style:normal; color:var(--muted); font-size:10px; margin-left:6px; }
-button:active i, button.on i { color:#fff; opacity:.75; }
+button:active i, button.on i { color:#100F0F; opacity:.75; }
 #buttons button { display:flex; justify-content:space-between;
                   align-items:baseline; gap:8px; text-align:left; }
 #jam { grid-column:1 / -1; }
@@ -201,7 +206,7 @@ details[open].card summary { margin-bottom:12px; }
 #mfilter { display:flex; flex-wrap:wrap; gap:6px; align-items:center;
            margin-bottom:9px; }
 #mfilter button { font-size:11px; padding:4px 12px; border-radius:999px; }
-#mfilter button.on { background:var(--ink); border-color:var(--ink); color:var(--page); }
+#mfilter button.on { background:var(--accent); border-color:var(--accent); color:#100F0F; }
 #mfilter input { font:inherit; font-size:11px; color:var(--ink);
                  background:var(--page); border:1px solid var(--border);
                  border-radius:999px; padding:4px 12px; width:150px; }
@@ -219,7 +224,7 @@ details[open].card summary { margin-bottom:12px; }
 .m.g-P1 { border-left-color:var(--accent); }
 .m.g-R  { border-left-color:var(--r1); }
 .m.on { background:var(--accent); border-color:var(--accent); }
-.m.on b { color:#fff; }
+.m.on b { color:#100F0F; }
 .m.locked { opacity:.45; }
 .internals { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px,1fr));
              gap:2px 26px; }

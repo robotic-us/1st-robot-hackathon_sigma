@@ -36,6 +36,7 @@ from core.policy import ReflexBrain, SoothePolicy
 from perception.baby import Personality, VirtualBaby
 
 SIM_S = 1500.0        # per scenario: enough for several trials
+PACE_S = 10.0         # the demo rig plays each motion for ~10 s
 DT = 1.0 / 15.0
 
 
@@ -45,7 +46,7 @@ def run_scenario(seed: int) -> dict:
     personality = Personality.random(rng)
     baby = VirtualBaby(seed=seed, personality=personality)
     engine = MotionEngine()
-    machine = CradleMachine(engine)
+    machine = CradleMachine(engine, check_every_s=PACE_S)
     policy = SoothePolicy(ReflexBrain())
     machine.advisor = policy.pick
 

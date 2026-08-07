@@ -11,6 +11,8 @@ One stdlib HTTP server:
     /jam         simulate a mechanism fault (trips the safety gate)
     /motion      queue a library command by id (R grade needs --research)
     /auto        the report's state machine on/off (?set=on|off)
+    /policy      switch the decision brain live (?set=off|reflex|ollama|claude)
+    /taste       retune the virtual infant's hidden temperament (--baby only)
 
 Motion behaviour follows docs/infant_robotic_cradle_evidence_report_ko.pdf
 (see core/cradle.py): the default is *not moving*.  Two sensing modes feed
@@ -75,9 +77,12 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 # Shared state between the sensor loop and the HTTP handlers
 # --------------------------------------------------------------------------- #
 class Shared:
-    def __init__(self, allow_research: bool = False) -> None:
+    def __init__(self, allow_research: bool = False,
+                 pace_s: float = 10.0) -> None:
         self.engine = MotionEngine(allow_research=allow_research)
-        self.machine = CradleMachine(self.engine)
+        # Demo rhythm: each motion gets ~10 s before the machine re-decides
+        # (the report spec's own cadence is 30 -- serve.py --pace 30).
+        self.machine = CradleMachine(self.engine, check_every_s=pace_s)
         self.jam = False              # simulated mechanism fault (the gate)
         self.pose = [0.0, 0.0, 0.0, 0.0]   # crank angles the viz mirrors
         self.lock = threading.Lock()
@@ -85,7 +90,9 @@ class Shared:
         self.jpeg: Optional[bytes] = None
         self.events: deque[str] = deque(maxlen=14)
         self.motion_request: Optional[str] = None
-        self.policy = None      # core/policy.py SoothePolicy when --policy
+        self.policy = None      # core/policy.py SoothePolicy when a brain is on
+        self.llm_model = None   # --llm-model override for ollama/claude
+        self.baby = None        # the VirtualBaby, so /taste can retune it
         # 1 Hz samples for the dashboard's emotion timeline: a fresh page
         # seeds the last ~15 min from /history instead of starting empty.
         self.history: deque[dict] = deque(maxlen=900)
@@ -233,6 +240,7 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
         quirks = (Personality.random(random.Random(baby_seed))
                   if personality else None)
         infant = VirtualBaby(seed=baby_seed, personality=quirks)
+        shared.baby = infant          # /taste retunes it live
         shared.log("virtual infant awake"
                    + (f" (seed {baby_seed})" if baby_seed is not None else ""))
         if quirks is not None:
@@ -372,10 +380,17 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
 
 
 def build_state(shared: Shared, reading, now: float) -> dict:
+    baby = shared.baby
     return {
-        # the learning panel's feed; absent unless --policy is on
+        # the learning panel's feed; absent unless a brain is on
         **({"policy": shared.policy.snapshot()}
            if shared.policy is not None else {}),
+        # the taste editor's ground truth; only a virtual infant has one
+        **({"taste": ({"love": baby.personality.love,
+                       "hate": sorted(baby.personality.hate),
+                       "combo": list(baby.personality.combo)}
+                      if baby.personality is not None else {})}
+           if baby is not None else {}),
         "t": round(now, 3),
         "pose": [round(v, 4) for v in shared.pose],
         "tag": {"present": reading.present,
@@ -431,6 +446,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(list(self.shared.history))
             elif url.path == "/motion":
                 self._motion(url)
+            elif url.path == "/policy":
+                self._policy(url)
+            elif url.path == "/taste":
+                self._taste(url)
             elif url.path == "/auto":
                 query = parse_qs(url.query).get("set", [""])[0]
                 if query in ("on", "off"):
@@ -467,6 +486,65 @@ class Handler(BaseHTTPRequestHandler):
                 self.shared.motion_request = mid
             self._json({"ok": True, "queued": mid, "name": m.name,
                         "grade": m.grade})
+
+    def _policy(self, url) -> None:
+        """Switch the decision brain live: ?set=off|reflex|ollama|claude.
+
+        Re-selecting the current brain is the "reset memory" gesture --
+        every switch starts a fresh SoothePolicy.  The machine keeps every
+        safety decision either way; a brain only ever suggests P1 motions.
+        """
+        kind = parse_qs(url.query).get("set", [""])[0].lower()
+        shared = self.shared
+        if kind in ("", "off", "none", "ladder"):
+            shared.policy = None
+            shared.machine.advisor = None
+            shared.log("decision brain off -- the report's fixed ladder")
+            return self._json({"ok": True, "brain": None})
+        try:
+            from core.policy import SoothePolicy, load_scenarios, make_brain
+            brain = make_brain(kind, model=shared.llm_model)
+        except Exception as exc:
+            shared.log(f"brain '{kind}' unavailable: {exc}")
+            return self._json({"ok": False, "msg": f"{exc}"})
+        shared.policy = SoothePolicy(brain, scenarios=load_scenarios())
+        shared.machine.advisor = shared.policy.pick
+        shared.log(f"decision brain: {kind} (fresh memory, "
+                   f"{len(shared.policy.scenarios)} taught scenarios)")
+        self._json({"ok": True, "brain": kind})
+
+    def _taste(self, url) -> None:
+        """Retune the virtual infant's hidden temperament live (--baby only).
+
+        ?random=1, or ?love=M13&hate=M10,M12&combo=M09,M13 -- everything
+        must be a P1 candidate id.  Habituation resets with the new taste.
+        """
+        baby = self.shared.baby
+        if baby is None:
+            return self._json({"ok": False,
+                               "msg": "no virtual infant -- --baby mode only"})
+        from core.policy import CANDIDATES
+        from perception.baby import Personality
+        q = parse_qs(url.query)
+        if q.get("random"):
+            quirks = Personality.random(random.Random())
+        else:
+            love = q.get("love", [""])[0].upper()
+            hate = [h for h in q.get("hate", [""])[0].upper().split(",") if h]
+            combo = [c for c in q.get("combo", [""])[0].upper().split(",") if c]
+            if (love not in CANDIDATES
+                    or any(h not in CANDIDATES for h in hate)
+                    or any(c not in CANDIDATES for c in combo)
+                    or love in hate or len(combo) not in (0, 2)):
+                return self._json({"ok": False,
+                                   "msg": "love/hate/combo must be M09..M18 "
+                                          "(combo needs exactly two)"})
+            quirks = Personality(love=love, hate=frozenset(hate),
+                                 combo=tuple(combo))
+        baby.personality = quirks
+        baby._fatigue.clear()
+        self.shared.log("temperament retuned: " + quirks.describe())
+        self._json({"ok": True, "msg": quirks.describe()})
 
     def _sse(self) -> None:
         self.send_response(200)
@@ -562,10 +640,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--personality", action="store_true",
                         help="with --baby: give the infant a hidden motion "
                              "temperament (docs/IDEA.md) the policy can learn")
-    parser.add_argument("--policy", choices=("reflex", "claude"), default=None,
-                        help="let a soothing policy advise which P1 motion "
-                             "each trial uses: 'reflex' = offline taught "
-                             "strategy, 'claude' = the LLM (ANTHROPIC_API_KEY)")
+    parser.add_argument("--policy", choices=("reflex", "ollama", "claude"),
+                        default=None,
+                        help="start with a decision brain advising the trial "
+                             "motion: 'reflex' = local algorithm, 'ollama' = "
+                             "local LLM (OLLAMA_URL/OLLAMA_MODEL), 'claude' = "
+                             "Anthropic API (paid, ANTHROPIC_API_KEY).  The "
+                             "dashboard can switch brains live either way.")
+    parser.add_argument("--llm-model", default=None, metavar="NAME",
+                        help="model override for the ollama/claude brains")
+    parser.add_argument("--pace", type=float, default=10.0, metavar="SECONDS",
+                        help="trial rhythm: each motion plays this long "
+                             "before the machine re-decides (default 10, "
+                             "the demo rig's per-motion length; the evidence "
+                             "report's own cadence is 30)")
     parser.add_argument("--sense", action="store_true",
                         help="real sensing: face+emotion (+mic) drives the "
                              "machine instead of tag state cards")
@@ -603,15 +691,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     # machine never commands anything outside it plus M05/M06/M08.  Every other
     # mode (real camera, --sense, --baby) still needs --research explicitly.
     research = args.research or args.fake
-    shared = Shared(allow_research=research)
+    shared = Shared(allow_research=research, pace_s=args.pace)
     shared.viz_gain = max(1.0, args.viz_gain)
+    shared.llm_model = args.llm_model
     if args.policy:
-        from core.policy import (ClaudeBrain, ReflexBrain, SoothePolicy,
-                                 load_scenarios)
-        brain = ClaudeBrain() if args.policy == "claude" else ReflexBrain()
-        shared.policy = SoothePolicy(brain, scenarios=load_scenarios())
+        from core.policy import SoothePolicy, load_scenarios, make_brain
+        shared.policy = SoothePolicy(make_brain(args.policy, args.llm_model),
+                                     scenarios=load_scenarios())
         shared.machine.advisor = shared.policy.pick
-        shared.log(f"soothe policy '{args.policy}' advises trial motions "
+        shared.log(f"decision brain: {args.policy} "
                    f"({len(shared.policy.scenarios)} taught scenarios)")
     if not (args.fake or args.baby):
         args.sense = True       # a bare launch means the real recognizer

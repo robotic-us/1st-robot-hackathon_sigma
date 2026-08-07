@@ -418,9 +418,17 @@ class CradleMachine:
     even with ``auto`` off; ``auto`` only enables the trial/sleep behaviour.
     """
 
-    def __init__(self, engine: MotionEngine) -> None:
+    def __init__(self, engine: MotionEngine,
+                 check_every_s: float = CHECK_EVERY_S) -> None:
         self.engine = engine
         self.auto = True
+        # The trial rhythm.  The report spec is 30 s checkpoints; the demo
+        # rig plays each motion for ~10 s, so serve.py passes 10 and the
+        # ramps and the no-improvement deadline scale with it.
+        self.check_s = max(RAMP_MIN_S, check_every_s)
+        self._no_improve_s = 2.0 * self.check_s
+        self._start_ramp_s = min(RAMP_DEFAULT_S, self.check_s)
+        self._step_ramp_s = max(RAMP_MIN_S, self.check_s / 3.0)
         # Optional (now, ema) -> motion-id hook (core/policy.py): may suggest
         # *which* P1 motion a trial uses; every when/abort/taper decision
         # stays here.  Anything but a valid P1 id falls back to the ladder.
@@ -456,6 +464,9 @@ class CradleMachine:
             "auto": self.auto,
             "ema": round(self.ema, 3),
             "trial_s": round(now - self._trial_t0, 1) if self.state == "trial" else 0,
+            # the trial rhythm, so the dashboard's words match the machine
+            "check_s": round(self.check_s, 1),
+            "no_improve_s": round(self._no_improve_s, 1),
             "alert": self.alert,
         }
 
@@ -510,10 +521,10 @@ class CradleMachine:
                     return
             else:
                 self._worse_t = 0.0
-            if now - self._check_t >= CHECK_EVERY_S:
+            if now - self._check_t >= self.check_s:
                 self._check_t = now
                 if self.ema <= 0.7 * self._baseline:
-                    self._deadline = now + NO_IMPROVE_S
+                    self._deadline = now + self._no_improve_s
                     self._log(f"trial improving (ema {self.ema:.2f}) -- holding "
                               f"{TRIAL_LADDER[self._rung]}")
                 elif (self.ema >= CRY_LEVEL
@@ -521,10 +532,11 @@ class CradleMachine:
                            or self.advisor is not None)):
                     self._rung = min(self._rung + 1, len(TRIAL_LADDER) - 1)
                     step = self._trial_step(now)
-                    self.engine.command(step, now, ramp_s=10.0)
-                    self._log(f"no improvement at 30 s -- one step up to {step}")
+                    self.engine.command(step, now, ramp_s=self._step_ramp_s)
+                    self._log(f"no improvement at {self.check_s:.0f} s -- "
+                              f"one step up to {step}")
             if now >= self._deadline:
-                self._abort(now, "no improvement in 60 s")
+                self._abort(now, f"no improvement in {self._no_improve_s:.0f} s")
             elif now - self._trial_t0 >= TRIAL_CAP_S:
                 self.engine.command("M05", now)
                 self.state = "settling"
@@ -541,7 +553,7 @@ class CradleMachine:
                     self._resumed = True
                     self.state = "trial"
                     self._trial_t0 = self._check_t = now
-                    self._deadline = now + NO_IMPROVE_S
+                    self._deadline = now + self._no_improve_s
                     self._baseline = max(self.ema, 0.05)
                     self._log("fussing during taper -- one micro-resume (M08)")
                     return
@@ -564,10 +576,10 @@ class CradleMachine:
     def _start_trial(self, now: float) -> None:
         self._rung = 1 if self.ema >= CRY_LEVEL else 0
         step = self._trial_step(now)
-        self.engine.command(step, now, ramp_s=RAMP_DEFAULT_S)
+        self.engine.command(step, now, ramp_s=self._start_ramp_s)
         self.state = "trial"
         self._trial_t0 = self._check_t = now
-        self._deadline = now + NO_IMPROVE_S
+        self._deadline = now + self._no_improve_s
         self._baseline = max(self.ema, 0.05)
         self._worse_t = 0.0
         self._resumed = False

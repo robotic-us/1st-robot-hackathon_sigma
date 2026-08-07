@@ -506,6 +506,23 @@ def test_serve() -> None:
         assert json.loads(urlopen(base + "/jam", timeout=5).read())["jam"] is False
         print("  GET /jam     toggles  -- ok")
 
+        # The dashboard switches decision brains live; /taste guards itself
+        # outside --baby mode.
+        ans = json.loads(urlopen(base + "/policy?set=reflex", timeout=5).read())
+        assert ans == {"ok": True, "brain": "reflex"}, ans
+        time.sleep(0.4)                       # one sensor tick to pick it up
+        with urlopen(base + "/events", timeout=5) as stream:
+            snap = json.loads(stream.readline().decode()[6:])
+        assert snap.get("policy", {}).get("brain") == "reflex", snap.get("policy")
+        assert json.loads(urlopen(base + "/policy?set=bogus", timeout=5)
+                          .read())["ok"] is False
+        assert json.loads(urlopen(base + "/policy?set=off", timeout=5)
+                          .read())["brain"] is None
+        assert json.loads(urlopen(base + "/taste?random=1", timeout=5)
+                          .read())["ok"] is False, "no baby here to retune"
+        print("  GET /policy  live brain switch on -> SSE -> off; "
+              "/taste guarded  -- ok")
+
         def cradle_state():
             with urlopen(base + "/events", timeout=5) as stream:
                 return json.loads(stream.readline().decode()[6:])["cradle"]
@@ -1216,6 +1233,40 @@ def test_policy() -> None:
     assert under("M10", "FUSS", 240.0) == "CRY", "a hated motion agitates"
     print("  temperament  loved soothes, hated agitates  -- ok")
 
+    # Time-related emotion: heavy use wears a motion out, rest restores it,
+    # and the mood cycle stays inside its documented band.
+    b = VirtualBaby(seed=5, personality=quirks)
+    b.state, b._until = "CALM", 1e9
+    t = 0.0
+    while t < 90.0:
+        t += 1.0 / 30.0
+        b.update(t, soothing=1.0, motion="M13")
+    worn = b._fatigue.get("M13", 0.0)
+    assert worn > 0.5, f"90 s of use must wear a motion out, got {worn:.2f}"
+    assert 0.64 <= b._mood <= 1.001, f"mood outside its band: {b._mood:.2f}"
+    while t < 690.0:
+        t += 0.2
+        b.update(t)                       # resting: no motion at all
+    rested = b._fatigue.get("M13", 0.0)
+    assert rested < worn / 3, f"10 min of rest must restore it, got {rested:.2f}"
+    print(f"  habituation  90 s use -> fatigue {worn:.2f}, "
+          f"10 min rest -> {rested:.2f}  -- ok")
+
+    # The brain vocabulary: make_brain resolves all three; the local-LLM
+    # brain fails safe (empty reply + a reason) when nothing is listening.
+    from core.policy import OllamaBrain, make_brain
+    assert type(make_brain("reflex")).__name__ == "ReflexBrain"
+    ob = make_brain("ollama", model="tiny")
+    assert isinstance(ob, OllamaBrain) and ob.model == "tiny"
+    ob.url, ob.TIMEOUT_S = "http://127.0.0.1:9", 1.0   # nothing listens there
+    assert ob("prompt", [], 2) == "" and "unavailable" in ob.last_error
+    try:
+        make_brain("nope")
+        raise AssertionError("unknown brain must raise")
+    except ValueError:
+        pass
+    print("  brains       make_brain vocabulary, local LLM fails safe  -- ok")
+
     # The machine validates the advisor: R-grade or garbage falls back to the
     # report ladder; a valid P1 pick is used.
     def first_trial(advice):
@@ -1235,6 +1286,23 @@ def test_policy() -> None:
     assert first_trial("M15") == "M15", "a valid P1 pick must be used"
     print("  advisor      P1 picks used, R/garbage fall back to ladder  -- ok")
 
+    # The demo rhythm: at pace 10 each motion gets ~10 s -- checkpoints,
+    # the escalation ramp and the give-up deadline all scale with it.
+    engine = MotionEngine()
+    box = CradleMachine(engine, check_every_s=10.0)
+    events, t = [], 0.0
+    while t < 40.0 and box.state != "settling":
+        t += 0.1
+        box.tick(t, True, 0.6, jam=False)
+        engine.tick(t)
+        events += box.events
+        box.events.clear()
+    assert any("at 10 s" in e and "step up" in e for e in events), \
+        f"pace 10 must re-decide at 10 s: {events}"
+    assert any("no improvement in 20 s" in e for e in events), \
+        f"pace 10 must give up at 20 s: {events}"
+    print("  pace         10 s checkpoints, 20 s deadline, scaled ramps  -- ok")
+
     # Closed loop: a baby that hates exactly the ladder's first rungs.  The
     # policy must learn not to repeat a worsening motion; the plain ladder
     # keeps walking into them, so the advised run cries no more than it.
@@ -1242,7 +1310,7 @@ def test_policy() -> None:
         temperament = Personality(love="M11", hate=frozenset({"M10", "M12"}))
         baby = VirtualBaby(seed=seed, personality=temperament)
         engine = MotionEngine()
-        box = CradleMachine(engine)
+        box = CradleMachine(engine, check_every_s=10.0)   # the demo pace
         policy = None
         if advise:
             policy = SoothePolicy(ReflexBrain())
@@ -1295,16 +1363,18 @@ def test_policy() -> None:
     # the markup/script hooks that draw it (web/ has no build step, so this
     # is the only place a lost hook would surface).
     snap = policy.snapshot()
-    assert set(snap) == {"brain", "scenarios", "scores", "steps"}
+    assert set(snap) == {"brain", "scenarios", "error", "scores", "steps"}
     assert snap["brain"] == "reflex" and snap["steps"], snap
     assert all(v <= 0 for m, v in snap["scores"].items()
                if m in ("M10", "M12")), \
         f"hated motions must not score positive: {snap['scores']}"
     page = Path("web/index.html").read_text()
     js = Path("web/app.js").read_text()
-    for hook in ('id="brain"', 'id="ladder"', 'id="scores"', 'id="trail"'):
+    for hook in ('id="brain"', 'id="ladder"', 'id="scores"', 'id="trail"',
+                 'id="brainsel"', 'id="card-taste"', 'id="orb"'):
         assert hook in page, f"learning panel lost {hook!r}"
-    for hook in ("S.policy", "drawBrain", "RANK_BANDS"):
+    for hook in ("S.policy", "drawBrain", "RANK_BANDS", "/policy?set=",
+                 "/taste?", "drawOrb"):
         assert hook in js, f"learning panel script lost {hook!r}"
     from serve import Shared, build_state
     from types import SimpleNamespace

@@ -3,8 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f7f9">
-<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1319">
+<meta name="theme-color" content="#000000">
 <title>SIGMA · cradle monitor</title>
 <link rel="stylesheet" href="/style.css">
 </head>
@@ -30,6 +29,9 @@
 <section class="cards" id="nowrow">
   <article class="card">
     <h2>Baby</h2>
+    <canvas id="orb" aria-hidden="true"
+            title="the infant, alive: colour = state, wobble = distress,
+glow = how hard the cradle is working; it rides the real sway"></canvas>
     <div class="big"><span class="dot lg" id="hdot" aria-hidden="true"></span>
       <span id="hbaby">Connecting</span></div>
     <div class="sub" id="hbabysub">waiting for the first reading</div>
@@ -61,10 +63,17 @@
     <div class="sub" id="hwhy">Waiting for the first reading from the cradle.</div>
   </article>
 
-  <article class="card" id="brain" hidden>
+  <article class="card" id="brain">
     <h2>Decision brain</h2>
+    <div id="brainsel" role="group" aria-label="choose the decision brain">
+      <button data-b="off">Ladder</button>
+      <button data-b="reflex">Algorithm</button>
+      <button data-b="ollama">Local LLM</button>
+      <button data-b="claude">Claude API</button>
+    </div>
     <div class="big" id="brainname">–</div>
     <div class="sub" id="brainkind"></div>
+    <div class="sub" id="brainerr"></div>
     <div class="krow"><span>baby is at</span><b id="brainrank">–</b></div>
     <div class="krow"><span>last decision</span><b id="brainlast">none yet</b></div>
     <div class="krow"><span>taught scenarios</span><b id="brainscen">0</b></div>
@@ -114,6 +123,19 @@
     </div>
     <p class="sub">Rocking always eases in gently; the safety gate overrides
       anything pressed here.</p>
+  </article>
+  <article class="card" id="card-taste" hidden>
+    <h2>Baby temperament <span class="sub2">demo control — the brain never sees this</span></h2>
+    <div class="trow"><label for="t-love">loves</label>
+      <select id="t-love"></select></div>
+    <div class="trow"><label for="t-hate1">hates</label>
+      <select id="t-hate1"></select><select id="t-hate2"></select></div>
+    <div class="trow"><label for="t-c1">combo</label>
+      <select id="t-c1"></select><span class="sub2">then</span>
+      <select id="t-c2"></select></div>
+    <div class="trow"><button id="t-apply"><b>Apply</b></button>
+      <button id="t-rand"><b>Randomize</b></button></div>
+    <div class="sub" id="t-now">no temperament yet — every motion works the same</div>
   </article>
   <article class="card" id="card-log">
     <h2>Event log</h2>

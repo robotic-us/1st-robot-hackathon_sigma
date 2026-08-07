@@ -13,17 +13,21 @@ asks it which P1 motion a trial should use, validates the answer, and keeps
 every safety decision (when to trial, escalate, abort, taper, alert) for
 itself.  A useless or unsafe answer simply falls back to the report ladder.
 
-Two interchangeable brains produce the answer from the same prompt/history:
+Three interchangeable brains produce the answer from the same prompt/history
+(switchable live from the dashboard via serve.py's /policy endpoint):
 
 * ``ReflexBrain``   the taught strategy as plain code -- deterministic,
                     offline, doubles as the test double and the scenario
                     generator's teacher (tools/make_scenarios.py).
+* ``OllamaBrain``   the same decision asked of a local LLM over Ollama's
+                    HTTP API (stdlib urllib; OLLAMA_URL / OLLAMA_MODEL).
 * ``ClaudeBrain``   the same decision asked of Claude over the Anthropic
-                    SDK, few-shot taught with the generated scenarios.
+                    SDK (paid API; needs ANTHROPIC_API_KEY).
 
 Run::
 
     python3 serve.py --baby --personality --policy reflex
+    python3 serve.py --baby --personality --policy ollama   # local LLM
     python3 serve.py --baby --personality --policy claude   # ANTHROPIC_API_KEY
     python3 tests.py policy
 """
@@ -86,8 +90,9 @@ def render_prompt(scenarios: list[dict], steps: list[Step], rank: int) -> str:
     """The full decision prompt: rules, taught scenarios, this session, ask."""
     lines = [
         "You pick soothing motions for a robotic infant cradle.",
-        "Each turn: choose ONE motion, it plays ~30 s, then you see the",
-        "infant's comfort rank.  Ranks: 0 HAPPY > 1 FUSS > 2 CRY1 > 3 CRY2",
+        "Each turn: choose ONE motion, it plays one short interval (about",
+        "10-30 s), then you see the infant's comfort rank.  Ranks: 0 HAPPY",
+        "> 1 FUSS > 2 CRY1 > 3 CRY2",
         "> 4 MISERABLE -- lower is better.  Goal: reach rank 0, then STOP.",
         f"Motions: {', '.join(CANDIDATES)} (gentle side-sways, different",
         "speeds/strengths).  Each infant has FIXED hidden preferences: some",
@@ -96,7 +101,9 @@ def render_prompt(scenarios: list[dict], steps: list[Step], rank: int) -> str:
         "",
         "Strategy: keep a motion that improved the rank; if it worsened or",
         "did nothing, switch -- best known motion first, else one untried;",
-        "at rank 0 answer STOP.",
+        "at rank 0 answer STOP.  Motions also wear out with heavy use",
+        "(habituation): when the favourite stops working, rotate to the",
+        "next best and come back to it later.",
     ]
     if scenarios:
         lines += ["", "Example sessions (other infants):"]
@@ -143,7 +150,15 @@ def load_scenarios(path: Path = SCENARIOS_PATH, limit: int = 6) -> list[dict]:
 # Brains: (prompt, steps, rank) -> reply text
 # --------------------------------------------------------------------------- #
 class ReflexBrain:
-    """The taught strategy as code: explore, back off, exploit, stop."""
+    """The taught strategy as code: explore, back off, exploit, stop.
+
+    Scores are the mean of each motion's *last three* outcomes, not its
+    whole history -- habituation is real (perception/baby.py), so a
+    favourite that has worn out must be allowed to fall out of favour
+    and a rested one to come back.
+    """
+
+    RECENT = 3
 
     def __call__(self, prompt: str, steps: list[Step], rank: int) -> str:
         if rank == 0:
@@ -152,31 +167,75 @@ class ReflexBrain:
         for s in steps:
             if s.delta is not None:
                 scores.setdefault(s.motion, []).append(s.delta)
+        recent = {m: sum(d[-self.RECENT:]) / len(d[-self.RECENT:])
+                  for m, d in scores.items()}
         # Keep a motion that just worked.
         if steps and steps[-1].delta is not None and steps[-1].delta > 0:
             return steps[-1].motion
-        # Exploit the best motion that has ever improved things.
+        # Exploit the best motion that has recently improved things.
         best, best_avg = None, 0.0
-        for motion, deltas in scores.items():
-            avg = sum(deltas) / len(deltas)
+        for motion, avg in recent.items():
             if avg > best_avg:
                 best, best_avg = motion, avg
         if best is not None:
             return best
-        # Nothing has worked yet: explore an untried candidate.
+        # Nothing has worked lately: explore an untried candidate.
         for motion in EXPLORE:
             if motion not in scores:
                 return motion
-        # Everything tried, nothing improved: least bad one.
-        return max(scores, key=lambda m: sum(scores[m]) / len(scores[m]))
+        # Everything tried, nothing improving: least bad one.
+        return max(recent, key=recent.get)
 
 
-CLAUDE_SYSTEM = (
+BRAIN_SYSTEM = (
     "You are the motion-selection policy of a research infant-soothing "
     "cradle.  You answer with exactly one token: a motion id (M09..M18) or "
     "STOP.  A separate safety state machine validates everything you say; "
     "you only ever influence which pre-approved gentle motion is tried."
 )
+
+
+class OllamaBrain:
+    """The same decision asked of a *local* LLM over Ollama's HTTP API.
+
+    stdlib-only (urllib), so it costs no dependency and no money; point it
+    at another host with OLLAMA_URL.  Failures return "" -- the policy
+    then answers None and the machine falls back to the report ladder, so
+    a missing/slow local model can never stall the nursery loop (the one
+    cost is this call's own timeout, bounded well under the machine's
+    30 s checkpoint cadence).
+    """
+
+    TIMEOUT_S = 10.0
+
+    def __init__(self, url: Optional[str] = None,
+                 model: Optional[str] = None) -> None:
+        import os
+        self.url = (url or os.environ.get("OLLAMA_URL",
+                                          "http://127.0.0.1:11434")).rstrip("/")
+        self.model = model or os.environ.get("OLLAMA_MODEL", "llama3.2")
+        self.last_error = ""
+
+    def __call__(self, prompt: str, steps: list[Step], rank: int) -> str:
+        import urllib.request
+        body = json.dumps({
+            "model": self.model, "stream": False,
+            "messages": [{"role": "system", "content": BRAIN_SYSTEM},
+                         {"role": "user", "content": prompt}],
+            "options": {"num_predict": 24},
+        }).encode()
+        try:
+            req = urllib.request.Request(
+                self.url + "/api/chat", data=body,
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=self.TIMEOUT_S) as resp:
+                out = json.load(resp)
+            self.last_error = ""
+            return out.get("message", {}).get("content", "")
+        except Exception as exc:   # unreachable/missing model: use the ladder
+            self.last_error = (f"local LLM unavailable at {self.url} "
+                               f"({type(exc).__name__})")
+            return ""
 
 
 class ClaudeBrain:
@@ -188,9 +247,10 @@ class ClaudeBrain:
     """
 
     def __init__(self, model: str = "claude-opus-5") -> None:
-        import anthropic   # only --policy claude pays this dependency
+        import anthropic   # only the claude brain pays this dependency
         self._anthropic = anthropic
-        self._client = anthropic.Anthropic()
+        # bounded: this runs on the sensor thread between frames
+        self._client = anthropic.Anthropic(timeout=15.0, max_retries=0)
         self.model = model
         self.last_error = ""
 
@@ -200,7 +260,7 @@ class ClaudeBrain:
                 model=self.model,
                 max_tokens=4000,
                 output_config={"effort": "low"},
-                system=CLAUDE_SYSTEM,
+                system=BRAIN_SYSTEM,
                 messages=[{"role": "user", "content": prompt}],
             )
             if response.stop_reason == "refusal":
@@ -211,6 +271,22 @@ class ClaudeBrain:
         except Exception as exc:   # any API failure: fall back to the ladder
             self.last_error = f"{type(exc).__name__}: {exc}"
             return ""
+
+
+def make_brain(kind: str, model: Optional[str] = None):
+    """'reflex' | 'ollama' | 'claude' -> a brain, or raise with a clear why.
+
+    The one place serve.py's /policy switcher and --policy flag resolve a
+    name; keep the vocabulary here so the dashboard and CLI never drift.
+    """
+    kind = (kind or "").lower()
+    if kind == "reflex":
+        return ReflexBrain()
+    if kind == "ollama":
+        return OllamaBrain(model=model)
+    if kind == "claude":
+        return ClaudeBrain(model=model) if model else ClaudeBrain()
+    raise ValueError(f"unknown brain {kind!r} (reflex | ollama | claude)")
 
 
 # --------------------------------------------------------------------------- #
@@ -270,6 +346,7 @@ class SoothePolicy:
         return {
             "brain": type(self.brain).__name__.replace("Brain", "").lower(),
             "scenarios": len(self.scenarios),
+            "error": getattr(self.brain, "last_error", ""),
             "scores": self.scores(),
             "steps": [{"motion": s.motion, "before": s.rank_before,
                        "after": s.rank_after} for s in self.steps[-24:]],

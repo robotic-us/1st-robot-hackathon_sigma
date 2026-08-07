@@ -9,6 +9,12 @@ of cries are unsoothable (hunger, diaper): motion never helps, which is
 exactly the path that must end in a caregiver alert.  Rarely the face hides
 for a moment, tripping the safety gate.
 
+With a ``Personality`` (docs/IDEA.md) the motion identity matters too: a
+loved motion soothes 3x, hated ones agitate, a liked transition doubles up.
+Emotions are also time-related: habituation wears every motion out with use
+(and lets it recover at rest), and a slow mood cycle makes some stretches
+fussier -- so "play the favourite forever" stops being a winning strategy.
+
 The baby draws itself as a circle: colour = state, radius = distress, and its
 position rides the cradle's actual plate offset -- you can watch the sway
 rock it.  serve.py --baby streams that as the camera; RViz shows the cradle
@@ -49,6 +55,15 @@ NEXT = {              # weighted transitions at the end of a dwell
 SOOTHE_RATE = 0.08    # per second at full sway: mean ~12 s to step down
 SOOTHABLE_P = 0.7     # the rest are hunger/diaper -- caregiver work
 AGITATE_RATE = 0.05   # per second under a *hated* motion: fussing worsens
+# Time-related emotion (docs/IDEA.md follow-up): no motion works forever.
+# Habituation builds while a motion is engaged and decays while it rests,
+# so even the loved motion wears out and the policy must rotate; a slow
+# mood cycle makes some stretches of the night fussier than others.
+FATIGUE_S = 75.0          # this long at full strength ~= fully worn out
+FATIGUE_RECOVER_S = 300.0
+FATIGUE_FLOOR = 0.15      # a worn-out motion keeps 15% of its effect
+MOOD_PERIOD_S = 540.0     # one good-to-grumpy cycle every 9 minutes
+MOOD_DEPTH = 0.35         # grumpy half: soothing 35% weaker, calm shorter
 HIDE_MEAN_S = 600.0   # a face-lost blip roughly every 10 min
 HIDE_FOR_S = 1.5
 
@@ -124,6 +139,9 @@ class VirtualBaby:
         self._hidden_until = 0.0
         self._motion: str | None = None
         self._prev_motion: str | None = None
+        self._fatigue: dict[str, float] = {}   # habituation per motion, 0..1
+        self._mood = 1.0
+        self._mood_phase = self.rng.uniform(0.0, 2.0 * math.pi)
         self._t: float | None = None
         # The first act is scripted, not diced: a few calm seconds, then a
         # fuss.  Left to the dice, CALM dwells 20-60 s with a 40% exit to
@@ -134,7 +152,9 @@ class VirtualBaby:
 
     def _dwell(self) -> float:
         lo, hi = DWELL_S[self.state]
-        return self.rng.uniform(lo, hi)
+        d = self.rng.uniform(lo, hi)
+        # a grumpy stretch cuts the calm short; upset dwell is unaffected
+        return d * self._mood if self.state in ("CALM", "SLEEP") else d
 
     def _transition(self, now: float) -> None:
         if self._opening:
@@ -169,6 +189,22 @@ class VirtualBaby:
             if self._motion is not None:
                 self._prev_motion = self._motion
             self._motion = motion
+        # Time-related emotion: the mood cycle, and habituation -- exposure
+        # builds while a motion is engaged, every motion recovers at rest.
+        self._mood = 1.0 - MOOD_DEPTH * (0.5 + 0.5 * math.sin(
+            2.0 * math.pi * now / MOOD_PERIOD_S + self._mood_phase))
+        if dt > 0.0:
+            decay = math.exp(-dt / FATIGUE_RECOVER_S)
+            for k in list(self._fatigue):
+                self._fatigue[k] *= decay
+                # cleanup threshold well under one tick's build increment,
+                # or accumulation dies at birth (build adds ~4e-4 per frame)
+                if self._fatigue[k] < 1e-6:
+                    del self._fatigue[k]
+        if motion and soothing > 0.2:
+            self._fatigue[motion] = min(1.0, self._fatigue.get(motion, 0.0)
+                                        + soothing * dt / FATIGUE_S)
+
         if self._until == 0.0:
             self._until = now + (self.rng.uniform(4.0, 8.0) if self._opening
                                  else self._dwell())
@@ -176,17 +212,21 @@ class VirtualBaby:
             self._transition(now)
         # The closed loop: a soothable fuss/cry yields to sway, hunger does
         # not.  With a personality the motion identity matters: the loved
-        # motion soothes faster, a hated one agitates instead.
+        # motion soothes faster, a hated one agitates instead -- and any
+        # motion, loved included, fades with heavy use.
         gain = 1.0
         if self.personality is not None and soothing > 0.2:
             gain = self.personality.gain(motion, self._prev_motion)
+        if gain > 0.0 and motion:
+            gain *= max(FATIGUE_FLOOR, 1.0 - self._fatigue.get(motion, 0.0))
         if self.state in ("FUSS", "CRY") and soothing > 0.2:
             if gain < 0.0:
                 if self.rng.random() < 1.0 - math.exp(AGITATE_RATE * gain
                                                       * soothing * dt):
                     self._step_up(now)
             elif (self.soothable and gain > 0.0 and self.rng.random()
-                    < 1.0 - math.exp(-SOOTHE_RATE * gain * soothing * dt)):
+                    < 1.0 - math.exp(-SOOTHE_RATE * gain * self._mood
+                                     * soothing * dt)):
                 self._step_down(now)
         base, wander = STATES[self.state]
         target = base + wander * math.sin(now * 0.9 + sum(map(ord, self.state)) % 7)

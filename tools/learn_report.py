@@ -34,6 +34,7 @@ from core.policy import ReflexBrain, SoothePolicy
 from perception.baby import Personality, VirtualBaby
 
 NIGHT_S = 1800.0     # simulated seconds per night
+PACE_S = 10.0        # the demo rig plays each motion for ~10 s
 DT = 0.1
 
 
@@ -42,7 +43,7 @@ def run_night(seed: int, personality: Personality,
     """One night through the real closed loop -> distress totals."""
     baby = VirtualBaby(seed=seed, personality=personality)
     engine = MotionEngine()
-    machine = CradleMachine(engine)
+    machine = CradleMachine(engine, check_every_s=PACE_S)
     if policy is not None:
         machine.advisor = policy.pick
     t, upset_s = 0.0, 0.0
