@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { CradleState, Slot } from "./types";
+import type { CradleState } from "./types";
 
 export type Conn = "connecting" | "live" | "reconnecting";
 
@@ -30,20 +30,6 @@ export function useCradle() {
   }, []);
 
   return { state, conn, latest };
-}
-
-/** The DREAM slot table, fetched once for the internals drawer. */
-export function useSlots() {
-  const [slots, setSlots] = useState<Slot[]>([]);
-  useEffect(() => {
-    let alive = true;
-    fetch("/slots")
-      .then((r) => r.json())
-      .then((list: Slot[]) => { if (alive) setSlots(list); })
-      .catch(() => { /* the drawer simply stays empty */ });
-    return () => { alive = false; };
-  }, []);
-  return slots;
 }
 
 /** Fire-and-forget command; serve.py answers with JSON nobody needs here. */

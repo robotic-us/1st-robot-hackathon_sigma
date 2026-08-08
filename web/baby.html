@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f2d8bd">
+<title>SIGMA · virtual infant</title>
+<link rel="stylesheet" href="/baby.css?v=2">
+</head>
+<body>
+<main>
+  <canvas id="face" aria-label="virtual infant face"></canvas>
+  <div id="label"><b id="emotion">Waiting</b><span id="level">–</span></div>
+</main>
+
+<aside id="setup">
+  <div><span id="linkdot"></span><b id="link">Connecting to Jetson</b></div>
+  <p id="sensor">Motion sensor has not started.</p>
+  <button id="start">Start motion sensor</button>
+  <p class="hint">Keep this page open and the iPad secured to the cradle.
+     Drag the feelings wheel to reach any of the 17 poses by hand; the dots
+     mark where each one sits. GO LIVE hands the wheel back to the Jetson.</p>
+</aside>
+
+<script src="/baby.js?v=2"></script>
+</body>
+</html>

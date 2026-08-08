@@ -20,7 +20,7 @@
   /* severity as an ink ramp, not a palette */
   --good:#9a9a9a; --warn:#555555; --serious:#333333; --critical:#111111;
   --scrim:255 255 255;                    /* hero text scrim, as rgb */
-  --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+  --sans:"Helvetica Neue","Liberation Sans","Segoe UI",Arial,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
 @media (prefers-color-scheme: dark) {

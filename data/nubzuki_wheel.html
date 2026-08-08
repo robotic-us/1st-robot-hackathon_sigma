@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SIGMA &middot; what the mascot recognizer sees</title>
+<style>
+:root { --bg:#fbfaf8; --fg:#23201d; --dim:#6d675f; --line:#d9d3ca;
+         --grid:#e6e1d8; --card:#fff; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#17161a; --fg:#e9e6e1; --dim:#9a938a; --line:#3a3630;
+           --grid:#2a2724; --card:#1e1c20; }
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:28px 20px 60px; background:var(--bg); color:var(--fg);
+        font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; }
+main { max-width:900px; margin:0 auto; }
+h1 { font-size:22px; margin:0 0 4px; letter-spacing:-.01em; }
+p.sub { margin:0 0 22px; color:var(--dim); }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+         padding:18px; margin-bottom:20px; }
+svg { width:100%; height:auto; display:block; }
+.ring { fill:none; stroke:var(--grid); stroke-width:1.5; }
+.axis { stroke:var(--grid); stroke-width:1; stroke-dasharray:5 5; }
+.ax { fill:var(--dim); font-size:12px; letter-spacing:.12em; }
+.lbl { fill:var(--fg); font-size:11.5px; }
+.err { stroke:var(--dim); stroke-width:1.4; opacity:.55; }
+.printed { fill:none; stroke:var(--dim); stroke-width:1.4; }
+.named { stroke:var(--card); stroke-width:1.5; }
+.ladder { fill:none; stroke:var(--dim); stroke-width:1.2; stroke-dasharray:2 6;
+           opacity:.5; }
+.keys { display:flex; flex-wrap:wrap; gap:14px; margin-top:10px;
+         color:var(--dim); font-size:13px; }
+.key { display:inline-flex; align-items:center; gap:6px; }
+.dot { width:10px; height:10px; border-radius:50%; display:inline-block;
+        margin-right:7px; vertical-align:-1px; }
+.wrap { overflow-x:auto; }
+table { border-collapse:collapse; width:100%; font-size:13.5px; min-width:620px; }
+th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
+th { color:var(--dim); font-weight:600; font-size:12px; letter-spacing:.04em;
+      text-transform:uppercase; }
+td.n { text-align:right; font-variant-numeric:tabular-nums; }
+td.st, td.why { color:var(--dim); }
+td.st { font-size:12.5px; }
+.stat { display:flex; flex-wrap:wrap; gap:26px; margin:0 0 18px; }
+.stat div { font-size:13px; color:var(--dim); }
+.stat b { display:block; font-size:21px; color:var(--fg);
+           font-variant-numeric:tabular-nums; }
+</style></head><body><main>
+<h1>What the mascot recognizer sees</h1>
+<p class="sub">Every figure in <code>docs/Nubzuki.jpg</code>, read by
+<code>perception/nubzuki.py</code> and plotted on the sheet&rsquo;s own
+circumplex. The hollow ring is where the sheet <em>prints</em> the figure &mdash;
+independent ground truth, because the sheet is an emotion chart. The filled dot
+is the pose the classifier <em>named</em>. The line between them is the error.</p>
+
+<div class="stat">
+  <div><b>17/17</b>poses named</div>
+  <div><b>0.56</b>worst placement error</div>
+  <div><b>0.42</b>highest assertable level</div>
+  <div><b>0.45</b>CRY_LEVEL &mdash; vision may not cross it</div>
+</div>
+
+<div class="card"><svg viewBox="0 0 660 660" role="img" aria-label="the 17 mascot poses on the ACTIVE/CALM by NEGATIVE/POSITIVE circumplex, each linked to where the reference sheet prints it">
+<circle cx="330" cy="330" r="250" class="ring"/>
+<line x1="330" y1="80" x2="330" y2="580" class="axis"/>
+<line x1="80" y1="330" x2="580" y2="330" class="axis"/>
+<text x="330" y="68" text-anchor="middle" class="ax">ACTIVE</text>
+<text x="330" y="604" text-anchor="middle" class="ax">CALM</text>
+<text x="68" y="330" text-anchor="end" class="ax">NEGATIVE</text>
+<text x="592" y="330" text-anchor="start" class="ax">POSITIVE</text>
+<polyline points="442.5,442.5 322.5,295.0 105.0,345.0 205.0,185.0 147.5,160.0" class="ladder"/>
+<line x1="559.3" y1="74.1" x2="550.0" y2="215.0" class="err"/>
+<circle cx="559.3" cy="74.1" r="4" class="printed"/>
+<circle cx="550.0" cy="215.0" r="7" fill="#4f9d4a" class="named"/>
+<text x="562.0" y="219.0" text-anchor="start" class="lbl">Celebrating</text>
+<line x1="110.9" y1="126.8" x2="147.5" y2="160.0" class="err"/>
+<circle cx="110.9" cy="126.8" r="4" class="printed"/>
+<circle cx="147.5" cy="160.0" r="7" fill="#c4443a" class="named"/>
+<text x="135.5" y="164.0" text-anchor="end" class="lbl">Raging</text>
+<line x1="330.9" y1="135.3" x2="317.5" y2="135.0" class="err"/>
+<circle cx="330.9" cy="135.3" r="4" class="printed"/>
+<circle cx="317.5" cy="135.0" r="7" fill="#4f9d4a" class="named"/>
+<text x="305.5" y="139.0" text-anchor="end" class="lbl">Startled</text>
+<line x1="487.5" y1="141.1" x2="492.5" y2="135.0" class="err"/>
+<circle cx="487.5" cy="141.1" r="4" class="printed"/>
+<circle cx="492.5" cy="135.0" r="7" fill="#b08528" class="named"/>
+<text x="504.5" y="139.0" text-anchor="start" class="lbl">Dancing</text>
+<line x1="210.9" y1="195.0" x2="205.0" y2="185.0" class="err"/>
+<circle cx="210.9" cy="195.0" r="4" class="printed"/>
+<circle cx="205.0" cy="185.0" r="7" fill="#c4443a" class="named"/>
+<text x="193.0" y="189.0" text-anchor="end" class="lbl">Angry</text>
+<line x1="405.1" y1="197.1" x2="402.5" y2="185.0" class="err"/>
+<circle cx="405.1" cy="197.1" r="4" class="printed"/>
+<circle cx="402.5" cy="185.0" r="7" fill="#4f9d4a" class="named"/>
+<text x="414.5" y="189.0" text-anchor="start" class="lbl">Blowing a kiss</text>
+<line x1="473.0" y1="252.9" x2="467.5" y2="247.5" class="err"/>
+<circle cx="473.0" cy="252.9" r="4" class="printed"/>
+<circle cx="467.5" cy="247.5" r="7" fill="#4f9d4a" class="named"/>
+<text x="479.5" y="251.5" text-anchor="start" class="lbl">Bashful</text>
+<line x1="333.3" y1="301.3" x2="322.5" y2="295.0" class="err"/>
+<circle cx="333.3" cy="301.3" r="4" class="printed"/>
+<circle cx="322.5" cy="295.0" r="7" fill="#4f9d4a" class="named"/>
+<text x="310.5" y="299.0" text-anchor="end" class="lbl">Neutral</text>
+<line x1="117.0" y1="341.6" x2="105.0" y2="345.0" class="err"/>
+<circle cx="117.0" cy="341.6" r="4" class="printed"/>
+<circle cx="105.0" cy="345.0" r="7" fill="#c4443a" class="named"/>
+<text x="93.0" y="349.0" text-anchor="end" class="lbl">Crying</text>
+<line x1="236.3" y1="321.0" x2="222.5" y2="310.0" class="err"/>
+<circle cx="236.3" cy="321.0" r="4" class="printed"/>
+<circle cx="222.5" cy="310.0" r="7" fill="#b08528" class="named"/>
+<text x="210.5" y="314.0" text-anchor="end" class="lbl">Playing it cool</text>
+<line x1="502.0" y1="359.5" x2="512.5" y2="362.5" class="err"/>
+<circle cx="502.0" cy="359.5" r="4" class="printed"/>
+<circle cx="512.5" cy="362.5" r="7" fill="#b08528" class="named"/>
+<text x="524.5" y="366.5" text-anchor="start" class="lbl">Lounging</text>
+<line x1="364.8" y1="398.6" x2="350.0" y2="392.5" class="err"/>
+<circle cx="364.8" cy="398.6" r="4" class="printed"/>
+<circle cx="350.0" cy="392.5" r="7" fill="#4f9d4a" class="named"/>
+<text x="362.0" y="396.5" text-anchor="start" class="lbl">Thinking</text>
+<line x1="166.1" y1="449.8" x2="152.5" y2="442.5" class="err"/>
+<circle cx="166.1" cy="449.8" r="4" class="printed"/>
+<circle cx="152.5" cy="442.5" r="7" fill="#4f9d4a" class="named"/>
+<text x="140.5" y="446.5" text-anchor="end" class="lbl">Gloomy</text>
+<line x1="449.6" y1="449.8" x2="442.5" y2="442.5" class="err"/>
+<circle cx="449.6" cy="449.8" r="4" class="printed"/>
+<circle cx="442.5" cy="442.5" r="7" fill="#4f9d4a" class="named"/>
+<text x="454.5" y="446.5" text-anchor="start" class="lbl">Content</text>
+<line x1="262.1" y1="494.0" x2="247.5" y2="505.0" class="err"/>
+<circle cx="262.1" cy="494.0" r="4" class="printed"/>
+<circle cx="247.5" cy="505.0" r="7" fill="#4f9d4a" class="named"/>
+<text x="235.5" y="509.0" text-anchor="end" class="lbl">Poorly</text>
+<line x1="393.0" y1="518.3" x2="380.0" y2="537.5" class="err"/>
+<circle cx="393.0" cy="518.3" r="4" class="printed"/>
+<circle cx="380.0" cy="537.5" r="7" fill="#5f7fc4" class="named"/>
+<text x="392.0" y="541.5" text-anchor="start" class="lbl">Sleeping</text>
+<line x1="536.9" y1="523.1" x2="505.0" y2="507.5" class="err"/>
+<circle cx="536.9" cy="523.1" r="4" class="printed"/>
+<circle cx="505.0" cy="507.5" r="7" fill="#5f7fc4" class="named"/>
+<text x="517.0" y="511.5" text-anchor="start" class="lbl">Dreaming</text>
+</svg>
+<div class="keys"><span class="key"><span class="dot" style="background:#4f9d4a"></span>AWAKE</span><span class="key"><span class="dot" style="background:#b08528"></span>EYES_CLOSED</span><span class="key"><span class="dot" style="background:#5f7fc4"></span>SLEEP_CANDIDATE</span><span class="key"><span class="dot" style="background:#c4443a"></span>DISTRESS_FACE</span>
+<span class="key"><span class="dot" style="border:1.4px solid var(--dim);
+background:transparent"></span>where the sheet prints it</span></div></div>
+
+<div class="card"><div class="wrap"><table><thead><tr><th>pose</th><th>five-state</th><th>recovered</th><th>may assert</th><th>error</th><th>decided by</th></tr></thead><tbody><tr><td><span class="dot" style="background:#4f9d4a"></span>Neutral</td><td class="st">AWAKE</td><td class="n">0.22</td><td class="n">0.05</td><td class="n">0.05</td><td class="why">nearest the neutral reference (0.00; next nerdy at 18.54)</td></tr><tr><td><span class="dot" style="background:#4f9d4a"></span>Celebrating</td><td class="st">AWAKE</td><td class="n">&mdash;</td><td class="n">0.05</td><td class="n">0.56</td><td class="why">nearest the star reference (0.00; next shocked at 43.63)</td></tr><tr><td><span class="dot" style="background:#4f9d4a"></span>Startled</td><td class="st">AWAKE</td><td class="n">&mdash;</td><td class="n">0.05</td><td class="n">0.05</td><td class="why">nearest the shocked reference (0.00; next cool at 23.02)</td></tr><tr><td><span class="dot" style="background:#4f9d4a"></span>Blowing a kiss</td><td class="st">AWAKE</td><td class="n">&mdash;</td><td class="n">0.05</td><td class="n">0.05</td><td class="why">nearest the kiss reference (0.00; next gloomy at 32.73)</td></tr><tr><td><span class="dot" style="background:#4f9d4a"></span>Bashful</td><td class="st">AWAKE</td><td class="n">&mdash;</td><td class="n">0.05</td><td class="n">0.03</td><td class="why">nearest the bashful reference (0.00; next nerdy at 28.63)</td></tr><tr><td><span class="dot" style="background:#4f9d4a"></span>Thinking</td><td class="st">AWAKE</td><td class="n">&mdash;</td><td class="n">0.05</td><td class="n">0.06</td><td class="why">nearest the nerdy reference (0.00; next neutral at 18.54)</td></tr><tr><td><span class="dot" style="background:#4f9d4a"></span>Gloomy</td><td class="st">AWAKE</td><td class="n">&mdash;</td><td class="n">0.05</td><td class="n">0.06</td><td class="why">nearest the gloomy reference (0.00; next shocked at 29.11)</td></tr><tr><td><span class="dot" style="background:#4f9d4a"></span>Content</td><td class="st">AWAKE</td><td class="n">0.00</td><td class="n">0.05</td><td class="n">0.04</td><td class="why">nearest the sitHeart reference (0.00; next neutral at 28.67)</td></tr><tr><td><span class="dot" style="background:#4f9d4a"></span>Poorly</td><td class="st">AWAKE</td><td class="n">&mdash;</td><td class="n">0.05</td><td class="n">0.07</td><td class="why">nearest the sick reference (0.00; next gloomy at 33.92)</td></tr><tr><td><span class="dot" style="background:#c4443a"></span>Raging</td><td class="st">DISTRESS_FACE</td><td class="n">1.00</td><td class="n">0.42</td><td class="n">0.20</td><td class="why">nearest the rage reference (0.00; next star at 45.26)</td></tr><tr><td><span class="dot" style="background:#c4443a"></span>Angry</td><td class="st">DISTRESS_FACE</td><td class="n">0.78</td><td class="n">0.36</td><td class="n">0.05</td><td class="why">nearest the angry reference (0.00; next gloomy at 33.37)</td></tr><tr><td><span class="dot" style="background:#c4443a"></span>Crying</td><td class="st">DISTRESS_FACE</td><td class="n">0.50</td><td class="n">0.30</td><td class="n">0.05</td><td class="why">nearest the crying reference (0.00; next sitHeart at 31.45)</td></tr><tr><td><span class="dot" style="background:#b08528"></span>Dancing</td><td class="st">EYES_CLOSED</td><td class="n">&mdash;</td><td class="n">0.00</td><td class="n">0.03</td><td class="why">nearest the dancing reference (0.00; next sleeping at 32.04)</td></tr><tr><td><span class="dot" style="background:#b08528"></span>Playing it cool</td><td class="st">EYES_CLOSED</td><td class="n">&mdash;</td><td class="n">0.00</td><td class="n">0.07</td><td class="why">nearest the cool reference (0.00; next shocked at 23.02)</td></tr><tr><td><span class="dot" style="background:#b08528"></span>Lounging</td><td class="st">EYES_CLOSED</td><td class="n">&mdash;</td><td class="n">0.00</td><td class="n">0.04</td><td class="why">nearest the lounging reference (0.00; next sleeping at 16.94)</td></tr><tr><td><span class="dot" style="background:#5f7fc4"></span>Sleeping</td><td class="st">SLEEP_CANDIDATE</td><td class="n">&mdash;</td><td class="n">0.00</td><td class="n">0.09</td><td class="why">nearest the sleeping reference (0.00; next lounging at 16.94)</td></tr><tr><td><span class="dot" style="background:#5f7fc4"></span>Dreaming</td><td class="st">SLEEP_CANDIDATE</td><td class="n">&mdash;</td><td class="n">0.00</td><td class="n">0.14</td><td class="why">nearest the dreaming reference (0.00; next sleeping at 35.66)</td></tr></tbody></table></div>
+<p class="sub" style="margin:14px 0 0">
+<b>recovered</b> is the distress level that would have drawn the pose &mdash; an
+echo of what the machine sent, and the right number for checking the loop.
+<b>may assert</b> is what this reading is allowed to claim as a
+<em>visual</em> observation: capped at 0.42, below CRY_LEVEL 0.45, because
+&sect;5 says vision alone never escalates. Calm poses sit under CALM_LEVEL
+0.12. The two columns differing is the point, not a bug.</p></div>
+</main></body></html>

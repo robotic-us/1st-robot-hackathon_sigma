@@ -31,64 +31,24 @@ export interface Cradle {
 
 export interface Tag {
   present: boolean;
-  id: number;
   level: number;                  // raw distress, 0..1
   x: number;
-  motion: number;
-  emotion: string;                // "" in state-card mode
-  name: string;                   // face identity, "" unless --sense recognises
-}
-
-export interface Playing {
-  slot: number;
+  emotion: string;                // judge state (QUIET_AWAKE...) or FER label
   name: string;
-  progress: number;
-  dream_theta: number;            // rad -- where the dream says the plate is
+  alarm: boolean;                 // pain/posture: the gate is about to act
+  phase: string;                  // --verify: which scripted scenario phase
 }
 
-export interface Monitor {
-  slot: number | null;
-  err: number;
-  rms: number;
-  diverged: boolean;
-  threshold: number;
-}
 
-export interface Ranked {
-  slot: number;
-  cost: number;
-  consist: number;
-  resist: number;
-  contin: number;
-  task: number;
-  vetoed: boolean;
-  arc: number[][];
-}
 
-export interface Decision {
-  seq: number;
-  t: number;
-  chosen: number | null;
-  ranked: Ranked[];
-}
+
 
 export interface CradleState {
   t: number;
   pose: number[];
   tag: Tag;
   jam: boolean;
-  dob: number;
-  playing: Playing | null;
   cradle: Cradle;
-  monitor: Monitor;
-  decision: Decision | null;
   events: string[];
 }
 
-/** GET /slots */
-export interface Slot {
-  id: number;
-  name: string;
-  target_deg: number;
-  duration: number;
-}

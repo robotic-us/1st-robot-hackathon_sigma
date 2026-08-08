@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python3 Test1.py)",
-      "Bash(python3 -c \"import phorce; print\\(phorce.__file__\\); print\\(dir\\(phorce\\)\\)\")"
-    ]
-  }
-}

@@ -1,9 +1,10 @@
-# Models: 71 MB of ONNX binaries, re-fetchable with `python3 fetch_models.py`
-models/*.onnx
+# Captured camera frames from `perception/nubzuki.py --dump`: bulky, and a
+# photo of a screen is a local calibration artefact, not a project asset.
+data/bench/
 
-# Enrolled face embeddings — biometric data, keep it off any remote
-faces/
-*.npz
+# NOT ignored: data/nubzuki_templates.npz.  The blanket *.npz rule here was for
+# the face embeddings, which are gone -- and it silently swallowed the mascot
+# recognizer's reference crops, which are the one file it cannot run without.
 
 # Python
 __pycache__/
@@ -12,6 +13,12 @@ __pycache__/
 # macOS Finder droppings
 .DS_Store
 
+# MS Office lock files (open documents in docs/)
+~$*
+
 # Recorded output from `run.py --save`
 *.mp4
 *.avi
+
+# Local HTTPS identity for the iPad motion-sensor page (contains private keys)
+.local-certs/

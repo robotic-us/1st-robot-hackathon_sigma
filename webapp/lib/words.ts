@@ -28,7 +28,7 @@ const BABY_WORD: Record<string, string> = {
   SLEEP_CANDIDATE: "Drifting off", DISTRESS_FACE: "Looks upset",
   UNKNOWN: "Can't see the baby",
   QUIET_AWAKE: "Quiet and awake", STARTLE: "Startled",
-  FUSS_WEAK: "Fussing", CRY: "Crying",
+  FUSS_WEAK: "Fussing",
   STRONG_DISTRESS: "Very upset", PAIN_SUSPECT: "Needs you now",
   DROWSY: "Getting sleepy", SLEEP_TENTATIVE: "Falling asleep",
   SLEEP_STABLE: "Sleeping", STATE_UNCLEAR: "Can't see the baby",
@@ -36,9 +36,18 @@ const BABY_WORD: Record<string, string> = {
 
 /** Status role per state, so a colour never travels without its label. */
 export const ROLE: Record<string, string> = {
-  SLEEP: "--accent", CALM: "--good", HAPPY: "--good", NEUTRAL: "--muted",
+  /* ink-ramp rule: FAINT = AT REST, STRONG = NEEDS SOMEONE.  Sleep is the
+     calmest state on the page and wears the faintest step -- --accent here is
+     full ink and belongs to the machine's own action, never to the baby. */
+  SLEEP: "--baseline", CALM: "--good", HAPPY: "--good", NEUTRAL: "--muted",
   FUSS: "--warn", SAD: "--warn", SURPRISE: "--warn",
   CRY: "--serious", ANGRY: "--serious",
+  AWAKE: "--good", EYES_CLOSED: "--baseline", SLEEP_CANDIDATE: "--baseline",
+  DISTRESS_FACE: "--warn", UNKNOWN: "--muted",
+  QUIET_AWAKE: "--good", STARTLE: "--warn", FUSS_WEAK: "--warn",
+  STRONG_DISTRESS: "--serious", PAIN_SUSPECT: "--critical",
+  DROWSY: "--baseline", SLEEP_TENTATIVE: "--baseline",
+  SLEEP_STABLE: "--baseline", STATE_UNCLEAR: "--muted",
 };
 
 export function babyWord(tag: Tag): string {

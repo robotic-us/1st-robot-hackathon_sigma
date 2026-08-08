@@ -1,30 +1,15 @@
 #!/usr/bin/env python3
-"""Drive the RViz model's joints -- this is what makes the actuators move.
+"""RViz joint driver: /joint_states fed by the real MotionEngine.
 
-``robot_state_publisher`` turns joint angles into link poses, but something has
-to publish the angles.  That is this: a ``/joint_states`` publisher fed by the
-same P-Vector world model DREAM-Chunk dreams with (see pvector.py).
+The rig is two five-bar linkages, so library modes publish four *different*
+crank angles; --tour/--motion exaggerate amplitude like serve.py --viz-gain.
 
-So what you see in RViz is not an animation someone keyframed.  It is the exact
-trajectory the pcm would play for that slot, evaluated from the quintic:
+    python3 apps/animate.py --tour         # walk the real M-library -- the demo
+    python3 apps/animate.py --motion M16   # hold one library entry
+    python3 apps/animate.py --rock         # one plain sine, until Ctrl-C
+    python3 apps/animate.py --sweep        # one joint at a time, a wiring check
 
-    python3 apps/animate.py --tour          # walk the real M-library -- the demo
-    python3 apps/animate.py --motion M16          # hold one library entry
-    python3 apps/animate.py --rock          # one plain sine, until Ctrl-C
-    python3 apps/animate.py --slot 3          # play one motion slot, once
-    python3 apps/animate.py --all          # cycle through every slot
-    python3 apps/animate.py --sweep          # one joint at a time, a wiring check
-
-The rig is two five-bar linkages, not a parallelogram: all four cranks the same
-way sways the plate, a pair's two cranks opposed lifts it, and pair against pair
-pitches it.  So the library modes publish four *different* crank angles, and ML,
-AP and Z look genuinely different on screen.  ``--tour`` and ``--motion``
-exaggerate amplitude the way ``serve.py --viz-gain`` does; the timing is the
-engine's own.  (``--rock`` is a plain screen sine on the sway channel only.)
-
-Needs the model up first::
-
-    ./cad/view.sh          # robot_state_publisher + RViz
+Needs the model up first::  ./cad/view.sh
 """
 
 from __future__ import annotations
@@ -41,58 +26,28 @@ if __package__ in (None, ""):   # direct run: put the repo root on sys.path
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from apps.demo import (JOINT_NAMES, LEVER_M, axis_angles, cradle_cranks,
+from core.rig import (JOINT_NAMES, LEVER_M, cradle_cranks,
                        cradle_joint_state, joint_state)
 from core.cradle import LIBRARY_BY_ID, MotionEngine
-from core.pvector import load_chunk_dictionary
 VIZ_GAIN = 5.0          # display exaggeration, exactly like serve.py --viz-gain
 
-# A pass through what the rig can actually do: slow to fast, double amplitude,
-# a half-amplitude resume, the AP entries (which pitch the plate rather than
-# sway it -- a genuinely different motion now that the compiler drives the real
-# linkage), and the taper home.  Nothing here is R-grade; tests enforce that.
-#
-# M02 (pause) and M03 (soft start) used to sit in the middle and were the whole
-# reason the tour felt gappy: M02 parks the engine at zero, and M03's ramp is
-# fixed at 30 s by the library, so in a short slot it never climbs off the
-# floor.  Oscillation entries have no such problem -- the engine ramps env from
-# 1.0 to 1.0 and only the frequency changes, so those switches are seamless.
-# Every ML rate the report defines, 0.2 Hz to 0.8 Hz, then the three A20
-# entries at double reach.  M08 sits after M15 on purpose: micro-resume runs
-# the *current* mode at half amplitude, so placing it after an A10 entry buys
-# a third amplitude level (~6 deg) that the library has no other way to show.
+# Every ML rate 0.2-0.8 Hz, the three A20 entries, then taper home.  M08 after
+# M15 on purpose: micro-resume at half amplitude buys a third amplitude level.
+# Nothing here is R-grade; tests enforce that.
 TOUR = ("M09", "M10", "M11", "M12", "M13", "M14", "M15", "M08",
         "M16", "M17", "M18", "M22", "M26")
 TOUR_END = "M05"        # always finish at rest
 
-# R-grade shapes, added only under --research.  Chosen by measuring what a
-# single horizontal DOF actually renders, which is not what the names suggest:
-#
-#   M43 lissajous    two frequencies summed -- the one genuinely compound wave
-#   M45 pseudo-walk  band-limited 0.4-0.7 Hz, the least periodic thing here
-#   M46 adaptive-A   stepped amplitude, the smallest reach in the library
-#   M35/M37 ellipse  AP+ML sum to a sine at reaches P1 cannot reach
-#   M33 diagonal     the widest travel of anything that runs
-#   M39 circle       AP+ML in quadrature
-#
-#   M49 Z sine       the vertical channel -- both pairs counter-rotating
-#
-# Deliberately absent as near-duplicates on one plane: M40-M42 (CW and CCW
-# trace the same path) and M44 (identical to M43).
+# R-grade shapes, added only under --research.  M40-M42/M44 deliberately
+# absent as near-duplicates on one plane.
 TOUR_RESEARCH = ("M43", "M45", "M46", "M35", "M37", "M33", "M39", "M49")
 
 TOUR_DWELL_S = 10.0     # seconds per entry; --dwell overrides
-# RAMP_MIN_S (5 s) is the engine's floor on any start or taper and --dwell does
-# not touch it: shortening a ramp is the one thing here that would misrepresent
-# how the cradle actually behaves.
+# RAMP_MIN_S (5 s) floors every start/taper; --dwell never shortens a ramp.
 TOUR_RAMP_S = 5.0
 
-# The URDF's joints, by name, in the order joint_state() emits them.  This is
-# imported from apps/demo.py rather than written out again: after the tree was
-# re-rooted (every upper arm on the holder), a stale local copy here kept
-# publishing joint_axis_1/2/3 -- which no longer exist -- and never published
-# the joint_bearing_N that do, so robot_state_publisher had no TF for three
-# arms and RViz showed a broken robot.  One list, one owner.
+# The URDF joint names, imported from core/rig.py -- one list, one owner
+# (a stale local copy once left three arms without TF in RViz).
 JOINTS = JOINT_NAMES
 RATE_HZ = 50.0
 
@@ -113,55 +68,19 @@ class Animator(Node):
         msg.position = pos
         self.pub.publish(msg)
 
-    def hold(self, positions, seconds: float) -> None:
-        """Keep publishing a pose. RViz needs a steady stream, not one message."""
-        steps = max(1, int(seconds * RATE_HZ))
-        for _ in range(steps):
-            self.send(positions)
-            time.sleep(1.0 / RATE_HZ)
 
-
-# --rock is a screen animation, not a robot command: nothing in this mode goes
-# near the engine, the library or the envelope, so both numbers are chosen to
-# read well on a projector rather than to match the hardware.  The real cradle
-# tops out at 0.8 Hz and +-2.53 deg (A10); this is deliberately louder, and the
-# node says so on every start.  For the honest motion, use --tour.
+# --rock is a screen animation, deliberately louder than the real envelope
+# (0.8 Hz, +-2.53 deg at A10); the node says so on every start.
 ROCK_HZ = 1.5
 ROCK_DEG = 20.0
 
-
-# The aggregate lever, mm of sway per degree of crank -- for turning a screen
-# amplitude in degrees into the plate travel joint_state() wants.
+# Aggregate lever: mm of sway per degree of crank.
 MM_PER_DEG = LEVER_M * 1000.0 * math.radians(1.0)
 
 
 def sway_state(amp_deg: float, phase: float) -> list[float]:
-    """A plain sway at ``amp_deg``, as a full joint state.
-
-    Solved through the linkage rather than copied to four joints, so even the
-    exaggerated screen modes keep every arm on the holder.
-    """
+    """A plain sway at ``amp_deg``, solved through the linkage as a full joint state."""
     return joint_state(sway_mm=amp_deg * MM_PER_DEG * math.sin(phase))
-
-
-def crank_to_sway_mm(theta_rad: float) -> float:
-    """Invert the sway channel: leg 0's crank delta -> plate travel (mm).
-
-    The linkage is nonlinear, so this is a bisection on the real solve rather
-    than a lever multiply.  Used to render DREAM slots, whose trajectories are
-    stored as crank angles.
-    """
-    lo, hi = -160.0, 160.0
-    f = lambda mm: axis_angles(sway_mm=mm)[0] - theta_rad
-    if f(lo) * f(hi) > 0:            # out of reach: clamp to the nearer end
-        return lo if abs(f(lo)) < abs(f(hi)) else hi
-    for _ in range(48):
-        mid = 0.5 * (lo + hi)
-        if f(lo) * f(mid) <= 0:
-            hi = mid
-        else:
-            lo = mid
-    return 0.5 * (lo + hi)
 
 
 def library_angles(engine: MotionEngine, script, gain: float = VIZ_GAIN,
@@ -169,17 +88,9 @@ def library_angles(engine: MotionEngine, script, gain: float = VIZ_GAIN,
                    solve=cradle_joint_state):
     """Walk a ``(motion_id, dwell_s)`` script through the real MotionEngine.
 
-    This is where the variety comes from: rather than inventing waveforms, it
-    plays the report's own entries and publishes whatever the engine produces
-    -- the ramps, the frequency changes, the half-amplitude resume and the
-    tapers are all the engine's doing, not ours.
-
-    Yields ``(motion_id, angles_rad, note)`` per sample -- four angles, not one:
-    ML reaches every arm, AP opposes the front and rear pairs.  Publishing a
-    single summed angle to all four joints, which this used to do, made every
-    AP entry render as a copy of its ML twin and the arms always swing together.
-    ``note`` carries the engine's reply on the first sample of an entry and is
-    None after that.  Free of ROS, so a test can walk a whole tour headlessly.
+    Yields ``(motion_id, angles_rad, note)`` per sample -- four angles, not one.
+    ``note`` carries the engine's reply on an entry's first sample, else None.
+    Free of ROS, so a test can walk a whole tour headlessly.
     """
     t = 0.0
     for motion_id, dwell in script:
@@ -188,31 +99,11 @@ def library_angles(engine: MotionEngine, script, gain: float = VIZ_GAIN,
         while t < end:
             engine.tick(t)
             ap_mm, ml_mm, z_mm = engine.offsets_mm()
-            # Gain multiplies the plate travel, not the joint angles: the
-            # linkage is nonlinear, so scaling angles would lift the rods off
-            # their bearings and the arms would come apart on screen.
-            # ``solve`` decides what comes out: the full joint state for
-            # publishing, or cradle_cranks when a caller wants amplitude.
+            # Gain multiplies plate travel, not joint angles (linkage is
+            # nonlinear); ``solve`` picks full joint state vs cradle_cranks.
             yield motion_id, solve(ap_mm, ml_mm, z_mm, gain), note
             note = None
             t += dt
-
-
-def play_chunk(node: Animator, chunk, start) -> list[float]:
-    """Walk one motion slot's dreamed trajectory at wall-clock speed.
-
-    The dream is stored as crank angles (the world model's coordinates), but
-    the screen needs all nine joints, so each sample is inverted back to plate
-    travel and re-solved through the linkage.  The returned pose stays in
-    crank coordinates -- that is what the next chunk dreams from.
-    """
-    t, y = chunk.dream(start, dt=1.0 / RATE_HZ)
-    node.get_logger().info(
-        f"slot {chunk.slot_id} '{chunk.name}' -- {chunk.duration_s:.2f}s")
-    for row in y:
-        node.send(joint_state(sway_mm=crank_to_sway_mm(float(row[0]))))
-        time.sleep(1.0 / RATE_HZ)
-    return list(y[-1])
 
 
 def main(argv=None) -> int:
@@ -232,11 +123,7 @@ def main(argv=None) -> int:
                         help=f"--rock frequency (default {ROCK_HZ}, the library's fastest)")
     parser.add_argument("--deg", type=float, default=ROCK_DEG,
                         help=f"--rock amplitude in degrees (default {ROCK_DEG}, exaggerated)")
-    parser.add_argument("--slot", type=int, help="play one slot")
-    parser.add_argument("--all", action="store_true", help="cycle through every slot")
     parser.add_argument("--sweep", action="store_true", help="sine on each joint in turn")
-    parser.add_argument("--motion-map", help="MotionMap.csv (else motions/ or slots.json)")
-    parser.add_argument("--slot-table", default="slots.json")
     parser.add_argument("--loop", action="store_true", help="repeat forever")
     args = parser.parse_args(argv)
 
@@ -250,8 +137,7 @@ def main(argv=None) -> int:
                     node.get_logger().error(f"unknown motion {args.motion!r} -- "
                                             "M01..M50, see /motions or the report")
                     return 1
-                # The engine would refuse this anyway, but silently: say it
-                # here, or the operator just watches a statue and wonders.
+                # The engine would refuse this anyway, but silently.
                 if m.grade == "R" and not args.research:
                     node.get_logger().error(
                         f"{m.id} {m.name} is research-only (R) -- "
@@ -281,13 +167,10 @@ def main(argv=None) -> int:
             return 0
 
         if args.rock:
-            # Visualisation only.  Say so out loud: an onlooker watching RViz
-            # swing +-12 deg should not walk away thinking the cradle does.
             node.get_logger().info(
                 f"rocking {args.hz:.2f} Hz +-{args.deg:.1f} deg -- display "
                 f"amplitude; the real envelope is +-2.53 deg at A10")
-            # rclpy.ok() rather than True: a SIGTERM tears the context down
-            # under us, and publishing into a dead context throws.
+            # rclpy.ok(), not True: publishing into a torn-down context throws.
             t = 0.0
             while rclpy.ok():
                 node.send(sway_state(args.deg, 2 * math.pi * args.hz * t))
@@ -296,9 +179,7 @@ def main(argv=None) -> int:
             return 0
 
         if args.sweep:
-            # No world model involved -- just proves each joint is wired up and
-            # turns the way we think.  One joint at a time, so the linkage is
-            # deliberately open here; every other mode keeps it closed.
+            # Wiring check: one joint at a time, linkage deliberately open.
             node.get_logger().info(
                 f"sweeping each of the {len(JOINTS)} joints +-45 deg")
             while True:
@@ -313,25 +194,7 @@ def main(argv=None) -> int:
                     break
             return 0
 
-        chunks = load_chunk_dictionary(motion_map=args.motion_map,
-                                       slot_table=args.slot_table)
-        if not chunks:
-            node.get_logger().error("no chunks -- run: python3 tools/make_motions.py")
-            return 1
-
-        while True:
-            pose = [0.0] * 4
-            ids = sorted(chunks) if args.all else [args.slot or min(chunks)]
-            for slot_id in ids:
-                chunk = chunks.get(slot_id)
-                if chunk is None:
-                    node.get_logger().error(f"slot {slot_id} not in the dictionary")
-                    return 1
-                pose = play_chunk(node, chunk, pose)
-                node.hold(joint_state(
-                    sway_mm=crank_to_sway_mm(float(pose[0]))), 0.4)
-            if not args.loop:
-                break
+        parser.error("pick a mode: --tour, --motion, --rock or --sweep")
     except KeyboardInterrupt:
         print()
     finally:

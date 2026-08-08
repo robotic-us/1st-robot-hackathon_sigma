@@ -1,41 +1,13 @@
 #!/usr/bin/env python3
 """P-Vector: the analytic world model that DREAM-Chunk needs.
 
-DREAM-Chunk asks for a *light* world model that can predict, at test time, the
-future states a candidate action chunk would produce.  The obvious reading is
-"train a small dynamics net", and the guideline explicitly warns that a
-diffusion-class model will not fit the board's compute budget.
-
-We do not need one.  The robot's motions are already stored as P-Vectors, and a
-P-Vector *is* a closed-form trajectory:
-
-    y(tau) = a0 + a2*tau^2 + a3*tau^3 + a4*tau^4 + a5*tau^5
-
-    a0 = y0
-    a2 = 0.5*s0            * (yd - y0)
-    a3 = (10 - 1.5*s0 + 0.5*sd) * (yd - y0)
-    a4 = (-15 + 1.5*s0 - sd)    * (yd - y0)
-    a5 = (6 - 0.5*s0 + 0.5*sd)  * (yd - y0)
-
-    tau = k / L_traj  in [0, 1]
-
-So "dreaming" a chunk costs one polynomial evaluation per axis per sample --
-microseconds, exactly, and with no training data at all.  That is the whole
-trick: the world model was handed to us in the motion format.
-
-Where the numbers come from, in order of preference:
-
-  1. ``MotionMap.csv`` on the robot's SD card -- the real thing.  One row per
-     (motion slot, axis); the P-Vector columns are that axis's segment list.
-  2. ``slots.json`` -- our own start_pose/end_pose description, synthesised into
-     one segment per axis.  Coarser, but it means the whole DREAM-Chunk stack
-     runs today, with no robot and no SD card, and upgrades automatically the
-     moment a real MotionMap.csv appears.
+A stored P-Vector *is* a closed-form quintic in tau = k/L_traj, so "dreaming"
+a chunk is one polynomial evaluation per axis per sample -- no training.
+Source: ``MotionMap.csv``, one row per (motion slot, axis).
 
 Run standalone::
 
-    python3 core/pvector.py --from-slots slots.json     # dream every slot, print it
-    python3 core/pvector.py --motion-map MotionMap.csv  # same, from the real file
+    python3 core/pvector.py --motion-map MotionMap.csv
 """
 
 from __future__ import annotations
@@ -52,17 +24,11 @@ import numpy as np
 
 LOGGER = logging.getLogger("pvector")
 
-# The pcm records teaching data at 1 kHz, and L_traj is a count of those
-# samples.  In the P-Vector deck, P(1) = [200, 1000, 0, 5] reaches its target at
-# t = 1.0 s, which pins this down.
+# The pcm records at 1 kHz; L_traj is a count of those samples.
 PCM_SAMPLE_HZ = 1000.0
 
-# P-Vector positions are int16 in "output-axis degrees" per the spec sheet, but
-# the worked example plots yd=200 as 1.0 on its position axis, so there is a
-# fixed scale between the stored integer and a physical degree that the deck
-# does not state outright.  Keep it in one named place: calibrate it once
-# against real feedback (see --calibrate-scale) rather than sprinkling magic
-# numbers through the matcher.
+# Storage units per output-axis degree, in one named place; calibrate against
+# real feedback rather than sprinkling magic numbers.
 UNITS_PER_DEG = 1.0
 
 
@@ -80,12 +46,8 @@ def rad_to_units(value: float, units_per_deg: float = UNITS_PER_DEG) -> float:
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class PVector:
-    """One unit trajectory: rest at ``y0`` -> rest at ``yd``.
-
-    Both endpoints have zero velocity by construction (that is why the
-    polynomial has no linear term), which is what lets segments be concatenated
-    without a velocity discontinuity at the join.
-    """
+    """One unit trajectory: rest at ``y0`` -> rest at ``yd``.  Both endpoints
+    have zero velocity, so segments concatenate without a velocity jump."""
 
     yd: float        # target position, storage units
     l_traj: int      # length in PCM samples
@@ -132,10 +94,7 @@ class PVector:
     @classmethod
     def parse(cls, text: str) -> Optional["PVector"]:
         """Parse one ``"yd, L_traj, s0, sd"`` cell from MotionMap.csv.
-
-        Empty cells and ``-`` mean "this axis has no further segment", which is
-        normal: axes finish at different times.
-        """
+        Empty cells and ``-`` mean "this axis has no further segment"."""
         cleaned = text.strip()
         if not cleaned or cleaned in {"-", "--"}:
             return None
@@ -172,12 +131,8 @@ class AxisProgram:
 
     def dream(self, y0: float, dt: float, horizon_s: Optional[float] = None) -> np.ndarray:
         """Predicted positions on a ``dt`` grid, starting from ``y0``.
-
-        Segments chain: each one begins where the previous ended.  Past the end
-        of the program the axis holds its final value -- that is what the robot
-        does while slower axes finish, and pretending otherwise would make the
-        divergence monitor fire at every chunk tail.
-        """
+        Segments chain; past the program's end the axis holds its final value,
+        as the robot does while slower axes finish."""
         span = self.duration_s if horizon_s is None else horizon_s
         n = max(2, int(round(span / max(1e-6, dt))) + 1)
         out = np.empty(n, dtype=float)
@@ -205,7 +160,6 @@ class MotionChunk:
     name: str
     programs: tuple[AxisProgram, ...]
     units_per_deg: float = UNITS_PER_DEG
-    synthesised: bool = False   # True when derived from slots.json, not the SD card
 
     @property
     def axes(self) -> tuple[int, ...]:
@@ -221,15 +175,9 @@ class MotionChunk:
         dt: float = 0.02,
         horizon_s: Optional[float] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Predict this chunk's joint trajectory from a measured start pose.
-
-        ``start_rad`` is where the arm *actually is* right now, in radians, in
-        the same order as :attr:`axes`.  Anchoring the dream on measured state
-        rather than on the chunk's nominal start is the point: it is what makes
-        the prediction answer "what would happen if I played this, from here?"
-
-        Returns ``(t, y)`` with ``y`` shaped ``(len(t), n_axes)``, in radians.
-        """
+        """Predict this chunk's joint trajectory from the measured start pose
+        ``start_rad`` (radians, :attr:`axes` order).  Returns ``(t, y)`` with
+        ``y`` shaped ``(len(t), n_axes)``, in radians."""
         if len(start_rad) != len(self.programs):
             raise ValueError(
                 f"chunk {self.slot_id} has {len(self.programs)} axes but got "
@@ -257,12 +205,7 @@ class MotionChunk:
         return out
 
     def peak_excursion_rad(self, start_rad: Sequence[float], dt: float = 0.02) -> float:
-        """Largest distance any axis travels from its start during the chunk.
-
-        The collision-resistance term uses this: a big swing into a space where
-        the disturbance observer already reports an external force is exactly
-        the move DREAM-Chunk is supposed to veto.
-        """
+        """Largest distance any axis travels from its start during the chunk."""
         _, y = self.dream(start_rad, dt=dt)
         return float(np.max(np.abs(y - np.asarray(start_rad, dtype=float))))
 
@@ -276,11 +219,8 @@ def load_motion_map(
     units_per_deg: float = UNITS_PER_DEG,
 ) -> dict[int, MotionChunk]:
     """Parse the robot's ``MotionMap.csv`` into a chunk dictionary.
-
-    Expected columns (the deck's layout): ``MS ID``, ``MS NAME``, ``MD ID``,
-    ``C-Vector``, then one column per P-Vector slot.  Blank ``MS ID`` cells
-    inherit from the row above -- the file merges those cells visually.
-    """
+    Columns: ``MS ID``, ``MS NAME``, ``MD ID``, ``C-Vector``, then P-Vector
+    slots; blank ``MS ID`` cells inherit from the row above."""
     with open(path, newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.reader(handle))
     if not rows:
@@ -354,11 +294,7 @@ def load_motion_map(
 
 def _parse_axis_index(text: str) -> Optional[int]:
     """``MD5`` / ``5`` / ``0x06`` -> a zero-based feedback axis index.
-
-    The wiring sheet numbers the actuators 0x02..0x0D while /phorce/feedback
-    indexes axis[0..11], so a hex phact id is shifted down by 2.  ``MD``
-    numbering in the motion map is 1-based.
-    """
+    ``MD`` numbering is 1-based; hex phact ids (0x02..0x0D) shift down by 2."""
     cleaned = text.strip().upper()
     if not cleaned:
         return None
@@ -378,74 +314,6 @@ def _parse_axis_index(text: str) -> Optional[int]:
         return None
 
 
-def chunks_from_slot_table(
-    path: str = "slots.json",
-    default_duration_s: float = 1.6,
-    s0: float = 0.0,
-    sd: float = 0.0,
-    units_per_deg: float = UNITS_PER_DEG,
-) -> dict[int, MotionChunk]:
-    """Synthesise a chunk dictionary from ``slots.json``.
-
-    One P-Vector per axis, running start_pose -> end_pose.  This is a *coarser*
-    model than the real MotionMap (no intermediate segments), and every chunk it
-    produces is flagged ``synthesised=True`` so the matcher can say so in the
-    log rather than quietly implying it read the SD card.
-    """
-    with open(path, encoding="utf-8") as handle:
-        raw = json.load(handle)
-
-    axes = tuple(int(a) for a in raw.get("axes", (0, 1, 2, 3)))
-    l_traj = max(1, int(round(default_duration_s * PCM_SAMPLE_HZ)))
-
-    chunks: dict[int, MotionChunk] = {}
-    for key, entry in raw.get("slots", {}).items():
-        slot_id = int(key)
-        start = [float(v) for v in entry.get("start_pose", ())]
-        end = [float(v) for v in entry.get("end_pose", ())]
-        if len(start) != len(axes) or len(end) != len(axes):
-            LOGGER.warning("slot %s: pose length mismatch -- skipped", key)
-            continue
-        programs = tuple(
-            AxisProgram(
-                axis_index=axis,
-                # The synthesised segment is expressed relative to the chunk's
-                # own nominal start, so dreaming it from a *measured* pose
-                # reproduces the same shape displaced to where we really are.
-                segments=(PVector(
-                    yd=rad_to_units(end[col] - start[col], units_per_deg),
-                    l_traj=l_traj, s0=s0, sd=sd,
-                ),),
-            )
-            for col, axis in enumerate(axes)
-        )
-        chunks[slot_id] = MotionChunk(
-            slot_id=slot_id,
-            name=str(entry.get("desc", f"slot {slot_id}")),
-            programs=programs,
-            units_per_deg=units_per_deg,
-            synthesised=True,
-        )
-
-    LOGGER.info("synthesised %d chunks from %s (no MotionMap.csv)", len(chunks), path)
-    return chunks
-
-
-def load_chunk_dictionary(
-    motion_map: Optional[str] = None,
-    slot_table: str = "slots.json",
-    axes: Optional[Sequence[int]] = None,
-    units_per_deg: float = UNITS_PER_DEG,
-) -> dict[int, MotionChunk]:
-    """The real MotionMap if we have it, otherwise the synthesised fallback."""
-    if motion_map:
-        try:
-            return load_motion_map(motion_map, axes=axes, units_per_deg=units_per_deg)
-        except (OSError, ValueError) as exc:
-            LOGGER.warning("could not read %s (%s) -- falling back to %s",
-                           motion_map, exc, slot_table)
-    return chunks_from_slot_table(slot_table, units_per_deg=units_per_deg)
-
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -453,9 +321,7 @@ def describe(chunks: dict[int, MotionChunk]) -> None:
     if not chunks:
         print("no chunks")
         return
-    origin = "synthesised from slots.json" if any(c.synthesised for c in chunks.values()) \
-        else "MotionMap.csv"
-    print(f"{len(chunks)} chunks ({origin})\n")
+    print(f"{len(chunks)} chunks (MotionMap.csv)\n")
     print(f"{'slot':>4}  {'dur(s)':>7}  {'axes':>12}  {'peak(rad)':>9}  name")
     print("-" * 78)
     for slot_id in sorted(chunks):
@@ -467,8 +333,8 @@ def describe(chunks: dict[int, MotionChunk]) -> None:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--motion-map", help="the robot's MotionMap.csv")
-    parser.add_argument("--from-slots", default="slots.json")
+    parser.add_argument("--motion-map", required=True,
+                        help="the robot's MotionMap.csv")
     parser.add_argument("--units-per-deg", type=float, default=UNITS_PER_DEG)
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
@@ -478,11 +344,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         format="%(levelname)-7s %(name)s: %(message)s",
     )
 
-    describe(load_chunk_dictionary(
-        motion_map=args.motion_map,
-        slot_table=args.from_slots,
-        units_per_deg=args.units_per_deg,
-    ))
+    describe(load_motion_map(args.motion_map, units_per_deg=args.units_per_deg))
     return 0
 
 

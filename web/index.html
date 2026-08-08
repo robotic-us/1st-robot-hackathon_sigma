@@ -3,136 +3,224 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
-<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
-<title>SIGMA · cradle live</title>
-<link rel="stylesheet" href="/style.css">
+<meta name="theme-color" content="#000000">
+<title>SIGMA · cradle monitor</title>
+<!-- the ?v defeats copies a browser cached before the server sent
+     Cache-Control: a stored /app.js cannot answer for /app.js?v=3 -->
+<link rel="stylesheet" href="/style.css?v=3">
 </head>
 <body>
 
-<header>
-  <h1>SIGMA <span>· infant-responsive cradle</span></h1>
-  <span id="conn">connecting</span>
-</header>
+<div id="alert" role="alert"></div>
 
-<div id="alert"></div>
-
-<section id="hero">
-  <canvas id="babycv"></canvas>
-  <div id="safechip"><span class="dot" id="safedot"></span>
-    <span id="safesay">waiting for the cradle</span></div>
-  <div id="say">
-    <div id="headline">
-      <span class="dot" id="hdot"></span>
-      <span id="hbaby">Connecting</span>
-      <span id="harrow">→</span>
-      <span id="hcradle">holding still</span>
-    </div>
-    <div id="hdetail">not moving</div>
-    <div id="hwhy">Waiting for the first reading from the cradle.</div>
+<!-- One bar, not two.  The black wordmark nav went: on a monitor that shows a
+     single surface there is nothing to navigate, and a brand bar spends 44px
+     of a wall screen on a name the room already knows. -->
+<div id="subnav">
+  <span class="cat">SIGMA INTELLIGENCE</span>
+  <div class="right">
+    <span id="safechip"><span class="dot" id="safedot" aria-hidden="true"></span>
+      <span id="safesay">waiting for the cradle</span></span>
+    <span id="conn" aria-live="polite" title="stream state"></span>
+    <!-- the words themselves are the control: click to latch, green while
+         the cradle is allowed to act on its own -->
+    <button id="auto" role="switch" aria-checked="false"><b>Automatic care</b></button>
   </div>
+</div>
+
+<main>
+
+<!-- The three bands own exactly one screen between them; the reference
+     drawers sit below the fold, where scrolling for them is deliberate. -->
+<div id="screen">
+
+<!-- TILE 1 · light · the stage.  The question the monitor exists to answer,
+     at hero size, beside the fifteen minutes that led to it. -->
+<section class="tile light">
+ <div class="wrap" id="stage">
+  <article id="hero">
+    <div class="kicker">Baby</div>
+    <canvas id="orb" aria-hidden="true"
+            title="the infant, alive: colour = state, wobble = distress,
+glow = how hard the cradle is working; it rides the real sway"></canvas>
+    <div class="big"><span class="dot lg" id="hdot" aria-hidden="true"></span>
+      <span id="hbaby">Connecting</span></div>
+    <!-- the panel's actual question, answered: is this working?  The machine
+         decides it at every checkpoint; this is that verdict, not a re-derivation. -->
+    <div id="trend" aria-live="polite"></div>
+    <div id="herolvl"><b id="lvlval">–</b><span>upset level</span></div>
+    <div class="meter"><i id="lvlbar"></i>
+      <span class="tick" style="left:12%" title="fuss threshold 0.12"></span>
+      <span class="tick" style="left:45%" title="cry threshold 0.45"></span></div>
+    <div id="ladder"
+         title="the comfort ladder the system reasons over — the filled step is now"></div>
+  </article>
+
+  <section class="card" id="card-timeline">
+    <h2>Emotion process
+      <span class="legend"><i class="sw raw"></i>level (raw)
+        <i class="sw ema"></i>trend (what decisions use)
+        <i class="sw mk"></i>motion starts</span></h2>
+    <div id="tlwrap">
+      <canvas id="timeline"></canvas>
+      <div id="tltip" hidden></div>
+    </div>
+  </section>
+
+  <!-- the planner sits beside the chart it is predicting into, not three
+       screens down: same comfort axis, same colours, read together -->
+  <article class="card" id="card-plan" hidden>
+    <h2>What it dreamed</h2>
+    <div id="plans"></div>
+    <div id="plan"></div>
+    <div class="sub2" id="planveto"></div>
+  </article>
+ </div>
 </section>
 
-<div id="strip">
-  <div class="stat">
-    <div class="k">Upset level</div>
-    <div class="val" id="lvlval">–</div>
-    <div class="bar"><i id="lvlbar"></i>
-      <span class="tick" style="left:12%"></span>
-      <span class="tick" style="left:45%"></span></div>
-  </div>
-  <div class="stat">
-    <div class="k">Rocking strength</div>
-    <div class="val" id="envval">–</div>
-    <div class="bar"><i id="envbar"></i></div>
-  </div>
-  <div class="stat">
-    <div class="k">How far it moves</div>
-    <div class="val" id="swayval">0.0 <small>of 30 mm</small></div>
-    <div class="bar"><i id="swaybar"></i></div>
-  </div>
-  <div class="stat">
-    <div class="k">How hard it pushes</div>
-    <div class="val" id="accval">0.000 <small>of 0.05 g</small></div>
-    <div class="bar"><i id="accbar"></i></div>
-  </div>
-</div>
+<!-- TILE 2 · parchment · the instrumentation -->
+<section class="tile parchment">
+ <div class="wrap">
+  <div class="cards" id="vitals">
+  <article class="card">
+    <h2>Cradle <b class="hmeta" id="rawmotion">M01 · STATIC</b></h2>
+    <div class="big"><span id="hcradle">holding still</span></div>
+    <div class="sub" id="hdetail">not moving</div>
+    <div class="krow"><span>rocking strength</span><b id="envval">–</b></div>
+    <div class="meter"><i id="envbar"></i></div>
+  </article>
 
-<div id="foot">
-  <div>
+  <article class="card">
+    <h2>Safety envelope</h2>
+    <div class="krow"><span>travel</span><b id="swayval">0.0 <small>of 30 mm</small></b></div>
+    <div class="meter"><i id="swaybar"></i>
+      <span class="tick" style="left:80%" title="warning at 80% of the cap"></span></div>
+    <div class="krow"><span>peak push</span><b id="accval">0.000 <small>of 0.05 g</small></b></div>
+    <div class="meter"><i id="accbar"></i>
+      <span class="tick" style="left:80%" title="warning at 80% of the cap"></span></div>
+  </article>
+
+  <!-- the whole card hides until a tablet actually streams: five dashes and a
+       paragraph of instructions are not worth a column of the vitals row -->
+  <article class="card" id="ipad-card" hidden>
+    <h2>iPad motion</h2>
+    <div class="big"><span class="dot lg" id="ipaddot"></span>
+      <span id="ipadstate">not connected</span></div>
+    <div id="ipaddetail">
+      <div class="krow"><span>measured strength</span><b id="ipadstrength">–</b></div>
+      <div class="meter"><i id="ipadbar"></i></div>
+      <div class="krow"><span>feels like</span><b id="ipadfeel">–</b></div>
+      <div class="krow"><span>acceleration RMS</span><b id="ipadaccel">–</b></div>
+      <div class="krow"><span>dominant frequency</span><b id="ipadhz">–</b></div>
+    </div>
+  </article>
+
+  <article class="card" id="brain">
+    <h2>Decision brain <b class="hmeta" id="brainname">–</b></h2>
+    <div id="brainsel" role="group" aria-label="choose the decision brain">
+      <button data-b="off">Ladder</button>
+      <button data-b="reflex">Algorithm</button>
+      <button data-b="dream">Planner</button>
+      <button data-b="ollama">Local LLM</button>
+      <button data-b="claude">Claude API</button>
+    </div>
+    <div class="sub" id="brainerr"></div>
+    <div class="krow"><span>last decision</span><b id="brainlast">none yet</b></div>
+  </article>
+  </div>
+ </div>
+</section>
+
+<!-- TILE 3 · dark · the working row: what it decided, what it has learned,
+     and the controls -- one band, because they are read together and the
+     panel has to fit a single screen. -->
+<section class="tile dark">
+ <div class="wrap">
+  <div class="cards" id="workrow">
+  <article class="card" id="card-feed">
+    <h2>Decision feed</h2>
+    <div id="feed"><div class="empty">Armed — the brain is asked the moment
+      the baby starts fussing.</div></div>
+  </article>
+  <article class="card" id="card-learned">
+    <h2>Learned preferences</h2>
+    <div id="scores"><div class="empty">Nothing scored yet — a motion earns a
+      score once it has played at strength.</div></div>
+    <div id="trail" class="mono sub"></div>
+  </article>
+  <article class="card" id="card-cam">
     <h2>Camera</h2>
     <img id="cam" src="/frame" alt="camera stream">
-  </div>
-  <div>
-    <h2>Take over by hand</h2>
+  </article>
+  <article class="card" id="card-keys">
+    <h2>Manual control</h2>
     <div id="buttons">
-      <button id="auto"><b>Automatic care</b><i>–</i></button>
-      <button data-m="M10"><b>Rock slowly</b><i>M10</i></button>
-      <button data-m="M12"><b>Rock steadily</b><i>M12</i></button>
-      <button data-m="M16"><b>Rock wider</b><i>M16</i></button>
-      <button data-m="M05"><b>Slow to a stop</b><i>M05</i></button>
-      <button data-m="M01"><b>Hold still</b><i>M01</i></button>
-      <button id="jam"><b>Simulate a jam</b><i>j</i></button>
-      <span class="note">Rocking always eases in gently, and the safety gate
-        overrides anything pressed here.</span>
+      <button data-m="N05"><b>Wide slow sway</b><i>N05</i></button>
+      <button data-m="N10"><b>Deep slow bob</b><i>N10</i></button>
+      <button data-m="N24"><b>Slow circles</b><i>N24</i></button>
+      <button data-m="N30"><b>Figure-eight</b><i>N30</i></button>
+      <button data-m="N01"><b>Hold still</b><i>N01</i></button>
+      <button id="jam" aria-pressed="false"><b>Simulate a jam</b><i>j</i></button>
     </div>
+  </article>
+  <article class="card" id="card-taste" hidden>
+    <h2>Baby temperament</h2>
+    <div class="trow"><label for="t-love">loves</label>
+      <select id="t-love"></select></div>
+    <div class="trow"><label for="t-hate1">hates</label>
+      <select id="t-hate1"></select><select id="t-hate2"></select></div>
+    <div class="trow"><label for="t-c1">combo</label>
+      <select id="t-c1"></select><span class="sub2">then</span>
+      <select id="t-c2"></select></div>
+    <div class="trow"><button id="t-apply"><b>Apply</b></button>
+      <button id="t-rand"><b>Randomize</b></button></div>
+  </article>
+  <article class="card" id="card-log">
+    <h2>Event log</h2>
+    <div id="log" aria-live="polite">watching — nothing to report yet</div>
+  </article>
   </div>
-  <section id="library">
-    <h2>Motion library — M01–M50</h2>
-    <div id="mfilter">
-      <button data-g="" class="on">All</button>
-      <button data-g="C0">C0 stop/transition</button>
-      <button data-g="P1">P1 trial</button>
-      <button data-g="R">R research</button>
-      <input id="mq" type="search" placeholder="filter by name…"
-             aria-label="filter motions by name">
-      <span class="note" id="mcount"></span>
-    </div>
-    <div id="motions"></div>
-    <div id="mkey">
-      <span><i style="background:var(--cat-1)"></i>C0 stop / transition</span>
-      <span><i style="background:var(--cat-2)"></i>P1 trial candidate</span>
-      <span><i style="background:var(--cat-3)"></i>R research-only</span>
-      <span><i style="background:var(--ink)"></i>now playing</span>
-    </div>
-    <div id="mmsg"></div>
-  </section>
-  <div>
-    <h2>What just happened</h2>
-    <div id="log">waiting…</div>
-  </div>
-</div>
+ </div>
+</section>
 
-<details>
-  <summary>DREAM-Chunk internals — slot ranking and the divergence monitor</summary>
-  <div class="internals">
-    <section>
-      <h2>Divergence monitor</h2>
-      <div class="kv"><span>machine state</span><b id="rawstate">–</b></div>
-      <div class="kv"><span>motion / grade</span><b id="rawmotion">–</b></div>
-      <div class="kv"><span>f_hz · a_mm · env</span><b id="rawmode">–</b></div>
-      <div class="kv"><span>distress raw · ema</span><b id="rawlevel">–</b></div>
-      <div class="kv"><span>arm angle θ</span><b id="thetaval">–</b></div>
-      <div class="kv"><span>peak acceleration</span><b id="apeak">–</b></div>
-      <div class="kv"><span>|measured − dreamed|</span><b id="err">–</b></div>
-      <div class="bar"><i id="errbar"></i></div>
-      <div class="kv" style="margin-top:9px"><span>external force dob_a</span><b id="dob">–</b></div>
-      <div class="kv"><span>dream rms (ASAP residual)</span><b id="rms">–</b></div>
-      <div class="kv"><span id="playname">idle</span><b id="playpct"></b></div>
-    </section>
-    <section>
-      <h2>Last decision</h2>
-      <table id="rank">
-        <thead><tr><th>slot</th><th>cost</th><th>consist</th><th>resist</th>
-                   <th>contin</th><th>task</th><th></th></tr></thead>
-        <tbody><tr><td colspan="7" style="text-align:center;color:var(--muted)">
-          no decision yet</td></tr></tbody>
-      </table>
-      <div id="slots"></div>
-    </section>
+</div><!-- /#screen -->
+
+<!-- BELOW THE FOLD · parchment · the reference drawers, closed by default -->
+<section class="tile parchment">
+ <div class="wrap">
+  <div class="cards" id="drawers">
+<details class="card wide" id="library">
+  <summary>Motion library — N01–N34 (new system) + M01–M50 (evidence report)</summary>
+  <div id="mfilter">
+    <button data-g="" class="on">All</button>
+    <button data-g="N" title="the team's 34-motion system">N</button>
+    <button data-g="C0" title="stop / transition commands">C0</button>
+    <button data-g="P1" title="report trial candidates">P1</button>
+    <button data-g="R" title="research-only">R</button>
+    <input id="mq" type="search" placeholder="filter by name…"
+           aria-label="filter motions by name">
+    <span class="sub2" id="mcount"></span>
   </div>
+  <div id="motions"></div>
 </details>
 
-<script src="/app.js"></script>
+<details class="card wide">
+  <summary>Internals — raw machine state</summary>
+  <div class="internals">
+    <div class="kv"><span>machine state</span><b id="rawstate">–</b></div>
+    <div class="kv"><span>f_hz · a_mm · env</span><b id="rawmode">–</b></div>
+    <div class="kv"><span>distress raw · ema</span><b id="rawlevel">–</b></div>
+    <div class="kv"><span>arm angle θ</span><b id="thetaval">–</b></div>
+    <div class="kv"><span>peak acceleration</span><b id="apeak">–</b></div>
+    <div class="kv"><span>judge state</span><b id="rawjudge">–</b></div>
+    <div class="kv"><span>scenario phase</span><b id="rawphase">–</b></div>
+  </div>
+</details>
+  </div>
+ </div>
+</section>
+
+</main>
+<script src="/app.js?v=3"></script>
 </body>
 </html>

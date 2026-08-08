@@ -1,31 +1,10 @@
 #!/usr/bin/env python3
 """The infant-cradle motion library (M01-M50) and its safety state machine.
 
-A transcription of docs/infant_robotic_cradle_evidence_report_ko.pdf into
-runnable form:
-
-* ``LIBRARY``       the 50 motions of section 7 -- C0 stop/transition
-                    commands, P1 horizontal-sway trial candidates, R
-                    research-only modes (refused unless explicitly allowed)
-* ``MotionEngine``  plays them: phase-continuous sine synthesis with S-curve
-                    amplitude ramps (min 5 s, default 30 s).  The kinematic
-                    envelope of section 6 (0.2-0.8 Hz, A <= 30 mm hard,
-                    base a_peak <= 0.05 g) is asserted over the whole library
-                    at import time -- the report's V0 gate: bad units or axes
-                    must not load.
-* ``CradleMachine`` the priority ladder of section 5: safety gate first, then
-                    stable-sleep taper, quiet-awake hold ("the default is not
-                    moving"), and 30 s cry trials with improvement checks,
-                    single-step escalation, one micro-resume, and caregiver
-                    alerts.
-
-Nothing here touches HTTP, cameras or ROS, and time is injected everywhere,
-so the selftest drives a whole trial with a fake clock in milliseconds.
-serve.py wires the machine to the tag reading (a stand-in for the infant
-sensors) and the engine's offset to the cradle pose.
-
-Tested by ``python3 tests.py cradle``.
-"""
+Transcribes docs/infant_robotic_cradle_evidence_report_ko.pdf: ``LIBRARY``
+(§7), ``MotionEngine`` (§6 envelope asserted at import), ``CradleMachine``
+(§5 priority ladder, safety gate first).  Time is injected everywhere
+(no time.time() inside).  Tested by ``python3 tests.py cradle``."""
 
 from __future__ import annotations
 
@@ -54,28 +33,50 @@ def smoothstep(u: float) -> float:
     return u * u * (3.0 - 2.0 * u)
 
 
-# --------------------------------------------------------------------------- #
-# The library, report section 7
-# --------------------------------------------------------------------------- #
+# --- the library, report section 7 ----------------------------------------- #
 @dataclass(frozen=True)
 class Motion:
     id: str
     name: str
     kind: str          # static|pause|soft_start|taper|micro_resume|sine|
                        # diagonal|ellipse|circle|lissajous|pseudo_walk|
-                       # adaptive_a|adaptive_f
-    grade: str         # C0 = stop/transition, P1 = trial candidate, R = research
+                       # adaptive_a|adaptive_f|npath
+    grade: str         # C0 stop/transition, P1 trial, R research, N team system
     desc: str
-    axis: str = ""     # ML | AP | Z | APML
+    axis: str = ""     # ML | AP | Z | APML | MLZ
     f_hz: float = 0.0
     a_mm: float = 0.0
     f2_hz: float = 0.0  # secondary component (lissajous)
-    a2_mm: float = 0.0  # secondary amplitude (ellipse minor, lissajous)
+    a2_mm: float = 0.0  # secondary amplitude (ellipse minor, z-depth, lissajous)
     sign: float = 1.0   # diagonal +-45 deg, circle CW/CCW
     ramp_s: float = 0.0  # soft_start / taper lengths
+    # N-system features (docs/motion-system.png columns)
+    shape: str = ""     # still|horiz|vert|vert_fall|v|v_fall|parab|dwell|
+                        # circle|ellipse|inf|arc
+    size: str = ""      # small | large
+    speed: str = ""     # fast | slow
+    vibe: bool = False  # 진동 있음: a 0.8 Hz / 3 mm tremble rides along
+    decay: bool = False  # 감쇠: amplitude dies away to rest on its own
+
+    @property
+    def slot(self) -> int:
+        """The PCM slot: M*NN* -> ``motion_NN.csv`` (one home of the rule)."""
+        return int(self.id[1:])
 
     def worst_components(self) -> list[tuple[float, float]]:
         """(f, A) pairs at their envelope-worst, for the import-time gate."""
+        if self.kind == "npath":
+            comps = []
+            if self.a_mm:
+                comps.append((self.f_hz, self.a_mm))
+            if self.a2_mm:
+                # |x|, x^2, arc and figure-eight z-components run at 2f
+                doubled = self.shape in ("v", "v_fall", "parab", "dwell",
+                                         "inf", "arc")
+                comps.append(((2.0 if doubled else 1.0) * self.f_hz, self.a2_mm))
+            if self.vibe:
+                comps.append((VIBE_F_HZ, VIBE_MM))
+            return comps
         if self.kind == "sine":
             return [(self.f_hz, self.a_mm)]
         if self.kind in ("diagonal", "circle"):
@@ -91,6 +92,86 @@ class Motion:
         if self.kind == "adaptive_f":
             return [(0.7, self.a_mm)]          # f steps 0.3 -> 0.5 -> 0.7
         return []                              # C0 commands: no oscillation
+
+
+VIBE_F_HZ, VIBE_MM = 0.8, 3.0   # the 진동 overlay, kept inside the envelope
+DECAY_T_S = 25.0                # 감쇠: amplitude e-folds this fast
+
+
+def _build_n_library() -> list[Motion]:
+    """The team's 34-motion system (docs/motion-system.png) as N01-N34:
+    "npath" kind, ``shape`` picks the ML-Z trajectory, sized so every
+    component (2f z terms and vibe included) passes the V0 gate."""
+    lib: list[Motion] = []
+
+    def add(n, shape, size, speed, desc, f, a, b=0.0, vibe=False, decay=False):
+        tag = ("" if not (vibe or decay)
+               else "_VIBE" if vibe and not decay else "_DECAY")
+        name = f"{shape.upper()}_{size[:1].upper()}{speed[:1].upper()}{tag}" \
+               if size else f"{shape.upper()}{tag}"
+        # N01 (rest, no tremble) IS the parked state: static -> tapers to stop
+        kind = "static" if shape == "still" and not vibe else "npath"
+        lib.append(Motion(f"N{n:02d}", name, kind, "N", desc, axis="MLZ",
+                          f_hz=f, a_mm=a, a2_mm=b, shape=shape, size=size,
+                          speed=speed, vibe=vibe, decay=decay))
+
+    # 선형 -- 정지형
+    add(1, "still", "", "", "hold at rest, no tremble", 0.0, 0.0)
+    add(2, "still", "", "", "at rest with a gentle tremble", 0.0, 0.0, vibe=True)
+    # 선형 -- 수평형 (horizontal sway)
+    add(3, "horiz", "small", "fast", "small quick sway", 0.7, 9.0)
+    add(4, "horiz", "small", "fast", "small quick sway + tremble", 0.7, 9.0, vibe=True)
+    add(5, "horiz", "large", "slow", "wide slow sway", 0.3, 22.0)
+    add(6, "horiz", "large", "slow", "wide slow sway + tremble", 0.3, 22.0, vibe=True)
+    add(7, "horiz", "large", "slow", "wide sway dying away to rest", 0.3, 22.0, decay=True)
+    # 선형 -- 수직형 (vertical bob)
+    add(8, "vert", "small", "fast", "small quick bob", 0.6, 7.0)
+    add(9, "vert", "small", "fast", "small quick bob + tremble", 0.6, 7.0, vibe=True)
+    add(10, "vert", "large", "slow", "deep slow bob", 0.3, 16.0)
+    add(11, "vert", "large", "slow", "deep slow bob + tremble", 0.3, 16.0, vibe=True)
+    add(12, "vert", "large", "slow", "deep bob dying away to rest", 0.3, 16.0, decay=True)
+    add(13, "vert_fall", "large", "slow", "bob with a quicker drop (varying "
+        "fall acceleration)", 0.35, 14.0, 7.0)
+    # 선형 -- V자형 (V-shaped swing; z runs at 2f)
+    add(14, "v", "small", "fast", "small quick V-swing", 0.4, 9.0, 5.0)
+    add(15, "v", "small", "fast", "small quick V-swing + tremble", 0.4, 9.0, 5.0, vibe=True)
+    add(16, "v", "large", "slow", "wide slow V-swing", 0.2, 20.0, 9.0)
+    add(17, "v", "large", "slow", "wide slow V-swing + tremble", 0.2, 20.0, 9.0, vibe=True)
+    add(18, "v_fall", "large", "slow", "V-swing with a quicker drop", 0.25, 20.0, 9.0)
+    # 비선형 -- 포물선형 (parabolic scoop; z at 2f)
+    add(19, "parab", "small", "fast", "small quick scoop", 0.4, 10.0, 5.0)
+    add(20, "parab", "large", "slow", "wide slow scoop", 0.2, 22.0, 10.0)
+    add(21, "dwell", "large", "slow", "scoop that rests at each end, trembling",
+        0.25, 18.0, 8.0, vibe=True)
+    add(22, "parab", "large", "slow", "scoop dying away to rest", 0.2, 22.0, 10.0, decay=True)
+    # 비선형 -- 원형 (circle in the ML-Z plane)
+    add(23, "circle", "small", "fast", "small quick circles", 0.6, 8.0, 8.0)
+    add(24, "circle", "large", "slow", "wide slow circles", 0.3, 15.0, 15.0)
+    add(25, "circle", "large", "slow", "circles dying away to rest", 0.3, 15.0, 15.0, decay=True)
+    # 비선형 -- 타원형 (ellipse)
+    add(26, "ellipse", "small", "fast", "small quick ovals", 0.6, 10.0, 4.0)
+    add(27, "ellipse", "large", "slow", "wide slow ovals", 0.3, 22.0, 8.0)
+    add(28, "ellipse", "large", "slow", "ovals dying away to rest", 0.3, 22.0, 8.0, decay=True)
+    # 비선형 -- 무한대형 (figure-eight; z at 2f)
+    add(29, "inf", "small", "fast", "small quick figure-eight", 0.35, 10.0, 4.0)
+    add(30, "inf", "large", "slow", "wide slow figure-eight", 0.2, 20.0, 8.0)
+    add(31, "inf", "large", "slow", "figure-eight dying away to rest", 0.2, 20.0, 8.0, decay=True)
+    # 비선형 -- 호형 (pendulum arc; z at 2f)
+    add(32, "arc", "small", "fast", "small quick pendulum arc", 0.4, 10.0, 4.0)
+    add(33, "arc", "large", "slow", "wide slow pendulum arc", 0.2, 22.0, 9.0)
+    add(34, "arc", "large", "slow", "arc dying away to rest", 0.2, 22.0, 9.0, decay=True)
+
+    assert len(lib) == 34, f"the N system holds 34 motions, has {len(lib)}"
+    for m in lib:
+        for f, a in m.worst_components():
+            if not (F_MIN_HZ <= f <= F_MAX_HZ):
+                raise ValueError(f"{m.id}: {f} Hz outside {F_MIN_HZ}-{F_MAX_HZ}")
+            if a > A_HARD_MM:
+                raise ValueError(f"{m.id}: A={a} mm over the {A_HARD_MM} mm cap")
+            if a_peak_g(f, a) > A_PEAK_MAX_G:
+                raise ValueError(f"{m.id}: a_peak {a_peak_g(f, a):.4f} g over "
+                                 f"{A_PEAK_MAX_G} g")
+    return lib
 
 
 def _build_library() -> list[Motion]:
@@ -189,33 +270,34 @@ def _build_library() -> list[Motion]:
 
 
 LIBRARY = _build_library()
-LIBRARY_BY_ID = {m.id: m for m in LIBRARY}
+N_LIBRARY = _build_n_library()
+LIBRARY_BY_ID = {m.id: m for m in (*LIBRARY, *N_LIBRARY)}
+
+# Trial candidates: everything that keeps moving (no parked N01, no decay)
+N_CANDIDATES = tuple(m.id for m in N_LIBRARY
+                     if not m.decay and not (m.shape == "still" and not m.vibe))
 
 
 def catalog() -> list[dict]:
-    """The /motions payload: the whole library with its theory numbers."""
+    """The /motions payload: both libraries with their theory numbers."""
     out = []
-    for m in LIBRARY:
+    for m in (*LIBRARY, *N_LIBRARY):
         peak = max((a_peak_g(f, a) for f, a in m.worst_components()), default=0.0)
         out.append({
             "id": m.id, "name": m.name, "kind": m.kind, "grade": m.grade,
             "axis": m.axis, "f_hz": m.f_hz, "a_mm": m.a_mm,
             "a_peak_g": round(peak, 4), "desc": m.desc,
+            "shape": m.shape, "size": m.size, "speed": m.speed,
+            "vibe": m.vibe, "decay": m.decay,
+            "candidate": m.id in N_CANDIDATES,
         })
     return out
 
 
-# --------------------------------------------------------------------------- #
-# The engine: library entry -> live (ap, ml, z) offset in millimetres
-# --------------------------------------------------------------------------- #
+# --- the engine: library entry -> live (ap, ml, z) offset in mm ------------ #
 class MotionEngine:
-    """Phase-continuous playback with S-curve amplitude ramps.
-
-    ``command()`` accepts any library id: C0 entries act on the current mode
-    (soft start, taper, resume), oscillation entries become the current mode.
-    R-grade entries are refused unless ``allow_research`` -- the report bars
-    them from any automatic infant mode.
-    """
+    """Phase-continuous playback with S-curve ramps; C0 ids act on the
+    current mode; R-grade refused unless ``allow_research`` (report's bar)."""
 
     def __init__(self, allow_research: bool = False) -> None:
         self.allow_research = allow_research
@@ -267,7 +349,6 @@ class MotionEngine:
             return ok, (f"{m.id} {m.name}: {target.id} at 50% amplitude, "
                         f"{m.ramp_s:.0f} s ramp")
 
-        # an oscillation entry becomes the current mode
         return self._start(m, now,
                            max(RAMP_MIN_S, ramp_s if ramp_s is not None
                                else RAMP_DEFAULT_S), scale=1.0)
@@ -304,6 +385,8 @@ class MotionEngine:
         m = self.mode
         if m is None:
             return ()
+        if m.kind == "npath":
+            return (m.f_hz or VIBE_F_HZ, VIBE_F_HZ)
         if m.kind == "lissajous":
             return (m.f_hz, m.f2_hz)
         if m.kind == "pseudo_walk":
@@ -327,6 +410,45 @@ class MotionEngine:
             return a
         return m.a_mm
 
+    def _npath_mm(self, m: Motion, s: float,
+                  p: list[float]) -> tuple[float, float, float]:
+        """One N-system sample: (ap, ml, z) mm, in the ML-Z plane."""
+        a, b = m.a_mm * s, m.a2_mm * s
+        if m.decay:
+            fade = math.exp(-max(0.0, self.mode_t) / DECAY_T_S)
+            a, b = a * fade, b * fade
+        th = p[0]
+        ml = z = 0.0
+        if m.shape == "horiz":
+            ml = a * math.sin(th)
+        elif m.shape == "vert":
+            z = a * math.sin(th)
+        elif m.shape == "vert_fall":     # slow rise, quicker drop
+            z = a * math.sin(th + 0.6 * math.sin(th))
+        elif m.shape in ("v", "v_fall"):
+            tt = th + (0.5 * math.sin(th) if m.shape == "v_fall" else 0.0)
+            ml, z = a * math.sin(tt), b * abs(math.sin(tt))
+        elif m.shape == "parab":
+            ml, z = a * math.sin(th), b * math.sin(th) ** 2
+        elif m.shape == "dwell":         # flattened extremes = rest at each end
+            ml = a * max(-1.0, min(1.0, 1.35 * math.sin(th)))
+            z = b * math.sin(th) ** 2
+        elif m.shape == "circle":
+            ml, z = a * math.cos(th), b * math.sin(th)
+        elif m.shape == "ellipse":
+            ml, z = a * math.sin(th), b * math.cos(th)
+        elif m.shape == "inf":
+            ml, z = a * math.sin(th), b * math.sin(2.0 * th)
+        elif m.shape == "arc":           # pendulum: highest at the extremes
+            ml, z = a * math.sin(th), b * (1.0 - abs(math.cos(th)))
+        if m.vibe:
+            tremble = VIBE_MM * s * math.sin(p[1])
+            if m.shape in ("vert", "vert_fall"):
+                ml += tremble
+            else:
+                z += tremble
+        return 0.0, ml, z
+
     def offsets_mm(self) -> tuple[float, float, float]:
         """(ap, ml, z) centre offset right now, millimetres."""
         m = self.mode
@@ -335,6 +457,8 @@ class MotionEngine:
             return 0.0, 0.0, 0.0
         p = self._phase
         a = self._amplitude_mm() * s
+        if m.kind == "npath":
+            return self._npath_mm(m, s, p)
         if m.kind in ("sine", "adaptive_a", "adaptive_f"):
             v = a * math.sin(p[0])
             return ((v, 0.0, 0.0) if m.axis == "AP" else
@@ -364,28 +488,22 @@ class MotionEngine:
             "motion": m.id if m else None,
             "name": m.name if m else "STATIC",
             "grade": m.grade if m else "C0",
-            # what sort of thing this is (sine/taper/pause/...), so a reader
-            # can describe it in words without parsing the name
             "kind": m.kind if m else "static",
-            # ...and which way it moves: ML sways, Z lifts, AP tilts (rendered
-            # as the see-saw channel -- the rig has no second horizontal axis)
+            # ML sways, Z lifts, AP tilts (rendered as pitch -- no 2nd axis)
             "axis": m.axis if m else "",
+            "shape": m.shape if m else "",
             "f_hz": round(f, 2),
             "a_mm": round(a_now, 2),
             "env": round(self.env * self.amp_scale, 3),
             "tapering": self.tapering,
             "offset_mm": {"ap": round(ap, 2), "ml": round(ml, 2), "z": round(z, 2)},
             "a_peak_g": round(a_peak_g(f, a_now), 4),
-            # so the library selector can show which R entries it would refuse
-            # rather than letting the click fail with no explanation
             "research": self.allow_research,
         }
 
 
-# --------------------------------------------------------------------------- #
-# The state machine, report section 5
-# --------------------------------------------------------------------------- #
-CALM_LEVEL = 0.12          # matches demo.CALM_FLOOR: below this, nobody fusses
+# --- the state machine, report section 5 ----------------------------------- #
+CALM_LEVEL = 0.12          # below this, nobody fusses (report 5.2)
 CRY_LEVEL = 0.45           # above this the trial starts one rung up
 TRIAL_LADDER = ("M10", "M12", "M13", "M16")   # fuss -> cry -> escalation (ML)
 
@@ -402,16 +520,37 @@ COOLDOWN_ABORT_S = 90.0
 
 
 class CradleMachine:
-    """The report's priority ladder over a MotionEngine.
+    """The report's §5 priority ladder over a MotionEngine.
 
-    Inputs per tick: is the face (tag) visible, a 0..1 distress level, and
-    the jam flag standing in for an arm-desync/E-stop.  The safety gate runs
-    even with ``auto`` off; ``auto`` only enables the trial/sleep behaviour.
+    Inputs per tick: face visible, 0..1 distress, jam flag.  The safety gate
+    runs even with ``auto`` off.  ``give_up`` is the §5 hand-over (taper +
+    caregiver on no improvement / worsening); off, the machine switches
+    motion and keeps trying, ending only at the 5-minute cap -- the safety
+    gate is not part of this and tapers/alerts either way.
     """
 
-    def __init__(self, engine: MotionEngine) -> None:
+    def __init__(self, engine: MotionEngine,
+                 check_every_s: float = CHECK_EVERY_S,
+                 give_up: bool = True) -> None:
         self.engine = engine
         self.auto = True
+        self.give_up = give_up
+        # Trial rhythm: report 30 s; serve.py passes 10 (demo), all scales
+        self.check_s = max(RAMP_MIN_S, check_every_s)
+        self._no_improve_s = 2.0 * self.check_s
+        self._step_ramp_s = max(RAMP_MIN_S, self.check_s / 3.0)
+        # short trials get a short start ramp, or the pick is never felt
+        self._start_ramp_s = (RAMP_DEFAULT_S if self.check_s >= RAMP_DEFAULT_S
+                              else self._step_ramp_s)
+        # pauses scale with the same pace (exactly 30 / 90 / 30 s at check_s=30)
+        k = min(1.0, self.check_s / CHECK_EVERY_S)
+        self._cool_end_s = COOLDOWN_END_S * k
+        self._cool_abort_s = COOLDOWN_ABORT_S * k
+        self._taper_s = max(RAMP_MIN_S, RAMP_DEFAULT_S * k)
+        # Optional (now, ema) -> motion-id hook (core/policy.py): suggests
+        # *which* motion only; every when/abort/taper decision stays here,
+        # and anything but a valid pick falls back to the ladder.
+        self.advisor = None
         self.state = "quiet"       # quiet | trial | settling | gate_fail
         self.ema = 0.0
         self.alert = ""
@@ -429,9 +568,21 @@ class CradleMachine:
         self._rung = 0
         self._resumed = False
         self._cooldown_until = 0.0
+        self._trend = ""           # "" | new | improving | holding | worse
+        self._trend_t0 = 0.0
 
     def _log(self, text: str) -> None:
         self.events.append(text)
+
+    def _set_trend(self, kind: str, now: float, restart: bool = False) -> None:
+        """Record the checkpoint verdict; only a *change* restarts its clock.
+
+        ``restart`` forces the reset when a different motion starts, even if
+        the previous verdict was also "new".
+        """
+        if restart or kind != self._trend:
+            self._trend = kind
+            self._trend_t0 = now
 
     def _alert(self, text: str) -> None:
         self.alert = text
@@ -443,7 +594,14 @@ class CradleMachine:
             "auto": self.auto,
             "ema": round(self.ema, 3),
             "trial_s": round(now - self._trial_t0, 1) if self.state == "trial" else 0,
+            # the trial rhythm, so the dashboard's words match the machine
+            "check_s": round(self.check_s, 1),
+            "no_improve_s": round(self._no_improve_s, 1) if self.give_up else 0,
+            "give_up": self.give_up,
             "alert": self.alert,
+            # checkpoint verdict + how long held; gated on state so it clears
+            "trend": self._trend if self.state == "trial" else "",
+            "trend_s": round(now - self._trend_t0, 1) if self.state == "trial" else 0,
         }
 
     # -- one tick of the ladder ---------------------------------------------- #
@@ -472,6 +630,7 @@ class CradleMachine:
             if self._gate_ok_t >= GATE_RECOVER_S:
                 self.state = "quiet"
                 self._cooldown_until = now + 10.0
+                self.alert = ""
                 self._log("gate recovered -- observing before any restart")
             return
 
@@ -493,28 +652,43 @@ class CradleMachine:
             if self.ema > 1.3 * self._baseline + 0.05:
                 self._worse_t += dt
                 if self._worse_t >= WORSE_SUSTAIN_S:
-                    self._abort(now, "worse during trial")
-                    return
+                    self._set_trend("worse", now)
+                    if self.give_up:
+                        self._abort(now, "worse during trial")
+                        return
+                    # give_up off: don't sit on a worsening motion -- switch now
+                    self._retry(now, "worse under")
             else:
                 self._worse_t = 0.0
-            if now - self._check_t >= CHECK_EVERY_S:
+            if now - self._check_t >= self.check_s:
                 self._check_t = now
                 if self.ema <= 0.7 * self._baseline:
-                    self._deadline = now + NO_IMPROVE_S
+                    self._deadline = now + self._no_improve_s
+                    self._set_trend("improving", now)
                     self._log(f"trial improving (ema {self.ema:.2f}) -- holding "
                               f"{TRIAL_LADDER[self._rung]}")
                 elif (self.ema >= CRY_LEVEL
-                      and self._rung + 1 < len(TRIAL_LADDER)):
-                    self._rung += 1
-                    step = TRIAL_LADDER[self._rung]
-                    self.engine.command(step, now, ramp_s=10.0)
-                    self._log(f"no improvement at 30 s -- one step up to {step}")
-            if now >= self._deadline:
-                self._abort(now, "no improvement in 60 s")
+                      and (self._rung + 1 < len(TRIAL_LADDER)
+                           or self.advisor is not None)):
+                    self._rung = min(self._rung + 1, len(TRIAL_LADDER) - 1)
+                    step = self._trial_step(now)
+                    self.engine.command(step, now, ramp_s=self._step_ramp_s)
+                    self._set_trend("new", now, restart=True)
+                    self._log(f"no improvement at {self.check_s:.0f} s -- "
+                              f"one step up to {step}")
+                elif not self.give_up:
+                    # not improving, no hand-over: try a different motion
+                    self._retry(now, f"no improvement at {self.check_s:.0f} s "
+                                     "on")
+                else:
+                    # give_up on, below the cry line: hold, let _deadline run
+                    self._set_trend("holding", now)
+            if self.give_up and now >= self._deadline:
+                self._abort(now, f"no improvement in {self._no_improve_s:.0f} s")
             elif now - self._trial_t0 >= TRIAL_CAP_S:
-                self.engine.command("M05", now)
+                self.engine.command("M05", now, ramp_s=self._taper_s)
                 self.state = "settling"
-                self._cooldown_until = now + COOLDOWN_END_S
+                self._cooldown_until = now + self._cool_end_s
                 self._log("5 min trial cap -- taper")
             return
 
@@ -527,31 +701,65 @@ class CradleMachine:
                     self._resumed = True
                     self.state = "trial"
                     self._trial_t0 = self._check_t = now
-                    self._deadline = now + NO_IMPROVE_S
+                    self._deadline = now + self._no_improve_s
                     self._baseline = max(self.ema, 0.05)
+                    self._set_trend("new", now, restart=True)
                     self._log("fussing during taper -- one micro-resume (M08)")
                     return
             if not self.engine.active:
                 self.state = "quiet"
                 self._cooldown_until = max(self._cooldown_until,
-                                           now + COOLDOWN_END_S)
+                                           now + self._cool_end_s)
+
+    def _trial_step(self, now: float) -> str:
+        """The ladder rung -- unless the advisor names a valid P1 motion."""
+        step = TRIAL_LADDER[self._rung]
+        if self.advisor is None:
+            return step
+        pick = self.advisor(now, self.ema)
+        m = LIBRARY_BY_ID.get(str(pick).upper()) if pick else None
+        # P1 = report trial candidates; N = the team's system (envelope-gated)
+        if m is not None and m.grade in ("P1", "N") and m.kind != "static":
+            return m.id
+        return step
+
+    def _retry(self, now: float, why: str) -> str:
+        """Keep the trial alive on a different motion (``give_up`` off).
+
+        Baseline moves to where the baby is, or the rung would re-trigger.
+        """
+        was = self.engine.mode.id if self.engine.mode else "?"
+        self._rung = min(self._rung + 1, len(TRIAL_LADDER) - 1)
+        step = self._trial_step(now)
+        self._check_t = now
+        self._worse_t = 0.0
+        self._baseline = max(self.ema, 0.05)
+        self._set_trend("new", now, restart=True)
+        if step != was:
+            self.engine.command(step, now, ramp_s=self._step_ramp_s)
+            self._log(f"{why} {was} -- trying {step}, not handing over")
+        # else: ladder out of rungs, no advisor -- hold rather than churn
+        return step
 
     def _start_trial(self, now: float) -> None:
         self._rung = 1 if self.ema >= CRY_LEVEL else 0
-        step = TRIAL_LADDER[self._rung]
-        self.engine.command(step, now, ramp_s=RAMP_DEFAULT_S)
+        step = self._trial_step(now)
+        self.engine.command(step, now, ramp_s=self._start_ramp_s)
         self.state = "trial"
         self._trial_t0 = self._check_t = now
-        self._deadline = now + NO_IMPROVE_S
+        self._deadline = now + self._no_improve_s
         self._baseline = max(self.ema, 0.05)
         self._worse_t = 0.0
         self._resumed = False
+        self._set_trend("new", now, restart=True)
+        # the machine has taken the baby back: the old hand-over alert clears
+        self.alert = ""
         self._log(f"cry trial: {step} soft start (level {self.ema:.2f})")
 
     def _abort(self, now: float, why: str) -> None:
-        self.engine.command("M05", now)
+        self.engine.command("M05", now, ramp_s=self._taper_s)
         self.state = "settling"
-        self._cooldown_until = now + COOLDOWN_ABORT_S
+        self._cooldown_until = now + self._cool_abort_s
         self._alert(f"{why} -- taper and hand over")
 
 def main(argv: Optional[list] = None) -> int:
