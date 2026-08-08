@@ -105,6 +105,22 @@ Absolute: ladder 19.9, reflex 15.7, planner **14.7** upset min per 30-minute
 night. The margin over the heuristic is the one number here that is only
 marginally significant at n=40 — quote it as a direction, not a result.
 
+> **Re-measured 2026-08-08** — `python3 tools/ablation.py`, 40 paired nights ×
+> 3 independent seeds, written up in `data/ablation.html`. Two of the three
+> rows above still stand and one moved:
+>
+> | comparison | recorded | re-measured (mean, range over 3 seeds) |
+> |---|---|---|
+> | planner vs ladder | −26.4 % | **−25.4 %** (−26.8 to −23.9) — replicates |
+> | reflex vs ladder | −21.0 % | **−16.2 %** (−17.7 to −14.8) — consistently smaller |
+> | planner vs reflex | −6.8 %, t=−1.8 | **−11.0 %** (−14.1 to −9.3), p<0.05 on all 3 |
+>
+> The planner did not improve; the heuristic did, downward. The
+> planner-over-heuristic margin is **no longer marginal** — quote it as a
+> result, and stop quoting the −6.8 %. The memoryless tie below still holds,
+> but only on the 3-seed mean: single 40-night runs of that comparison scatter
+> from −10.0 % to +7.4 % and disagree in sign, so one run cannot show it.
+
 Its ranking is on the dashboard, not just in this table: the planner is the one
 brain that can show its work, so `SoothePolicy.snapshot()` carries the plan and
 the *What it dreamed* card draws every candidate it scored, the comfort each was
@@ -172,6 +188,23 @@ what soothes. Give it accurate estimates and it settles onto its best-known
 motion, the infant wears out, and the advantage evaporates. `ReflexBrain`,
 untouched by any of this, still gets −21 % — and it rotates by explicit rule
 (`MAX_RUN = 2`). Repeat-rate tracks performance across every arm measured.
+
+> **The rotation half of that explanation did not survive its control
+> (2026-08-08).** The claim above is that forced rotation is what pays, citing
+> the heuristic as the parallel case. `tools/ablation.py` tests it by removing
+> the heuristic's rotation two ways, and **nothing happens**: lifting
+> `MAX_RUN` measures −17.6 % against the unmodified −16.2 %, and pinning the
+> brain to its exploit path — which removes the explore-while-fussing rule,
+> the one that actually does the rotating, since `MAX_RUN` only gates the
+> fussing branch — measures −16.8 %. Both are within the spread between seeds.
+> Meanwhile removing the *planner's* bound swings it **30 points**, from
+> −25.4 % to +4.1 %: worse than the ladder, on every seed.
+>
+> So the bound is confirmed as decisive and the *parallel* is not — whatever
+> the bound buys a planner, the heuristic's rotation rules do not supply it.
+> Don't repeat the "it is just forced rotation" reading without re-measuring;
+> the honest statement is that we know the bound matters far more than we know
+> why.
 
 So the planner keeps the honest model and gets an explicit reason to move on:
 a confidence bound, `c·sqrt(ln N / n)`, wide while a motion's evidence is thin

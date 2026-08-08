@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIGMA &middot; one constant carries the planner</title>
+<style>
+:root{color-scheme:light dark;
+  --page:#fff;--surface:#fcfcfb;--ink:#100F0F;--ink2:#3d3d3d;--muted:#6f6f6f;
+  --hair:#e4e2dd;--rule:#c9c7c0;--band:#f4f2ee;
+  --s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--base:#a3a199;
+  --fuss:#E8705F;--cry:#AF3029;
+  --good:#006300;--tip:#fff;--tipline:#d7d5cf;--shadow:rgba(16,15,15,.16)}
+@media(prefers-color-scheme:dark){
+ :root{--page:#0d0d0d;--surface:#141312;--ink:#FFFCF0;--ink2:#CECDC3;
+  --muted:#878580;--hair:#252423;--rule:#3b3a37;--band:#191817;
+  --s1:#3987e5;--s2:#d95926;--s3:#199e70;--base:#6f6d67;
+  --fuss:#E8705F;--cry:#C0392E;
+  --good:#0ca30c;--tip:#1C1B1A;--tipline:#343331;--shadow:rgba(0,0,0,.5)}}
+*{box-sizing:border-box;margin:0}
+body{background:var(--page);color:var(--ink);
+  font:16px/1.62 "IBM Plex Sans","Helvetica Neue","Liberation Sans",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:0 22px 90px}
+.wrap{max-width:1000px;margin:0 auto}
+.col{max-width:640px}
+header{padding:64px 0 12px}
+.kicker{font-size:12px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:20px}
+h1{font-size:40px;line-height:1.14;letter-spacing:-.022em;font-weight:600;
+  max-width:17ch}
+.dek{font-size:19px;line-height:1.55;color:var(--ink2);margin-top:20px;
+  max-width:60ch}
+.byline{margin-top:26px;padding-top:14px;border-top:1px solid var(--hair);
+  font-size:13px;color:var(--muted);max-width:640px}
+h2{font-size:24px;letter-spacing:-.015em;font-weight:600;margin:60px 0 14px;
+  max-width:34ch}
+h3{font-size:13px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--muted);font-weight:500;margin:38px 0 10px}
+p{margin:16px 0;max-width:640px}
+p.small,li.small{font-size:14px;color:var(--ink2)}
+.note{font-size:13.5px;line-height:1.55;color:var(--muted);max-width:640px;
+  margin:10px 0 0}
+ul{margin:16px 0;padding-left:20px;max-width:640px}
+li{margin:7px 0}
+b,strong{font-weight:600}
+code{font:13px "IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  background:var(--band);padding:1px 5px;border-radius:4px}
+a{color:inherit}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  gap:1px;background:var(--hair);border:1px solid var(--hair);border-radius:12px;
+  overflow:hidden;margin:34px 0 6px}
+.tile{background:var(--surface);padding:18px 20px 17px}
+.tile .lab{font-size:12px;color:var(--muted);letter-spacing:.02em;
+  display:flex;align-items:center;gap:7px}
+.tile .lab i{width:9px;height:9px;border-radius:2px;flex:none}
+.tile .big{font-size:34px;line-height:1.1;letter-spacing:-.025em;margin-top:9px;
+  font-weight:600}
+.tile .sub{font-size:12.5px;color:var(--muted);margin-top:5px;
+  font-variant-numeric:tabular-nums}
+.tile .sub b{color:var(--ink2);font-weight:500}
+figure{margin:30px 0 0}
+figcaption{font-size:13.5px;line-height:1.55;color:var(--muted);
+  max-width:640px;margin-top:14px}
+svg{width:100%;height:auto;display:block;overflow:visible}
+svg text{font:11px "IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  fill:var(--muted)}
+svg text.nm{font-family:"IBM Plex Sans",sans-serif;font-size:13px;fill:var(--ink)}
+svg text.val{font-size:12px;fill:var(--ink2);font-variant-numeric:tabular-nums}
+svg text.hd{font-family:"IBM Plex Sans",sans-serif;font-size:12px;
+  fill:var(--muted)}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;
+  color:var(--ink2);margin:0 0 14px}
+.legend span{display:flex;align-items:center;gap:7px}
+.legend i{width:11px;height:11px;border-radius:3px;flex:none}
+table{border-collapse:collapse;font-size:13.5px;width:100%;margin:14px 0 0;
+  font-variant-numeric:tabular-nums}
+th,td{text-align:right;padding:8px 12px 8px 0;
+  border-bottom:1px solid var(--hair)}
+th:first-child,td:first-child{text-align:left;padding-left:2px}
+thead th{font-size:11px;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.07em;font-weight:500;border-bottom:1px solid var(--rule)}
+tbody tr:last-child td{border-bottom:1px solid var(--rule)}
+td.m{font-family:"IBM Plex Mono",ui-monospace,monospace}
+.win{color:var(--good)}
+.callout{border-left:2px solid var(--rule);padding:2px 0 2px 20px;
+  margin:26px 0;max-width:640px}
+.callout p{margin:8px 0}
+#tip{position:fixed;z-index:9;pointer-events:none;display:none;
+  background:var(--tip);border:1px solid var(--tipline);border-radius:8px;
+  padding:8px 11px;font-size:12.5px;line-height:1.55;color:var(--ink);
+  box-shadow:0 3px 14px var(--shadow);white-space:nowrap}
+#tip b{font-variant-numeric:tabular-nums}
+footer{margin-top:70px;padding-top:18px;border-top:1px solid var(--hair);
+  font-size:13px;line-height:1.7;color:var(--muted);max-width:640px}
+@media(max-width:640px){h1{font-size:30px}.dek{font-size:17px}
+  header{padding-top:40px}}
+</style></head><body><div class="wrap">
+
+<header>
+<div class="kicker">SIGMA &middot; measurement report &middot; simulation only</div>
+<h1>One constant carries the planner</h1>
+<p class="dek">A re-measurement of the three motion-choosing algorithms in
+SIGMA's infant-responsive cradle, over 1,200 simulated nights. The
+headline replicates. Of the two settings the result was supposed to rest on,
+one turns out to be worth 30 points by itself &mdash; and
+the explanation our own documentation gives for <i>why</i> does not survive the
+control that tests it.</p>
+<div class="byline">40 paired nights per arm &times;
+3 independent seeds (3, 11, 23) &middot;
+same infant, same hidden temperament, only the chooser differs &middot; every
+arm through the real <code>CradleMachine</code> &middot; no robot, no ROS, no
+phorce &mdash; 97 s of pure simulation.</div>
+</header>
+
+<div class="col">
+<h2>What was re-measured, and why</h2>
+<p>SIGMA chooses which of 26 sustained motions to rock an infant with. Three
+algorithms can make that choice: the evidence report's fixed
+<b>escalation ladder</b>, a taught <b>reflex heuristic</b>, and the
+<b>DREAM-Chunk planner</b>, which dreams every candidate forward through a
+learned comfort model and takes the best.
+<code>docs/DREAM-CHUNK.md</code> records the planner at <b>-26.4%</b>
+upset time against the ladder, and attributes that to two settings: the
+matcher's exploration bound, and an infant model that settles cumulatively
+rather than memorylessly.</p>
+<p>The decision code has been edited since. Read with comments and docstrings
+stripped, the changes are telemetry &mdash; a trend field for the dashboard, an
+extra key in the plan snapshot, an unused candidate-restriction helper, and two
+infant inputs that default to off. None of it should touch a decision. Rather
+than trust that reading, everything below was re-run from scratch, and every
+comparison was run three times on independent seeds, because a single 40-night
+run turned out not to be enough to tell two of these claims apart.</p>
+</div>
+
+<div class="tiles"><div class="tile"><div class="lab"><i style="background:var(--base)"></i>Report ladder</div><div class="big">20.1</div><div class="sub">upset min per 30-min night &middot; the baseline</div></div><div class="tile"><div class="lab"><i style="background:var(--s1)"></i>Reflex heuristic</div><div class="big">17.1</div><div class="sub"><b>-14.8%</b> vs ladder &middot; t = -4.4</div></div><div class="tile"><div class="lab"><i style="background:var(--s3)"></i>DREAM-Chunk planner</div><div class="big">14.7</div><div class="sub"><b>-26.8%</b> vs ladder &middot; t = -9.2</div></div><div class="tile"><div class="lab"><i style="background:var(--s2)"></i>Planner, bound off</div><div class="big">21.4</div><div class="sub"><b>+6.5%</b> vs ladder &middot; one constant removed</div></div></div>
+<p class="note">Mean minutes of a 30-minute night the infant spent fussing or
+crying, on the primary seed. Lower is better. Every arm faced the identical
+40 infants.</p>
+
+<div class="col">
+<h2>The headline replicates</h2>
+<p>The planner measures <b>-26.8%</b> upset time against the ladder
+on the primary seed (95% CI -32.7 to -20.9,
+t = -9.2, p &lt; 0.001) and <b>-54.8%</b> crying
+time. Across all three seeds: -25.4% (range -26.8 to -23.9). The recorded figures are
+-26.4% and -57.1%.
+That reproduces &mdash; and the
+ordering, planner then heuristic then ladder, holds on every seed.</p>
+<p>One number did move. The heuristic's own margin over the ladder measures
+-16.2% (range -17.7 to -14.8) against the -21.0% recorded, consistently smaller. The planner did not improve; the heuristic got worse, which matters
+for the comparison that follows.</p>
+</div>
+
+<figure>
+<div class="legend">
+  <span><i style="background:var(--fuss)"></i>fussing</span>
+  <span><i style="background:var(--cry)"></i>crying</span>
+</div>
+<svg viewBox="0 0 1000 160" role="img" aria-label="mean minutes of a 30-minute night spent fussing or crying, by algorithm"><text class="nm" x="172" y="20" text-anchor="end">Report ladder</text><path d="M186.0 0.0H601.0A4.0 4.0 0 0 1 605.0 4.0V26.0A4.0 4.0 0 0 1 601.0 30.0H186.0Z" fill="var(--fuss)" data-tip="Report ladder<br><b>13.7 min</b> fussing<br>mean of 40 nights"/><path d="M607.0 0.0H795.5A4.0 4.0 0 0 1 799.5 4.0V26.0A4.0 4.0 0 0 1 795.5 30.0H607.0Z" fill="var(--cry)" data-tip="Report ladder<br><b>6.4 min</b> crying<br>mean of 40 nights"/><text class="val" x="811.5" y="20">20.1 min</text><text class="nm" x="172" y="72" text-anchor="end">Reflex heuristic</text><path d="M186.0 52.0H577.1A4.0 4.0 0 0 1 581.1 56.0V78.0A4.0 4.0 0 0 1 577.1 82.0H186.0Z" fill="var(--fuss)" data-tip="Reflex heuristic<br><b>12.9 min</b> fussing<br>mean of 40 nights"/><path d="M583.1 52.0H704.6A4.0 4.0 0 0 1 708.6 56.0V78.0A4.0 4.0 0 0 1 704.6 82.0H583.1Z" fill="var(--cry)" data-tip="Reflex heuristic<br><b>4.2 min</b> crying<br>mean of 40 nights"/><text class="val" x="720.6" y="72">17.1 min   -14.8%</text><text class="nm" x="172" y="124" text-anchor="end">DREAM-Chunk planner</text><path d="M186.0 104.0H543.2A4.0 4.0 0 0 1 547.2 108.0V130.0A4.0 4.0 0 0 1 543.2 134.0H186.0Z" fill="var(--fuss)" data-tip="DREAM-Chunk planner<br><b>11.8 min</b> fussing<br>mean of 40 nights"/><path d="M549.2 104.0H631.0A4.0 4.0 0 0 1 635.0 108.0V130.0A4.0 4.0 0 0 1 631.0 134.0H549.2Z" fill="var(--cry)" data-tip="DREAM-Chunk planner<br><b>2.9 min</b> crying<br>mean of 40 nights"/><text class="val" x="647.0" y="124">14.7 min   -26.8%</text><line x1="186" y1="0" x2="186" y2="134" stroke="var(--rule)"/><text x="491.5" y="154" text-anchor="middle">10</text><text x="797.1" y="154" text-anchor="middle">20</text><text class="hd" x="186" y="154">minutes per night</text></svg>
+<figcaption>Upset time splits into fussing and crying; the two segments sum to
+the bar. Crying is the segment worth watching &mdash; it is the one a caregiver
+hears, and it is where the two learning arms separate from the ladder most
+clearly.</figcaption>
+</figure>
+
+<div class="col">
+<h2>Every night, not the average</h2>
+<p>A mean over 40 nights can hide an arm that wins hugely on a few
+infants and loses on the rest. It does not here: the planner beat the ladder on
+<b>36 of 40</b> nights.</p>
+<p>Against the heuristic the margin is smaller but it is no longer marginal.
+On the primary seed it measures <b>-14.1%</b> (t = -4.3,
+p &lt; 0.001), and across the three seeds -11.0% (range -14.1 to -9.3), significant on
+3 of 3. The documentation
+records -6.8% at t = &minus;1.8 and says to quote it as a direction
+rather than a result.
+On this evidence it is a result. The gap widened mostly because
+the heuristic slipped, not because the planner gained.</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 1000 396" role="img" aria-label="per-night paired difference in upset minutes for each comparison"><text class="nm" x="116" y="87.0" text-anchor="end">DREAM-Chunk planner</text><text class="hd" x="116" y="104.0" text-anchor="end">vs the report ladder</text><line x1="130" y1="53.5" x2="986" y2="53.5" stroke="var(--hair)"/><text x="120" y="57.5" text-anchor="end">+8</text><line x1="130" y1="128.5" x2="986" y2="128.5" stroke="var(--hair)"/><text x="120" y="132.5" text-anchor="end">-8</text><path d="M131.5 91.0V31.4A3.0 3.0 0 0 1 134.5 28.4H146.9A3.0 3.0 0 0 1 149.9 31.4V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 1 of 40<br><b>13.3 min</b> saved vs the report ladder"/><path d="M152.9 91.0V34.7A3.0 3.0 0 0 1 155.9 31.7H168.3A3.0 3.0 0 0 1 171.3 34.7V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 2 of 40<br><b>12.6 min</b> saved vs the report ladder"/><path d="M174.3 91.0V37.5A3.0 3.0 0 0 1 177.3 34.5H189.7A3.0 3.0 0 0 1 192.7 37.5V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 3 of 40<br><b>12.0 min</b> saved vs the report ladder"/><path d="M195.7 91.0V37.9A3.0 3.0 0 0 1 198.7 34.9H211.1A3.0 3.0 0 0 1 214.1 37.9V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 4 of 40<br><b>12.0 min</b> saved vs the report ladder"/><path d="M217.1 91.0V42.5A3.0 3.0 0 0 1 220.1 39.5H232.5A3.0 3.0 0 0 1 235.5 42.5V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 5 of 40<br><b>11.0 min</b> saved vs the report ladder"/><path d="M238.5 91.0V44.2A3.0 3.0 0 0 1 241.5 41.2H253.9A3.0 3.0 0 0 1 256.9 44.2V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 6 of 40<br><b>10.6 min</b> saved vs the report ladder"/><path d="M259.9 91.0V56.0A3.0 3.0 0 0 1 262.9 53.0H275.3A3.0 3.0 0 0 1 278.3 56.0V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 7 of 40<br><b>8.1 min</b> saved vs the report ladder"/><path d="M281.3 91.0V56.6A3.0 3.0 0 0 1 284.3 53.6H296.7A3.0 3.0 0 0 1 299.7 56.6V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 8 of 40<br><b>8.0 min</b> saved vs the report ladder"/><path d="M302.7 91.0V61.0A3.0 3.0 0 0 1 305.7 58.0H318.1A3.0 3.0 0 0 1 321.1 61.0V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 9 of 40<br><b>7.0 min</b> saved vs the report ladder"/><path d="M324.1 91.0V61.0A3.0 3.0 0 0 1 327.1 58.0H339.5A3.0 3.0 0 0 1 342.5 61.0V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 10 of 40<br><b>7.0 min</b> saved vs the report ladder"/><path d="M345.5 91.0V61.0A3.0 3.0 0 0 1 348.5 58.0H360.9A3.0 3.0 0 0 1 363.9 61.0V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 11 of 40<br><b>7.0 min</b> saved vs the report ladder"/><path d="M366.9 91.0V62.5A3.0 3.0 0 0 1 369.9 59.5H382.3A3.0 3.0 0 0 1 385.3 62.5V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 12 of 40<br><b>6.7 min</b> saved vs the report ladder"/><path d="M388.3 91.0V63.6A3.0 3.0 0 0 1 391.3 60.6H403.7A3.0 3.0 0 0 1 406.7 63.6V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 13 of 40<br><b>6.5 min</b> saved vs the report ladder"/><path d="M409.7 91.0V65.1A3.0 3.0 0 0 1 412.7 62.1H425.1A3.0 3.0 0 0 1 428.1 65.1V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 14 of 40<br><b>6.2 min</b> saved vs the report ladder"/><path d="M431.1 91.0V65.9A3.0 3.0 0 0 1 434.1 62.9H446.5A3.0 3.0 0 0 1 449.5 65.9V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 15 of 40<br><b>6.0 min</b> saved vs the report ladder"/><path d="M452.5 91.0V66.2A3.0 3.0 0 0 1 455.5 63.2H467.9A3.0 3.0 0 0 1 470.9 66.2V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 16 of 40<br><b>5.9 min</b> saved vs the report ladder"/><path d="M473.9 91.0V66.4A3.0 3.0 0 0 1 476.9 63.4H489.3A3.0 3.0 0 0 1 492.3 66.4V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 17 of 40<br><b>5.9 min</b> saved vs the report ladder"/><path d="M495.3 91.0V67.1A3.0 3.0 0 0 1 498.3 64.1H510.7A3.0 3.0 0 0 1 513.7 67.1V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 18 of 40<br><b>5.7 min</b> saved vs the report ladder"/><path d="M516.7 91.0V67.2A3.0 3.0 0 0 1 519.7 64.2H532.1A3.0 3.0 0 0 1 535.1 67.2V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 19 of 40<br><b>5.7 min</b> saved vs the report ladder"/><path d="M538.1 91.0V67.3A3.0 3.0 0 0 1 541.1 64.3H553.5A3.0 3.0 0 0 1 556.5 67.3V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 20 of 40<br><b>5.7 min</b> saved vs the report ladder"/><path d="M559.5 91.0V68.2A3.0 3.0 0 0 1 562.5 65.2H574.9A3.0 3.0 0 0 1 577.9 68.2V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 21 of 40<br><b>5.5 min</b> saved vs the report ladder"/><path d="M580.9 91.0V70.1A3.0 3.0 0 0 1 583.9 67.1H596.3A3.0 3.0 0 0 1 599.3 70.1V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 22 of 40<br><b>5.1 min</b> saved vs the report ladder"/><path d="M602.3 91.0V70.5A3.0 3.0 0 0 1 605.3 67.5H617.7A3.0 3.0 0 0 1 620.7 70.5V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 23 of 40<br><b>5.0 min</b> saved vs the report ladder"/><path d="M623.7 91.0V71.9A3.0 3.0 0 0 1 626.7 68.9H639.1A3.0 3.0 0 0 1 642.1 71.9V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 24 of 40<br><b>4.7 min</b> saved vs the report ladder"/><path d="M645.1 91.0V72.3A3.0 3.0 0 0 1 648.1 69.3H660.5A3.0 3.0 0 0 1 663.5 72.3V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 25 of 40<br><b>4.6 min</b> saved vs the report ladder"/><path d="M666.5 91.0V76.3A3.0 3.0 0 0 1 669.5 73.3H681.9A3.0 3.0 0 0 1 684.9 76.3V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 26 of 40<br><b>3.8 min</b> saved vs the report ladder"/><path d="M687.9 91.0V76.9A3.0 3.0 0 0 1 690.9 73.9H703.3A3.0 3.0 0 0 1 706.3 76.9V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 27 of 40<br><b>3.6 min</b> saved vs the report ladder"/><path d="M709.3 91.0V77.1A3.0 3.0 0 0 1 712.3 74.1H724.7A3.0 3.0 0 0 1 727.7 77.1V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 28 of 40<br><b>3.6 min</b> saved vs the report ladder"/><path d="M730.7 91.0V78.2A3.0 3.0 0 0 1 733.7 75.2H746.1A3.0 3.0 0 0 1 749.1 78.2V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 29 of 40<br><b>3.4 min</b> saved vs the report ladder"/><path d="M752.1 91.0V79.8A3.0 3.0 0 0 1 755.1 76.8H767.5A3.0 3.0 0 0 1 770.5 79.8V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 30 of 40<br><b>3.0 min</b> saved vs the report ladder"/><path d="M773.5 91.0V81.7A3.0 3.0 0 0 1 776.5 78.7H788.9A3.0 3.0 0 0 1 791.9 81.7V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 31 of 40<br><b>2.6 min</b> saved vs the report ladder"/><path d="M794.9 91.0V81.9A3.0 3.0 0 0 1 797.9 78.9H810.3A3.0 3.0 0 0 1 813.3 81.9V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 32 of 40<br><b>2.6 min</b> saved vs the report ladder"/><path d="M816.3 91.0V82.2A3.0 3.0 0 0 1 819.3 79.2H831.7A3.0 3.0 0 0 1 834.7 82.2V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 33 of 40<br><b>2.5 min</b> saved vs the report ladder"/><path d="M837.7 91.0V82.9A3.0 3.0 0 0 1 840.7 79.9H853.1A3.0 3.0 0 0 1 856.1 82.9V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 34 of 40<br><b>2.4 min</b> saved vs the report ladder"/><path d="M859.1 91.0V84.0A3.0 3.0 0 0 1 862.1 81.0H874.5A3.0 3.0 0 0 1 877.5 84.0V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 35 of 40<br><b>2.1 min</b> saved vs the report ladder"/><path d="M880.5 91.0V89.7A1.3 1.3 0 0 1 881.8 88.4H897.6A1.3 1.3 0 0 1 898.9 89.7V91.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 36 of 40<br><b>0.6 min</b> saved vs the report ladder"/><path d="M901.9 91.0V91.4A0.4 0.4 0 0 0 902.3 91.8H919.9A0.4 0.4 0 0 0 920.3 91.4V91.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 37 of 40<br><b>0.2 min</b> lost vs the report ladder"/><path d="M923.3 91.0V91.9A0.9 0.9 0 0 0 924.2 92.7H940.8A0.9 0.9 0 0 0 941.7 91.9V91.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 38 of 40<br><b>0.4 min</b> lost vs the report ladder"/><path d="M944.7 91.0V93.1A2.1 2.1 0 0 0 946.8 95.2H961.0A2.1 2.1 0 0 0 963.1 93.1V91.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 39 of 40<br><b>0.9 min</b> lost vs the report ladder"/><path d="M966.1 91.0V95.5A3.0 3.0 0 0 0 969.1 98.5H981.5A3.0 3.0 0 0 0 984.5 95.5V91.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 40 of 40<br><b>1.6 min</b> lost vs the report ladder"/><line x1="130" y1="91.0" x2="986" y2="91.0" stroke="var(--rule)"/><text class="val" x="986" y="14.0" text-anchor="end">36 of 40 nights better</text><text x="130" y="14.0">&#9650; saved &#183; scale &plusmn;16 min</text><text class="nm" x="116" y="303.0" text-anchor="end">DREAM-Chunk planner</text><text class="hd" x="116" y="320.0" text-anchor="end">vs the reflex heuristic</text><line x1="130" y1="269.5" x2="986" y2="269.5" stroke="var(--hair)"/><text x="120" y="273.5" text-anchor="end">+8</text><line x1="130" y1="344.5" x2="986" y2="344.5" stroke="var(--hair)"/><text x="120" y="348.5" text-anchor="end">-8</text><path d="M131.5 307.0V254.2A3.0 3.0 0 0 1 134.5 251.2H146.9A3.0 3.0 0 0 1 149.9 254.2V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 1 of 40<br><b>11.9 min</b> saved vs the reflex heuristic"/><path d="M152.9 307.0V271.4A3.0 3.0 0 0 1 155.9 268.4H168.3A3.0 3.0 0 0 1 171.3 271.4V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 2 of 40<br><b>8.2 min</b> saved vs the reflex heuristic"/><path d="M174.3 307.0V272.6A3.0 3.0 0 0 1 177.3 269.6H189.7A3.0 3.0 0 0 1 192.7 272.6V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 3 of 40<br><b>8.0 min</b> saved vs the reflex heuristic"/><path d="M195.7 307.0V274.0A3.0 3.0 0 0 1 198.7 271.0H211.1A3.0 3.0 0 0 1 214.1 274.0V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 4 of 40<br><b>7.7 min</b> saved vs the reflex heuristic"/><path d="M217.1 307.0V278.4A3.0 3.0 0 0 1 220.1 275.4H232.5A3.0 3.0 0 0 1 235.5 278.4V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 5 of 40<br><b>6.7 min</b> saved vs the reflex heuristic"/><path d="M238.5 307.0V279.2A3.0 3.0 0 0 1 241.5 276.2H253.9A3.0 3.0 0 0 1 256.9 279.2V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 6 of 40<br><b>6.6 min</b> saved vs the reflex heuristic"/><path d="M259.9 307.0V280.8A3.0 3.0 0 0 1 262.9 277.8H275.3A3.0 3.0 0 0 1 278.3 280.8V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 7 of 40<br><b>6.2 min</b> saved vs the reflex heuristic"/><path d="M281.3 307.0V281.0A3.0 3.0 0 0 1 284.3 278.0H296.7A3.0 3.0 0 0 1 299.7 281.0V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 8 of 40<br><b>6.2 min</b> saved vs the reflex heuristic"/><path d="M302.7 307.0V281.6A3.0 3.0 0 0 1 305.7 278.6H318.1A3.0 3.0 0 0 1 321.1 281.6V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 9 of 40<br><b>6.1 min</b> saved vs the reflex heuristic"/><path d="M324.1 307.0V285.7A3.0 3.0 0 0 1 327.1 282.7H339.5A3.0 3.0 0 0 1 342.5 285.7V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 10 of 40<br><b>5.2 min</b> saved vs the reflex heuristic"/><path d="M345.5 307.0V286.4A3.0 3.0 0 0 1 348.5 283.4H360.9A3.0 3.0 0 0 1 363.9 286.4V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 11 of 40<br><b>5.0 min</b> saved vs the reflex heuristic"/><path d="M366.9 307.0V289.3A3.0 3.0 0 0 1 369.9 286.3H382.3A3.0 3.0 0 0 1 385.3 289.3V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 12 of 40<br><b>4.4 min</b> saved vs the reflex heuristic"/><path d="M388.3 307.0V290.3A3.0 3.0 0 0 1 391.3 287.3H403.7A3.0 3.0 0 0 1 406.7 290.3V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 13 of 40<br><b>4.2 min</b> saved vs the reflex heuristic"/><path d="M409.7 307.0V290.6A3.0 3.0 0 0 1 412.7 287.6H425.1A3.0 3.0 0 0 1 428.1 290.6V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 14 of 40<br><b>4.1 min</b> saved vs the reflex heuristic"/><path d="M431.1 307.0V291.4A3.0 3.0 0 0 1 434.1 288.4H446.5A3.0 3.0 0 0 1 449.5 291.4V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 15 of 40<br><b>4.0 min</b> saved vs the reflex heuristic"/><path d="M452.5 307.0V297.2A3.0 3.0 0 0 1 455.5 294.2H467.9A3.0 3.0 0 0 1 470.9 297.2V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 16 of 40<br><b>2.7 min</b> saved vs the reflex heuristic"/><path d="M473.9 307.0V299.4A3.0 3.0 0 0 1 476.9 296.4H489.3A3.0 3.0 0 0 1 492.3 299.4V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 17 of 40<br><b>2.3 min</b> saved vs the reflex heuristic"/><path d="M495.3 307.0V300.5A3.0 3.0 0 0 1 498.3 297.5H510.7A3.0 3.0 0 0 1 513.7 300.5V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 18 of 40<br><b>2.0 min</b> saved vs the reflex heuristic"/><path d="M516.7 307.0V301.2A3.0 3.0 0 0 1 519.7 298.2H532.1A3.0 3.0 0 0 1 535.1 301.2V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 19 of 40<br><b>1.9 min</b> saved vs the reflex heuristic"/><path d="M538.1 307.0V301.9A3.0 3.0 0 0 1 541.1 298.9H553.5A3.0 3.0 0 0 1 556.5 301.9V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 20 of 40<br><b>1.7 min</b> saved vs the reflex heuristic"/><path d="M559.5 307.0V302.3A3.0 3.0 0 0 1 562.5 299.3H574.9A3.0 3.0 0 0 1 577.9 302.3V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 21 of 40<br><b>1.6 min</b> saved vs the reflex heuristic"/><path d="M580.9 307.0V302.7A3.0 3.0 0 0 1 583.9 299.7H596.3A3.0 3.0 0 0 1 599.3 302.7V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 22 of 40<br><b>1.5 min</b> saved vs the reflex heuristic"/><path d="M602.3 307.0V303.4A3.0 3.0 0 0 1 605.3 300.4H617.7A3.0 3.0 0 0 1 620.7 303.4V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 23 of 40<br><b>1.4 min</b> saved vs the reflex heuristic"/><path d="M623.7 307.0V303.6A3.0 3.0 0 0 1 626.7 300.6H639.1A3.0 3.0 0 0 1 642.1 303.6V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 24 of 40<br><b>1.4 min</b> saved vs the reflex heuristic"/><path d="M645.1 307.0V304.5A2.5 2.5 0 0 1 647.6 302.1H661.0A2.5 2.5 0 0 1 663.5 304.5V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 25 of 40<br><b>1.0 min</b> saved vs the reflex heuristic"/><path d="M666.5 307.0V305.8A1.2 1.2 0 0 1 667.7 304.7H683.7A1.2 1.2 0 0 1 684.9 305.8V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 26 of 40<br><b>0.5 min</b> saved vs the reflex heuristic"/><path d="M687.9 307.0V306.5A0.5 0.5 0 0 1 688.4 306.0H705.8A0.5 0.5 0 0 1 706.3 306.5V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 27 of 40<br><b>0.2 min</b> saved vs the reflex heuristic"/><path d="M709.3 307.0V306.8A0.2 0.2 0 0 1 709.5 306.6H727.5A0.2 0.2 0 0 1 727.7 306.8V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 28 of 40<br><b>0.1 min</b> saved vs the reflex heuristic"/><path d="M730.7 307.0V306.9A0.1 0.1 0 0 1 730.8 306.7H749.0A0.1 0.1 0 0 1 749.1 306.9V307.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner &middot; night 29 of 40<br><b>0.1 min</b> saved vs the reflex heuristic"/><path d="M752.1 307.0V307.2A0.2 0.2 0 0 0 752.3 307.5H770.3A0.2 0.2 0 0 0 770.5 307.2V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 30 of 40<br><b>0.1 min</b> lost vs the reflex heuristic"/><path d="M773.5 307.0V307.5A0.5 0.5 0 0 0 774.0 308.1H791.4A0.5 0.5 0 0 0 791.9 307.5V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 31 of 40<br><b>0.2 min</b> lost vs the reflex heuristic"/><path d="M794.9 307.0V308.0A1.0 1.0 0 0 0 795.9 309.1H812.3A1.0 1.0 0 0 0 813.3 308.0V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 32 of 40<br><b>0.4 min</b> lost vs the reflex heuristic"/><path d="M816.3 307.0V308.1A1.1 1.1 0 0 0 817.4 309.2H833.6A1.1 1.1 0 0 0 834.7 308.1V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 33 of 40<br><b>0.5 min</b> lost vs the reflex heuristic"/><path d="M837.7 307.0V309.5A2.5 2.5 0 0 0 840.2 312.0H853.6A2.5 2.5 0 0 0 856.1 309.5V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 34 of 40<br><b>1.1 min</b> lost vs the reflex heuristic"/><path d="M859.1 307.0V311.2A3.0 3.0 0 0 0 862.1 314.2H874.5A3.0 3.0 0 0 0 877.5 311.2V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 35 of 40<br><b>1.5 min</b> lost vs the reflex heuristic"/><path d="M880.5 307.0V312.8A3.0 3.0 0 0 0 883.5 315.8H895.9A3.0 3.0 0 0 0 898.9 312.8V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 36 of 40<br><b>1.9 min</b> lost vs the reflex heuristic"/><path d="M901.9 307.0V314.0A3.0 3.0 0 0 0 904.9 317.0H917.3A3.0 3.0 0 0 0 920.3 314.0V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 37 of 40<br><b>2.1 min</b> lost vs the reflex heuristic"/><path d="M923.3 307.0V314.5A3.0 3.0 0 0 0 926.3 317.5H938.7A3.0 3.0 0 0 0 941.7 314.5V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 38 of 40<br><b>2.2 min</b> lost vs the reflex heuristic"/><path d="M944.7 307.0V317.6A3.0 3.0 0 0 0 947.7 320.6H960.1A3.0 3.0 0 0 0 963.1 317.6V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 39 of 40<br><b>2.9 min</b> lost vs the reflex heuristic"/><path d="M966.1 307.0V321.3A3.0 3.0 0 0 0 969.1 324.3H981.5A3.0 3.0 0 0 0 984.5 321.3V307.0Z" fill="var(--cry)" data-tip="DREAM-Chunk planner &middot; night 40 of 40<br><b>3.7 min</b> lost vs the reflex heuristic"/><line x1="130" y1="307.0" x2="986" y2="307.0" stroke="var(--rule)"/><text class="val" x="986" y="230.0" text-anchor="end">29 of 40 nights better</text><text x="130" y="230.0">&#9650; saved &#183; scale &plusmn;16 min</text></svg>
+<figcaption>One bar per night, sorted, showing minutes of upset the planner
+saved on that infant. Above the line the planner won; below it, the other arm
+did. Both facets share one scale.</figcaption>
+</figure>
+
+<div class="col">
+<h2>Setting 1 &mdash; the exploration bound, and it is the whole thing</h2>
+<p>The planner ranks candidates by a learned comfort model and adds a
+confidence bound, <code>c&middot;sqrt(ln N / n)</code>, wide while a motion's
+evidence is thin. It is one line and one constant
+(<code>DreamConfig.explore_c = 0.06</code>). Setting that constant to zero
+changes nothing else: the same world model, the same dreams, the same
+ranking.</p>
+<p>Without it the planner measures +4.1% (range +2.8 to +6.5) against the ladder instead of
+-25.4% (range -26.8 to -23.9) &mdash; a swing of <b>30 points</b>
+that puts it on the wrong side of the baseline it is supposed to beat, on every seed. A planner with an
+honest world model and no reason to leave it is worse than a fixed ladder that
+never learned anything.</p>
+</div>
+
+<div class="col">
+<h2>The explanation for setting 1 does not survive its control</h2>
+<p>Our documentation explains the bound as forced rotation: an infant
+habituates, so a motion played until it stops working must be replaced whether
+or not it is still best-ranked, and it cites the heuristic &mdash; which
+rotates by explicit rule and gets its own large margin &mdash; as the parallel
+case. That is a testable claim, so this run tests it by removing the
+heuristic's rotation two ways.</p>
+<p>Lifting the <code>MAX_RUN</code> cap does almost nothing (-17.6% (range -19.9 to -14.9)
+against -16.2% (range -17.7 to -14.8)), but that cap gates only the fussing branch, so it is
+the weaker of the two ablations. The stronger one pins the brain to its exploit
+path, removing the explore-while-fussing rule that does the real rotating. The
+heuristic then measures -16.8% (range -17.2 to -16.4) &mdash;
+indistinguishable from leaving it in.</p>
+<p>So rotation is <b>not</b> a general explanation. Take rotation away from the
+planner and it collapses below the ladder; take it away from the heuristic and
+nothing happens. Whatever the bound is buying, it is something the heuristic's
+rotation rules do not supply, and the parallel drawn in the documentation
+should not be relied on. What the bound does for a <i>planner</i> specifically
+&mdash; one that would otherwise exploit a low-contrast learned ranking as
+though it were certain &mdash; remains the open question.</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 1000 218" role="img" aria-label="each variant margin in upset time over the report ladder"><line x1="353.3" y1="0" x2="353.3" y2="210" stroke="var(--hair)"/><text x="353.3" y="218" text-anchor="middle">-20%</text><line x1="786.7" y1="0" x2="786.7" y2="210" stroke="var(--hair)"/><text x="786.7" y="218" text-anchor="middle">+20%</text><text class="nm" x="220" y="18" text-anchor="end">Reflex heuristic</text><path d="M570.0 0.0H413.5A4.0 4.0 0 0 0 409.5 4.0V22.0A4.0 4.0 0 0 0 413.5 26.0H570.0Z" fill="var(--s1)" data-tip="Reflex heuristic<br><b>-14.8%</b> upset vs the ladder<br>t = -4.4 &middot; p &lt; 0.001 &middot; 30 of 40 nights better"/><text class="val" x="397.5" y="18" text-anchor="end">-14.8%</text><text class="nm" x="220" y="64" text-anchor="end">Heuristic, MAX_RUN lifted</text><path d="M570.0 46.0H412.6A4.0 4.0 0 0 0 408.6 50.0V68.0A4.0 4.0 0 0 0 412.6 72.0H570.0Z" fill="var(--s1)" data-tip="Heuristic, MAX_RUN lifted<br><b>-14.9%</b> upset vs the ladder<br>t = -4.2 &middot; p &lt; 0.001 &middot; 30 of 40 nights better"/><text class="val" x="396.6" y="64" text-anchor="end">-14.9%</text><text class="nm" x="220" y="110" text-anchor="end">Heuristic, exploit-only</text><path d="M570.0 92.0H392.4A4.0 4.0 0 0 0 388.4 96.0V114.0A4.0 4.0 0 0 0 392.4 118.0H570.0Z" fill="var(--s1)" data-tip="Heuristic, exploit-only<br><b>-16.8%</b> upset vs the ladder<br>t = -5.3 &middot; p &lt; 0.001 &middot; 33 of 40 nights better"/><text class="val" x="376.4" y="110" text-anchor="end">-16.8%</text><text class="nm" x="220" y="156" text-anchor="end">DREAM-Chunk planner</text><path d="M570.0 138.0H283.6A4.0 4.0 0 0 0 279.6 142.0V160.0A4.0 4.0 0 0 0 283.6 164.0H570.0Z" fill="var(--s1)" data-tip="DREAM-Chunk planner<br><b>-26.8%</b> upset vs the ladder<br>t = -9.2 &middot; p &lt; 0.001 &middot; 36 of 40 nights better"/><text class="val" x="267.6" y="156" text-anchor="end">-26.8%</text><text class="nm" x="220" y="202" text-anchor="end">Planner, bound off</text><path d="M570.0 184.0H636.8A4.0 4.0 0 0 1 640.8 188.0V206.0A4.0 4.0 0 0 1 636.8 210.0H570.0Z" fill="var(--cry)" data-tip="Planner, bound off<br><b>+6.5%</b> upset vs the ladder<br>t = 1.6 &middot; p = 0.109 &middot; 16 of 40 nights better"/><text class="val" x="652.8" y="202" text-anchor="start">+6.5%</text><line x1="570.0" y1="-6" x2="570.0" y2="210" stroke="var(--rule)" stroke-width="1.5"/><text class="hd" x="570.0" y="218" text-anchor="middle">ladder</text></svg>
+<figcaption>Upset time against the report ladder for each variant, on the
+infant with memory, primary seed. Left of the axis beats the ladder. Only one
+ablation crosses it, and it is not one of the heuristic's.</figcaption>
+</figure>
+
+<div class="col">
+<h2>Setting 2 &mdash; the setting that is not in the algorithm</h2>
+<p>The second setting is a property of the infant, not of the planner.
+<code>VirtualBaby(cumulative=True)</code> integrates soothing into a settling
+score, so rocking that is working shows progressive calming and interrupting it
+loses that progress gradually. The older model stepped the infant down as a
+memoryless Poisson process; against that plant there is no trajectory to
+predict, and the documentation records the planner tying the heuristic exactly
+on it.</p>
+<p>This is the claim that needed three seeds. On the memoryless infant the
+planner still beats the <i>ladder</i> comfortably &mdash;
+-18.3% (range -23.7 to -15.5) &mdash;
+which on one seed reads as the documented claim failing. Against the
+<i>heuristic</i>, though, the three runs measure -3.3% (range -10.0 to +7.4) and
+disagree in sign, significant on
+2 of 3. On the infant with memory the same comparison is
+negative and significant on 3 of
+3.
+Averaged over three runs the documented tie holds, and a single run of 40 nights was not enough to see it.</p>
+</div>
+
+<figure>
+<div class="legend">
+  <span><i style="background:var(--s1)"></i>exploration bound on (shipped)</span>
+  <span><i style="background:var(--s2)"></i>exploration bound off</span>
+</div>
+<svg viewBox="0 0 1000 260" role="img" aria-label="planner margin over the report ladder in four configurations"><line x1="150" y1="196.9" x2="980" y2="196.9" stroke="var(--hair)"/><text x="138" y="200.9" text-anchor="end">-30%</text><line x1="150" y1="153.2" x2="980" y2="153.2" stroke="var(--hair)"/><text x="138" y="157.2" text-anchor="end">-20%</text><line x1="150" y1="109.5" x2="980" y2="109.5" stroke="var(--hair)"/><text x="138" y="113.5" text-anchor="end">-10%</text><line x1="150" y1="65.8" x2="980" y2="65.8" stroke="var(--hair)"/><text x="138" y="69.8" text-anchor="end">+0%</text><path d="M259.5 65.8V179.9A3.0 3.0 0 0 0 262.5 182.9H352.5A3.0 3.0 0 0 0 355.5 179.9V65.8Z" fill="var(--s1)" data-tip="bound on (shipped), infant with memory<br><b>-26.8%</b> upset vs the ladder<br>t = -9.2 &middot; p &lt; 0.001"/><text class="val" x="307.5" y="200.9" text-anchor="middle">-26.8%</text><path d="M359.5 65.8V40.2A3.0 3.0 0 0 1 362.5 37.2H452.5A3.0 3.0 0 0 1 455.5 40.2V65.8Z" fill="var(--s2)" data-tip="bound off, infant with memory<br><b>+6.5%</b> upset vs the ladder<br>t = 1.6 &middot; p = 0.109"/><text class="val" x="407.5" y="28.2" text-anchor="middle">+6.5%</text><text class="nm" x="357.5" y="238" text-anchor="middle">infant with memory</text><path d="M674.5 65.8V166.2A3.0 3.0 0 0 0 677.5 169.2H767.5A3.0 3.0 0 0 0 770.5 166.2V65.8Z" fill="var(--s1)" data-tip="bound on (shipped), memoryless infant<br><b>-23.7%</b> upset vs the ladder<br>t = -7.4 &middot; p &lt; 0.001"/><text class="val" x="722.5" y="187.2" text-anchor="middle">-23.7%</text><path d="M774.5 65.8V33.4A3.0 3.0 0 0 1 777.5 30.4H867.5A3.0 3.0 0 0 1 870.5 33.4V65.8Z" fill="var(--s2)" data-tip="bound off, memoryless infant<br><b>+8.1%</b> upset vs the ladder<br>t = 2.4 &middot; p = 0.021"/><text class="val" x="822.5" y="21.4" text-anchor="middle">+8.1%</text><text class="nm" x="772.5" y="238" text-anchor="middle">memoryless infant</text><line x1="150" y1="65.8" x2="980" y2="65.8" stroke="var(--rule)" stroke-width="1.5"/><text class="hd" x="138" y="16" text-anchor="end">better</text></svg>
+<figcaption>The planner's margin over the report ladder in all four
+configurations, primary seed. Downward is better. Removing the bound moves a
+bar much further than changing the plant does &mdash; against the ladder the
+plant hardly matters. What the plant changes is the comparison against the
+heuristic, which this figure does not show.</figcaption>
+</figure>
+
+<div class="col">
+<h2>Did it replicate?</h2>
+<p>Each comparison, run three times on independent seeds, against the figure
+<code>docs/DREAM-CHUNK.md</code> records. Three dots is not a lot &mdash; but
+it is enough to separate a claim that lands in the same place every time from
+one that lands wherever the seed puts it, and two of these are the second
+kind.</p>
+</div>
+
+<figure>
+<div class="legend">
+  <span><i style="background:var(--s1)"></i>measured, one run of 40
+  nights</span>
+  <span><i style="border:2px solid var(--base);background:var(--page)"></i>
+  recorded in docs/DREAM-CHUNK.md</span>
+</div>
+<svg viewBox="0 0 1000 326" role="img" aria-label="each comparison measured in three independent runs, against the recorded figure"><line x1="311.9" y1="12" x2="311.9" y2="284" stroke="var(--hair)"/><text x="311.9" y="314" text-anchor="middle">-30%</text><line x1="459.1" y1="12" x2="459.1" y2="284" stroke="var(--hair)"/><text x="459.1" y="314" text-anchor="middle">-20%</text><line x1="606.3" y1="12" x2="606.3" y2="284" stroke="var(--hair)"/><text x="606.3" y="314" text-anchor="middle">-10%</text><line x1="753.5" y1="12" x2="753.5" y2="284" stroke="var(--hair)"/><text x="753.5" y="314" text-anchor="middle">+0%</text><line x1="900.7" y1="12" x2="900.7" y2="284" stroke="var(--hair)"/><text x="900.7" y="314" text-anchor="middle">+10%</text><line x1="753.5" y1="12" x2="753.5" y2="284" stroke="var(--rule)" stroke-width="1.5"/><text class="nm" x="278" y="42.0" text-anchor="end">Planner vs ladder</text><line x1="358.9" y1="37.0" x2="402.2" y2="37.0" stroke="var(--s1)" stroke-width="2" opacity="0.32"/><circle cx="364.9" cy="37.0" r="6.5" fill="var(--page)" stroke="var(--base)" stroke-width="2" data-tip="recorded in docs/DREAM-CHUNK.md<br><b>-26.4%</b>"/><circle cx="358.9" cy="37.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 3 &middot; 40 nights<br><b>-26.8%</b> &middot; p &lt; 0.001"/><circle cx="376.7" cy="37.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 11 &middot; 40 nights<br><b>-25.6%</b> &middot; p &lt; 0.001"/><circle cx="402.2" cy="37.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 23 &middot; 40 nights<br><b>-23.9%</b> &middot; p &lt; 0.001"/><text x="278" y="58.0" text-anchor="end">every run agrees in sign</text><text class="nm" x="278" y="88.0" text-anchor="end">Heuristic vs ladder</text><line x1="492.4" y1="83.0" x2="535.5" y2="83.0" stroke="var(--s1)" stroke-width="2" opacity="0.32"/><circle cx="444.4" cy="83.0" r="6.5" fill="var(--page)" stroke="var(--base)" stroke-width="2" data-tip="recorded in docs/DREAM-CHUNK.md<br><b>-21.0%</b>"/><circle cx="535.5" cy="83.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 3 &middot; 40 nights<br><b>-14.8%</b> &middot; p &lt; 0.001"/><circle cx="492.4" cy="83.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 11 &middot; 40 nights<br><b>-17.7%</b> &middot; p &lt; 0.001"/><circle cx="517.5" cy="83.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 23 &middot; 40 nights<br><b>-16.0%</b> &middot; p &lt; 0.001"/><text x="278" y="104.0" text-anchor="end">every run agrees in sign</text><text class="nm" x="278" y="134.0" text-anchor="end">Planner vs heuristic</text><line x1="546.2" y1="129.0" x2="616.3" y2="129.0" stroke="var(--s1)" stroke-width="2" opacity="0.32"/><circle cx="653.4" cy="129.0" r="6.5" fill="var(--page)" stroke="var(--base)" stroke-width="2" data-tip="recorded in docs/DREAM-CHUNK.md<br><b>-6.8%</b>"/><circle cx="546.2" cy="129.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 3 &middot; 40 nights<br><b>-14.1%</b> &middot; p &lt; 0.001"/><circle cx="612.8" cy="129.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 11 &middot; 40 nights<br><b>-9.6%</b> &middot; p = 0.036"/><circle cx="616.3" cy="129.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 23 &middot; 40 nights<br><b>-9.3%</b> &middot; p = 0.005"/><text x="278" y="150.0" text-anchor="end">every run agrees in sign</text><text class="nm" x="278" y="180.0" text-anchor="end">Planner vs heuristic, memoryless</text><line x1="606.4" y1="175.0" x2="863.1" y2="175.0" stroke="var(--s1)" stroke-width="2" opacity="0.32"/><circle cx="753.5" cy="175.0" r="6.5" fill="var(--page)" stroke="var(--base)" stroke-width="2" data-tip="recorded in docs/DREAM-CHUNK.md<br><b>+0.0%</b>"/><circle cx="606.4" cy="175.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 3 &middot; 40 nights<br><b>-10.0%</b> &middot; p &lt; 0.001"/><circle cx="863.1" cy="175.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 11 &middot; 40 nights<br><b>+7.4%</b> &middot; p = 0.151"/><circle cx="647.4" cy="175.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 23 &middot; 40 nights<br><b>-7.2%</b> &middot; p = 0.029"/><text x="278" y="196.0" text-anchor="end">runs disagree in sign</text><text class="nm" x="278" y="226.0" text-anchor="end">Planner, bound off, vs ladder</text><line x1="794.1" y1="221.0" x2="849.7" y2="221.0" stroke="var(--s1)" stroke-width="2" opacity="0.32"/><circle cx="849.7" cy="221.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 3 &middot; 40 nights<br><b>+6.5%</b> &middot; p = 0.109"/><circle cx="797.0" cy="221.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 11 &middot; 40 nights<br><b>+3.0%</b> &middot; p = 0.401"/><circle cx="794.1" cy="221.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 23 &middot; 40 nights<br><b>+2.8%</b> &middot; p = 0.554"/><text x="278" y="242.0" text-anchor="end">every run agrees in sign</text><text class="nm" x="278" y="272.0" text-anchor="end">Heuristic exploit-only, vs ladder</text><line x1="499.8" y1="267.0" x2="511.4" y2="267.0" stroke="var(--s1)" stroke-width="2" opacity="0.32"/><circle cx="506.7" cy="267.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 3 &middot; 40 nights<br><b>-16.8%</b> &middot; p &lt; 0.001"/><circle cx="499.8" cy="267.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 11 &middot; 40 nights<br><b>-17.2%</b> &middot; p &lt; 0.001"/><circle cx="511.4" cy="267.0" r="5.5" fill="var(--s1)" stroke="var(--page)" stroke-width="2" data-tip="seed 23 &middot; 40 nights<br><b>-16.4%</b> &middot; p &lt; 0.001"/><text x="278" y="288.0" text-anchor="end">every run agrees in sign</text></svg>
+<figcaption>Percentage change in upset time against the stated baseline;
+negative is better. The last two rows have no recorded figure &mdash; they are
+ablations introduced by this report.</figcaption>
+</figure>
+
+<div class="callout">
+<p class="small"><b>What the numbers support, stated narrowly.</b> The planner
+is better than the ladder, reliably and by about a quarter of the upset time.
+It is better than the heuristic on an infant that settles cumulatively, and
+that margin is now large enough to state. Almost all of it depends on one
+constant, and the mechanism our documentation credits for that constant is
+contradicted by its own control. The honest summary is that we know the bound
+matters far more than we know why.</p>
+</div>
+
+<div class="col">
+<h2>The numbers</h2>
+<h3>Infant with memory &mdash; the shipped configuration, seed 3</h3>
+</div>
+<table><thead><tr><th>algorithm</th><th>upset min/night</th><th>crying min/night</th><th>vs ladder</th><th>95% CI</th><th>paired t</th><th>nights better</th></tr></thead><tbody><tr><td>Report ladder</td><td class="m">20.08</td><td class="m">6.36</td><td class="m">&mdash;</td><td class="m">&mdash;</td><td class="m">&mdash;</td><td class="m">&mdash;</td></tr><tr><td>Reflex heuristic</td><td class="m">17.11</td><td class="m">4.17</td><td class="m" class="win">-14.8%</td><td class="m">[-21.7, -7.9]</td><td class="m">-4.4 &middot; p &lt; 0.001</td><td class="m">30</td></tr><tr><td>DREAM-Chunk planner</td><td class="m">14.70</td><td class="m">2.88</td><td class="m" class="win">-26.8%</td><td class="m">[-32.7, -20.9]</td><td class="m">-9.2 &middot; p &lt; 0.001</td><td class="m">36</td></tr><tr><td>Planner, bound off</td><td class="m">21.39</td><td class="m">7.99</td><td class="m">+6.5%</td><td class="m">[-1.5, +14.6]</td><td class="m">1.6 &middot; p = 0.109</td><td class="m">16</td></tr><tr><td>Heuristic, MAX_RUN lifted</td><td class="m">17.09</td><td class="m">4.41</td><td class="m" class="win">-14.9%</td><td class="m">[-22.1, -7.7]</td><td class="m">-4.2 &middot; p &lt; 0.001</td><td class="m">30</td></tr><tr><td>Heuristic, exploit-only</td><td class="m">16.71</td><td class="m">4.17</td><td class="m" class="win">-16.8%</td><td class="m">[-23.2, -10.4]</td><td class="m">-5.3 &middot; p &lt; 0.001</td><td class="m">33</td></tr></tbody></table><p class="note">Paired over the same 40 infants; the CI and t are on the per-night difference, not on the two means separately.</p>
+<div class="col"><h3>Memoryless infant &mdash; the pre-2026-08 model, seed
+3</h3></div>
+<table><thead><tr><th>algorithm</th><th>upset min/night</th><th>crying min/night</th><th>vs ladder</th><th>95% CI</th><th>paired t</th><th>nights better</th></tr></thead><tbody><tr><td>Report ladder</td><td class="m">18.92</td><td class="m">5.71</td><td class="m">&mdash;</td><td class="m">&mdash;</td><td class="m">&mdash;</td><td class="m">&mdash;</td></tr><tr><td>Reflex heuristic</td><td class="m">16.05</td><td class="m">4.11</td><td class="m" class="win">-15.2%</td><td class="m">[-20.6, -9.8]</td><td class="m">-5.7 &middot; p &lt; 0.001</td><td class="m">32</td></tr><tr><td>DREAM-Chunk planner</td><td class="m">14.45</td><td class="m">3.65</td><td class="m" class="win">-23.7%</td><td class="m">[-30.1, -17.2]</td><td class="m">-7.4 &middot; p &lt; 0.001</td><td class="m">33</td></tr><tr><td>Planner, bound off</td><td class="m">20.46</td><td class="m">6.85</td><td class="m">+8.1%</td><td class="m">[+1.3, +14.9]</td><td class="m">2.4 &middot; p = 0.021</td><td class="m">13</td></tr></tbody></table><p class="note">Paired over the same 40 infants; the CI and t are on the per-night difference, not on the two means separately.</p>
+
+<div class="col">
+<h2>What this does not show</h2>
+<ul>
+<li class="small">Every number here is simulation. The infant is
+<code>perception/baby.py</code>, not an infant. Its habituation constants are
+the same ones the planner's world model assumes exist &mdash; though not the
+same values, which the policy never reads.</li>
+<li class="small">Three seeds is a weak replication. It is enough to catch a
+sign that flips; it is not enough to put a confidence interval on the spread
+between runs.</li>
+<li class="small">The exploit-only heuristic is a constructed control, not a
+flag that ships: it pins the rank the brain sees so the taught strategy always
+takes its exploit branch. The machine's own escalation and every safety
+decision are unchanged &mdash; but it is a larger intervention than setting one
+constant to zero, and the two ablations are not the same size.</li>
+<li class="small">The 2&times;2 varies one setting at a time against a fixed
+baseline. It is not a full factorial with an interaction term.</li>
+<li class="small">The safety layer is identical in every arm and is never
+ablated. The advisor only ever suggests a motion; <code>CradleMachine</code>
+validates it and keeps every safety decision.</li>
+</ul>
+
+<h2>Reproducing it</h2>
+<p class="small">One command, no hardware:</p>
+<p class="small"><code>python3 tools/ablation.py --nights 40 --seeds
+3,11,23</code></p>
+<p class="small">Each arm runs through <code>state_figure.run_night</code>, so
+this page and <code>data/states.html</code> measure the same loop rather than
+two copies of it.</p>
+</div>
+
+<footer>
+Generated by <b>tools/ablation.py</b> &middot; 40 nights &times;
+30 simulated minutes &times;
+10 arm-plant combinations &times;
+3 seeds = 1,200 nights &middot; pace 10 s
+&middot; wall clock 97 s<br>
+Method, and the measurements this re-runs: <b>docs/DREAM-CHUNK.md</b>.
+Trace figures: <b>data/states.html</b>.
+</footer>
+</div>
+<div id="tip" role="status"></div>
+<script>
+(function(){
+ var tip=document.getElementById('tip');
+ function show(e){var t=e.target.getAttribute('data-tip');if(!t)return;
+   tip.innerHTML=t;tip.style.display='block';move(e);}
+ function move(e){var p=14,w=tip.offsetWidth,h=tip.offsetHeight;
+   var x=e.clientX+p,y=e.clientY+p;
+   if(x+w>innerWidth-8)x=e.clientX-w-p;
+   if(y+h>innerHeight-8)y=e.clientY-h-p;
+   tip.style.left=x+'px';tip.style.top=y+'px';}
+ document.addEventListener('mouseover',show);
+ document.addEventListener('mousemove',function(e){
+   if(tip.style.display==='block')move(e);});
+ document.addEventListener('mouseout',function(){tip.style.display='none';});
+})();
+</script>
+</body></html>

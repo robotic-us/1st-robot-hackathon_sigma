@@ -46,15 +46,20 @@ ARMS = (
 # The simulation
 # --------------------------------------------------------------------------- #
 def run_night(seed: int, personality: Personality, arm: str,
-              cumulative: bool = True, trace: bool = False) -> dict:
-    """One night through the real closed loop.  Same seed = the same infant."""
+              cumulative: bool = True, trace: bool = False,
+              brain=None) -> dict:
+    """One night through the real closed loop.  Same seed = the same infant.
+
+    ``brain`` overrides how the arm's brain is built (tools/ablation.py hands
+    in de-tuned ones); the loop stays here so no measurement runs a copy."""
     baby = VirtualBaby(seed=seed, personality=personality,
                        cumulative=cumulative)
     engine = MotionEngine()
     machine = CradleMachine(engine, check_every_s=PACE_S, give_up=False)
     policy = None
     if arm != "ladder":
-        policy = SoothePolicy(DreamBrain() if arm == "planner" else ReflexBrain())
+        make = brain or (DreamBrain if arm == "planner" else ReflexBrain)
+        policy = SoothePolicy(make())
         machine.advisor = policy.pick
 
     t, samples, held = 0.0, [], {s: 0.0 for s in STATES}
