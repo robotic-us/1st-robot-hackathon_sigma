@@ -1,29 +1,9 @@
 #!/usr/bin/env python3
 """The infant's state through the night, under all four decision algorithms.
 
-One figure, three panels, self-contained HTML with inline SVG (no build step,
-no CDN -- the demo LAN has neither):
-
-1. **Small multiples** -- the same infant, the same seed, the same hidden
-   temperament, lived through once per algorithm.  State rides a shared ordinal axis
-   (sleep at the bottom, crying at the top) so the trace is read by *height*;
-   the comfort bands behind it are recessive reference, never the encoding.
-2. **How much of the night was spent upset** -- the mean over N nights, because
-   one night is an anecdote.  Crying is the darker step of the same ramp.
-3. **The table** -- every number the panels draw, for anyone who cannot use the
-   picture or wants to check it.
-
-The four arms, in the order they were built:
-
-    ladder   the evidence report's fixed escalation, no brain at all
-    reflex   core/policy.py's taught heuristic
-    planner  the DREAM-Chunk matcher: dream all 26 candidates, take the best
-
-Everything goes through the real CradleMachine and MotionEngine -- same gates,
-same envelope, same ladder -- so the only difference between lanes is who
-chooses the motion.
-
-Run::
+Three panels -- a state trace per algorithm, mean upset over N nights, the
+numbers -- as self-contained HTML with inline SVG (the demo LAN has no CDN).
+Every arm runs the real CradleMachine, so only the choice of motion differs.
 
     python3 tools/state_figure.py                    # data/states.html
     python3 tools/state_figure.py --nights 20 --seed 4
@@ -37,7 +17,7 @@ import os
 import random
 import sys
 
-if __package__ in (None, ""):      # run directly from tools/
+if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.cradle import CradleMachine, MotionEngine
@@ -173,9 +153,9 @@ def esc(text) -> str:
 
 def lanes_svg(runs: dict, night_s: float) -> str:
     """Four small multiples: state (ordinal y) against time (shared x)."""
-    W, LANE_H, GAP = 940, 96, 52     # the gap has to clear the title row
+    W, LANE_H, GAP = 940, 96, 52
     LEFT, RIGHT, TOP = 74, 16, 26
-    SUBX = LEFT + 190                # fixed column, so long titles cannot run
+    SUBX = LEFT + 190
     H = TOP + (len(ARMS) - 1) * (LANE_H + GAP) + LANE_H + 26
     plot_w = W - LEFT - RIGHT
     row_h = LANE_H / len(STATES)
@@ -186,8 +166,6 @@ def lanes_svg(runs: dict, night_s: float) -> str:
     for lane, (key, title, sub) in enumerate(ARMS):
         y0 = TOP + lane * (LANE_H + GAP)
         run = runs[key]
-        # Recessive reference, not the encoding -- and the shading means
-        # something: everything above the line is the infant upset.
         upset_top = y0
         upset_h = row_h * 2
         out.append(f'<rect x="{LEFT}" y="{upset_top:.1f}" width="{plot_w}" '
@@ -204,7 +182,6 @@ def lanes_svg(runs: dict, night_s: float) -> str:
         out.append(f'<text class="sub" x="{SUBX}" y="{y0 - 12:.1f}">'
                    f'{esc(sub)}</text>')
 
-        # the trace: one ink, height carries the state
         trace = run["trace"]
         step = plot_w / max(1, len(trace) - 1)
         d = []
@@ -219,7 +196,6 @@ def lanes_svg(runs: dict, night_s: float) -> str:
         out.append(f'<path d="{" ".join(d)}" fill="none" stroke="var(--trace)" '
                    f'stroke-width="2" stroke-linejoin="round"/>')
 
-        # upset stretches get a hover target with the timing
         run_start = None
         for i, s in enumerate(trace + [0]):
             upset = s >= 2 if i < len(trace) else False
@@ -238,15 +214,13 @@ def lanes_svg(runs: dict, night_s: float) -> str:
                            f'fill="transparent" data-tip="{tip}"/>')
                 run_start = None
 
-        # per-lane headline -- said to be *this night*, since the bars below
-        # carry the average and the two will not agree
+        # per-lane headline: *this night*, since the bars below carry the average
         out.append(f'<text class="val" x="{W - RIGHT}" y="{y0 - 12:.1f}" '
                    f'text-anchor="end">this night: {run["upset_min"]:.1f} min '
                    f'upset &#183; {run["cry_min"]:.1f} crying</text>')
         out.append(f'<line x1="{LEFT}" y1="{y0 + LANE_H:.1f}" x2="{W - RIGHT}" '
                    f'y2="{y0 + LANE_H:.1f}" stroke="var(--hair)"/>')
 
-    # one shared x axis under the last lane, on round minutes
     ylast = TOP + (len(ARMS) - 1) * (LANE_H + GAP) + LANE_H
     total_min = night_s / 60.0
     tick = 10 if total_min > 20 else 5
@@ -261,8 +235,7 @@ def lanes_svg(runs: dict, night_s: float) -> str:
 
 
 def bars_svg(means: dict, nights: int) -> str:
-    """Upset minutes per night as fussing + crying -- a real stack, so the two
-    segments sum to the bar rather than one sitting inside the other."""
+    """Upset minutes per night, stacked: the segments sum to the bar."""
     W, ROW, GAP, LEFT, RIGHT = 940, 26, 16, 168, 130
     H = len(ARMS) * (ROW + GAP)
     plot_w = W - LEFT - RIGHT
@@ -283,7 +256,7 @@ def bars_svg(means: dict, nights: int) -> str:
         out.append(f'<rect x="{LEFT}" y="{y}" width="{w_fuss:.1f}" '
                    f'height="{ROW}" rx="4" fill="var(--upset)" '
                    f'data-tip="{tip_f}"/>')
-        # +2 for the surface gap the method asks for between stacked segments
+        # +2: the gap between stacked segments
         tip_c = (f"{esc(title)}<br><b>{m['cry_min']:.1f} min</b> crying"
                  f"<br>mean of {nights} nights")
         out.append(f'<rect x="{LEFT + w_fuss + 2:.1f}" y="{y}" '
@@ -355,7 +328,7 @@ Generated by <b>tools/state_figure.py</b> &middot; seed {seed} &middot;
 {nights} nights &times; {NIGHT_S / 60:.0f} simulated minutes &middot;
 pace {PACE_S:.0f}s &middot; infant model: {model}<br>
 Temperament of the traced night: {esc(personality.describe())}<br>
-The algorithms and the measurement behind them: <b>docs/dream-chunk.md</b>.
+The algorithms and the measurement behind them: <b>docs/DREAM-CHUNK.md</b>.
 </footer>
 <div id="tip" role="status"></div>
 <script>{TIP_JS}</script>

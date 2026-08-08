@@ -1,26 +1,72 @@
-모션 1~10 교시
+# IDEA.md — personalised soothing
 
-우리 애기 (5번 제일 좋아함 / 3 7 완전 X / 2모션 하다가 4모션으로 가는걸 좋아함) 이런 정해진 성격이었음
+The idea the policy layer implements: every baby has a *taste* in motion, the
+cradle does not know it, and one machine lives with one baby — so it can
+afford to learn.
 
-근데 LLM 은 우리 애기의 성격을 모름 그냥 그때그때 표정 / 해피한지 아닌지 만 받음
+## The premise
 
-그래서 우리가 애기의 반응 시퀀스 시나리오들을 생성함
+The baby has a fixed hidden temperament: it loves some motions, hates others,
+and even prefers certain motion *transitions*. The decision layer never sees
+that temperament. All it observes is the baby's visible state, moment to
+moment, ordered as a happiness scale that acts as the reward signal:
 
-행복 > 울음1 > 울음2 > 울음3 > 불행 (이게 LLM 이 인식하는 애기의 행복지수 순서임 말하자면 보상)
+```
+happy > fuss > cry-1 > cry-2 > inconsolable
+```
 
-처음에 행복 -> 울음2 (LLM 이 3번 취해봄) -> 불행으로 점프 (LLM 은 목표 지점에서 벗어난걸 인지함 전략을 수정하기로 함 --> LLM 이 5번 시도해봄) -> 울음1 (LLM 이 5번이 좋다는걸 학습함) --> 행복( LLM 은 정지를 명령)
+A soothing episode then reads like this: the baby fusses, the brain tries a
+motion, the state *worsens* — the brain recognises it is moving away from the
+goal, revises its strategy and tries another — the state improves, the brain
+learns that this motion works for this baby, the baby settles, the brain
+commands stop.
 
+Because it is one machine per baby, this is personalised learning: after a
+few nights the cradle already knows what works and settles the baby quickly.
 
-그래서 여러가지의 시나리오를 우리가 만들고 LLM 에게 학습 시킴
+## Where each piece landed in the code
 
-<학습이 잘 되었는지 확인 방법>
-그 다음에 시나리오에 없는 시퀀스를 제시했을때 LLM 이 어떤 모션을 하라고 명령하는지를 확인함
+| Idea | Implementation |
+|---|---|
+| The hidden temperament | `perception/baby.py::Personality` — feature-level tastes (shape/size/speed/vibe), id-level love/hate, habituation (motions wear out with use) and a mood cycle. Enabled with `serve.py --baby --personality`; retuned live from the dashboard (`/taste`) |
+| The happiness scale | happiness ranks in `core/policy.py` — the outcome a step is credited with |
+| The brain that only sees state | `SoothePolicy` with interchangeable brains: `reflex` (local heuristic), `dream` (the DREAM-Chunk planner, `docs/DREAM-CHUNK.md`), `ollama` / `claude` (LLMs). The brain only ever *advises*; `CradleMachine` validates every pick and keeps all safety decisions |
+| The taught scenario corpus | `tools/make_scenarios.py` → `data/scenarios.jsonl` — sessions the Claude brain gets few-shot |
+| Held-out validation | present a sequence not in the corpus and check which motion the brain commands; measured end-to-end by `tools/learn_report.py` (learning policy vs fixed ladder, same baby) and `tools/state_figure.py` |
+| The taste-selection webapp | the dashboard: pick the baby's taste, watch the decision feed and the learned-preferences panel respond |
+| The baby image that vision reads | `web/baby.js` draws the state as the Nubzuki mascot on the cradle iPad; `perception/nubzuki.py` reads it back through a camera |
 
---> 발표할때는 애기 한명만 키우는거 아니냐 / 1인1 기계임 / 개인화된 학습임 --> 더 굿 --> 5일밤 뒤면 바로 잘 진정시킴
+## Appendix — the original brainstorm (translated)
 
-@ Webapp
-User: Select Baby's Taste of Motion -> Motion Play or Sim -> LLM Agent or Other Algorithm Changes the Motion to Fit the Baby's Feeling
+Kept as written on day 2; the table above is what became of it.
 
-Computer Vision
-Input / Image and Audio
-How / Tablet Img or Virtual Baby -> Baby img changer -> How?? Just like the webapp circle(?) thing
+> Teach motions 1–10. Our baby had a fixed personality — loves motion 5,
+> completely rejects 3 and 7, likes going from motion 2 to motion 4.
+>
+> But the LLM does not know our baby's personality. It only receives, moment
+> to moment, the expression / whether the baby is happy or not.
+>
+> So we generate scenarios of the baby's reaction sequences.
+>
+> happy > cry-1 > cry-2 > cry-3 > unhappy — this is the happiness order the
+> LLM perceives; effectively the reward.
+>
+> Example: starts happy → cry-2 (the LLM tries motion 3) → jumps to unhappy
+> (the LLM notices it has left the goal and decides to revise its strategy →
+> tries motion 5) → cry-1 (the LLM learns that 5 is good) → happy (the LLM
+> commands stop).
+>
+> We create many such scenarios and teach them to the LLM. To check the
+> learning: present a sequence that is *not* in the scenarios and see which
+> motion the LLM commands.
+>
+> For the presentation — "aren't you only raising one baby?" — it is one
+> machine per baby; the learning is personalised — even better — after five
+> nights it soothes the baby right away.
+>
+> Webapp: the user selects the baby's taste in motion → a motion plays (or
+> sim) → the LLM agent or another algorithm changes the motion to fit the
+> baby's feeling.
+>
+> Computer vision: input is image and audio. A tablet image or a virtual
+> baby → a baby-image changer → like the webapp circle thing.

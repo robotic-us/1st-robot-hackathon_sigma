@@ -1,35 +1,12 @@
 #!/usr/bin/env python3
 """The IDEA.md soothing policy: a learner that picks which motion to try.
 
-docs/IDEA.md in runnable form.  Every infant has a fixed, hidden motion
-personality (loves one entry, hates a couple, never changes), but the policy
-is only shown the happiness ladder -- 행복 > 울음1 > 울음2 > 울음3 > 불행,
-here ranks 0..4 over the machine's 0..1 distress input.  From that reward
-alone it must explore the P1 candidates, notice what worsens, exploit what
-works and say STOP at HAPPY.
+It sees only the happiness ladder (0..4 over the machine's 0..1 distress) and
+only *advises*: ``CradleMachine.advisor`` validates every pick, keeps every
+safety decision, and falls back to the report ladder when an answer is useless.
 
-The policy is an *advisor*, never a commander: ``CradleMachine.advisor``
-asks it which P1 motion a trial should use, validates the answer, and keeps
-every safety decision (when to trial, escalate, abort, taper, alert) for
-itself.  A useless or unsafe answer simply falls back to the report ladder.
-
-Three interchangeable brains produce the answer from the same prompt/history
-(switchable live from the dashboard via serve.py's /policy endpoint):
-
-* ``ReflexBrain``   the taught strategy as plain code -- deterministic,
-                    offline, doubles as the test double and the scenario
-                    generator's teacher (tools/make_scenarios.py).
-* ``OllamaBrain``   the same decision asked of a local LLM over Ollama's
-                    HTTP API (stdlib urllib; OLLAMA_URL / OLLAMA_MODEL).
-* ``ClaudeBrain``   the same decision asked of Claude over the Anthropic
-                    SDK (paid API; needs ANTHROPIC_API_KEY).
-
-Run::
-
-    python3 serve.py --baby --personality --policy reflex
-    python3 serve.py --baby --personality --policy ollama   # local LLM
-    python3 serve.py --baby --personality --policy claude   # ANTHROPIC_API_KEY
-    python3 tests.py policy
+Run::  python3 serve.py --baby --personality --policy reflex  # or dream|claude
+       python3 tests.py policy
 """
 
 from __future__ import annotations
@@ -43,29 +20,20 @@ from typing import Callable, Optional
 
 from core.cradle import CALM_LEVEL, CRY_LEVEL, N_CANDIDATES, N_LIBRARY
 
-# The reward ladder of docs/IDEA.md, discretised from the 0..1 distress the
-# machine already runs on.  Band edges reuse the report thresholds plus the
-# virtual baby's own FUSS/CRY base levels (perception/baby.py STATES).
+# docs/IDEA.md's reward ladder over the machine's 0..1 distress; the edges are
+# the report thresholds plus the virtual baby's own FUSS/CRY base levels.
 RANKS = ("HAPPY", "FUSS", "CRY1", "CRY2", "MISERABLE")
 BANDS = (CALM_LEVEL, 0.30, CRY_LEVEL, 0.62)
 
-# The search space: the team's 34-motion system (docs/motion-system.png),
-# minus the parked state and the self-stopping decay entries.  Each
-# candidate carries its features -- shape, size, speed, tremble -- which is
-# what lets a brain generalise ("slow+large works on this baby") instead of
-# memorising 26 ids one by one.
+# The search space: the team's 34-motion system (docs/motion-system.png), minus
+# parked and decay.  Each carries its features, so a brain can generalise.
 CANDIDATES = N_CANDIDATES
 
 
 def restrict_candidates(allowed) -> tuple:
-    """Shrink every brain's decision space to ``allowed``.
-
-    For the wired demo: the robot's SD card holds a *subset* of the library,
-    and a brain that decides a motion the card cannot play splits the demo in
-    half -- the screen rocks, the rig stands still.  One module-wide list is
-    read at call time by every brain, so one restriction here constrains them
-    all.  Returns the new tuple; raises if nothing survives.
-    """
+    """Shrink the brains' decision space to ``allowed`` -- the robot's SD card
+    holds only a subset, and one module-wide list is read by every brain.
+    Returns the new tuple; raises if nothing survives."""
     global CANDIDATES
     keep = tuple(c for c in N_CANDIDATES if c in set(allowed))
     if not keep:
@@ -75,8 +43,7 @@ def restrict_candidates(allowed) -> tuple:
 FEATURES = {m.id: {"shape": m.shape, "size": m.size, "speed": m.speed,
                    "vibe": "vibe" if m.vibe else "plain"}
             for m in N_LIBRARY}
-# Cold-start exploration order: one calm representative of each family
-# first (wide slow strokes), then the fast ones, then the tremble variants.
+# Cold-start order: one calm representative per family, then fast, then vibe.
 EXPLORE = ("N05", "N10", "N16", "N20", "N24", "N27", "N30", "N33", "N13",
            "N18", "N21", "N03", "N08", "N14", "N19", "N23", "N26", "N29",
            "N32", "N06", "N11", "N17", "N02", "N04", "N09", "N15")
@@ -189,21 +156,10 @@ def load_scenarios(path: Path = SCENARIOS_PATH, limit: int = 6) -> list[dict]:
 class ReflexBrain:
     """The taught strategy as code: experiment, generalise, exploit, stop.
 
-    Three rules shape it:
-
-    * **Explore while fussing, exploit while crying.**  A mild fuss (rank 1)
-      is cheap experiment time -- a winner is kept at most ``MAX_RUN`` times
-      in a row before something untried gets a turn, which is what keeps one
-      lucky motion from monopolising the whole night.  A crying baby
-      (rank >= 2) always gets the best known remedy.
-    * **Generalise over features.**  Untried motions are ranked by the mean
-      outcome of their shape/size/speed/tremble values across everything
-      tried so far -- learn "wide and slow works" from N05 and N16 already
-      points at N20 and N27.
-    * **Recent outcomes only.**  Scores are each motion's last three
-      attempts, because habituation is real: a worn-out favourite must fall
-      out of favour, and a rested one must be allowed back.
-    """
+    Explore while fussing (rank 1), exploit while crying (rank >= 2); a winner
+    is kept at most ``MAX_RUN`` times in a row, which is what stops one lucky
+    motion monopolising the night.  Untried motions are ranked by the mean
+    outcome of their features; scores use the last three attempts only."""
 
     RECENT = 3
     MAX_RUN = 2
@@ -274,12 +230,8 @@ BRAIN_SYSTEM = (
 class OllamaBrain:
     """The same decision asked of a *local* LLM over Ollama's HTTP API.
 
-    stdlib-only (urllib), so it costs no dependency and no money; point it
-    at another host with OLLAMA_URL.  Failures return "" -- the policy
-    then answers None and the machine falls back to the report ladder, so
-    a missing/slow local model can never stall the nursery loop (the one
-    cost is this call's own timeout, bounded well under the machine's
-    30 s checkpoint cadence).
+    stdlib-only (urllib; OLLAMA_URL / OLLAMA_MODEL).  Failures return "" and
+    the machine falls back to the report ladder, so a slow model never stalls.
     """
 
     TIMEOUT_S = 10.0
@@ -315,11 +267,8 @@ class OllamaBrain:
 
 
 class ClaudeBrain:
-    """The same decision asked of Claude (Anthropic SDK, lazy import).
-
-    Failures return "" -- the policy then answers None and the machine
-    falls back to the report ladder, so a network hiccup can never stall
-    the nursery loop.
+    """The same decision asked of Claude (Anthropic SDK, lazy import); failures
+    return "" and the machine falls back to the report ladder.
     """
 
     def __init__(self, model: str = "claude-opus-5") -> None:
@@ -350,10 +299,8 @@ class ClaudeBrain:
 
 
 def make_brain(kind: str, model: Optional[str] = None):
-    """'reflex' | 'dream' | 'ollama' | 'claude' -> a brain, or raise with a why.
-
-    The one place serve.py's /policy switcher and --policy flag resolve a
-    name; keep the vocabulary here so the dashboard and CLI never drift.
+    """'reflex' | 'dream' | 'ollama' | 'claude' -> a brain, or raise with a why
+    -- the one place /policy and --policy resolve a name, so they never drift.
     """
     kind = (kind or "").lower()
     if kind == "reflex":
@@ -369,76 +316,41 @@ def make_brain(kind: str, model: Optional[str] = None):
 
 
 # --------------------------------------------------------------------------- #
-# DREAM-Chunk, with the infant as the plant (docs/dream-chunk.md)
+# DREAM-Chunk, with the infant as the plant (docs/DREAM-CHUNK.md)
 # --------------------------------------------------------------------------- #
 @dataclass
 class DreamConfig:
-    """Knobs, in the shape docs/dream-chunk.md's own tuning table uses."""
+    """Knobs, in the shape docs/DREAM-CHUNK.md's own tuning table uses."""
 
     tau_s: float = 8.0       # expected soothing time constant
     prior_gain: float = 0.35 # untried motion: expect this much of the way down
-    # The unit of a meaningful comfort change: the fuss-to-cry span.  Scoring
-    # a play as (y0 - y_end) / y0 instead looks reasonable and is not -- the
-    # machine only asks for a motion while the infant is fussing, so y0 is
-    # small, improvement is capped at +1 and worsening is unbounded.  Measured
-    # over an hour that bias alone drove the mean residual to -0.09 against a
-    # median of +0.04 and vetoed 21 of 26 motions, 19 of them ones the infant
-    # genuinely liked.  A fixed scale is symmetric; a ratio is not.
+    # the unit of a meaningful comfort change: the fuss-to-cry span, fixed
     scale: float = 0.33
-    # What the policy assumes about wearing a motion out.  These are its own
-    # assumption, deliberately NOT read from perception/baby.py -- the model
-    # has to work on an infant whose constants nobody knows.
+    # habituation as the policy assumes it -- NOT read from perception/baby.py
     wear_s: float = 90.0     # engaged seconds to wear a motion out
     rest_s: float = 240.0    # recovery constant while it is not playing
     wear_floor: float = 0.25 # even worn out, a motion keeps this much effect
     veto_n: int = 5          # samples before a motion may be vetoed at all
-    # Taste is estimated hierarchically -- per *feature* first, per id second.
-    # A 90-minute session yields ~175 plays over 26 motions, so a single id
-    # gets ~7 noisy samples and its mean is worthless (measured rank
-    # correlation with the infant's real taste: +0.03).  The same plays give
-    # every feature *value* ten times that, and the features are what the
-    # taste is actually made of: pooling there scores +0.44, and shrinking the
-    # id estimate toward its features by n/(n+K) reaches +0.56.
+    # hierarchical taste: one id gets ~7 noisy plays a session, so its own mean
+    # is shrunk toward its (much better evidenced) features by n/(n+K)
     shrink_k: float = 40.0
-    # Exploration, as a confidence bound rather than a flat bonus for being
-    # untried.  The estimator is honest but *low-contrast*: measured taste
-    # spans about [-0.23, +0.09] where the infant's real gains span [0, 2.5],
-    # so a ranking that is only ~0.6 correlated gets exploited as if it were
-    # certain, the cradle settles on one motion and the infant habituates to
-    # it.  Rotation is what actually soothes -- ReflexBrain's MAX_RUN gets
-    # -21% against the ladder on rotation alone -- so the planner has to keep
-    # a reason to move on.  c * sqrt(ln(N)/n) is that reason, and it fades as
-    # the evidence for a motion accumulates.
+    # exploration as a confidence bound c * sqrt(ln(N)/n), not a flat untried
+    # bonus: the estimate is honest but low-contrast, so the bound is what
+    # keeps the cradle rotating.  Don't drop it without re-measuring.
     explore_c: float = 0.06
 
 
 class WorldModel:
     """What this infant makes of each motion -- DREAM-Chunk's world model,
-    re-anchored on the baby instead of the arm.
+    re-anchored on the baby (docs/DREAM-CHUNK.md): the state is distress, the
+    sensor the machine's own 0..1 level.  Keeping taste and wear apart is the
+    whole point -- "played until it stopped working" is not "disliked".
 
-    ``docs/dream-chunk.md`` maps DREAM-Chunk onto phorce motion slots; that
-    version dreams the *arm*, and the arm is not what we are trying to
-    improve.  Here the state is distress, the sensor is the judge's live 0..1
-    level -- the same one the machine runs on -- and what is learned is:
-
-    ``taste``   what the infant thinks of a motion.  Fixed, per docs/IDEA.md,
-                and estimated hierarchically: pooled over the motion's
-                *features* first, its own id second, because a session gives
-                one id ~7 noisy plays and each feature value ten times that.
-    ``wear``    how worn out a motion is right now.  Transient, and computed
-                from this model's own play history rather than learned -- it
-                knows what it played and for how long.
-    ``pairs``   what a motion is worth *after* another one: docs/IDEA.md's
-                combo, the one preference a per-motion score cannot hold.
-
-    Keeping taste and wear apart is the whole point.  Recording "played until
-    it stopped working" as "disliked" is permanent, and a motion never offered
-    again never gets to show it recovered -- an hour of that vetoed 21 of 26
-    motions, 19 of them ones the infant genuinely liked.
-
-    The paper's other half -- a divergence tube that cut a motion the moment
-    it left its dreamed curve -- was built, measured at +2.9 % upset, and
-    removed.  ``docs/dream-chunk.md`` keeps the numbers.
+    ``taste``   fixed, per IDEA.md; the id's own mean shrunk toward its
+                pooled features by n/(n+K)
+    ``wear``    how worn out it is now: transient, from this model's own
+                play history rather than learned
+    ``pairs``   what a motion is worth *after* another -- IDEA.md's combo
     """
 
     PAIR_KEEP = 4        # samples kept per transition, newest wins
@@ -446,23 +358,13 @@ class WorldModel:
     def __init__(self, cfg: Optional[DreamConfig] = None) -> None:
         self.cfg = cfg or DreamConfig()
         self.motion: Optional[str] = None
-        # The world model, in two halves that must not be confused:
-        #   taste -- what this infant thinks of a motion.  Fixed, per IDEA.md.
-        #   wear  -- how worn out it is right now.  Transient; it recovers.
-        # Learning one as the other is what poisons a carried model: a motion
-        # played until it stopped working gets recorded as disliked, is never
-        # offered again, and so never gets the chance to show it recovered.
-        # Taste is not stored; it is *estimated* from running sums, per motion
-        # and per feature value, and the two are blended by how much evidence
-        # the motion itself has.  Plain means, not an EWMA: the taste is fixed
-        # by assumption, so every sample of it still counts.
+        # taste is *estimated* from running sums, per motion and per feature
         self._id_sum: dict[str, float] = {}
         self._f_sum: dict[tuple, float] = {}
         self._f_n: dict[tuple, int] = {}
         self.wear: dict[str, float] = {}
         self.counts: dict[str, int] = {}
-        # (previous, next) -> recent samples.  The sequential half of the
-        # model: what this infant makes of one motion *following* another.
+        # (previous, next) -> recent samples: the sequential half of the model.
         self.pairs: dict[tuple, list] = {}
         self._prev: Optional[str] = None
         self._y0 = 0.0
@@ -498,12 +400,8 @@ class WorldModel:
                 for m, t in self.taste.items()}
 
     def age(self, dt: float, playing: Optional[str] = None) -> None:
-        """Wear builds on what is playing and recovers on everything else.
-
-        The policy can compute this from its own actions -- it knows what it
-        played and for how long -- so it never has to *learn* the transient
-        and mistake it for the permanent.
-        """
+        """Wear builds on what is playing and recovers on everything else --
+        computed from the policy's own actions, never learned as taste."""
         if dt <= 0.0:
             return
         decay = math.exp(-dt / self.cfg.rest_s)
@@ -519,28 +417,20 @@ class WorldModel:
     # -- the world model ----------------------------------------------------- #
     def note_residual(self, motion: str, y0: float, y_end: float,
                       engaged_s: float, prev: Optional[str] = None) -> None:
-        """ASAP in reduced form: measured-minus-dreamed corrects the *model*.
-
-        The doc's point exactly -- ASAP adds its residual to the actuator
-        command and we have no such channel, so the dream is corrected and
-        the command is not.  The same measurement updates both halves: what
-        this motion is worth, and what it is worth *after that one*.
-        """
+        """ASAP in reduced form: measured-minus-dreamed corrects the *model*,
+        both what the motion is worth and what it is worth after ``prev``."""
         if engaged_s < 1.0 or y0 <= 1e-3:
             return
         settled = 1.0 - math.exp(-engaged_s / self.cfg.tau_s)
         # symmetric in comfort units, not as a fraction of a small y0
         moved = (y0 - max(0.0, y_end)) / self.cfg.scale
         observed = min(1.0, max(-1.0, moved / max(0.2, settled)))
-        # ...and divided out by how worn the motion already was, so a tired
-        # motion's poor showing lands on `wear`, where it recovers, instead of
-        # on `taste`, where it would be permanent
+        # ...over how worn it was: a tired motion's poor showing is `wear`
         rested = max(self.cfg.wear_floor, 1.0 - self._wear0)
         achieved = min(1.0, max(-1.0, observed / rested))
         self._id_sum[motion] = self._id_sum.get(motion, 0.0) + achieved
         self.counts[motion] = self.counts.get(motion, 0) + 1
-        # ...and the same sample teaches every feature the motion has, which
-        # is where the evidence is dense enough to mean anything
+        # ...and teaches every feature, where the evidence is dense
         for f, v in FEATURES.get(motion, {}).items():
             self._f_sum[(f, v)] = self._f_sum.get((f, v), 0.0) + achieved
             self._f_n[(f, v)] = self._f_n.get((f, v), 0) + 1
@@ -557,8 +447,7 @@ class WorldModel:
         self._engaged_s = 0.0
 
     def observe(self, level: float, engaged: bool, dt: float) -> None:
-        # wear ages on every tick, playing or not -- resting is when a motion
-        # recovers, and the model only knows that if it keeps the clock
+        # wear ages every tick, playing or not -- resting is when it recovers
         self.age(dt, self.motion if (engaged and self.motion) else None)
         if self.motion is None or not engaged or dt <= 0.0:
             return
@@ -576,7 +465,6 @@ class WorldModel:
     def snapshot(self) -> dict:
         return {"on": True, "motion": self.motion,
                 "engaged_s": round(self._engaged_s, 1),
-                # both halves, because confusing them is the failure mode
                 "taste": {m: round(t, 2) for m, t in self.taste.items()},
                 "wear": {m: round(w, 2) for m, w in self.wear.items()
                          if w >= 0.05},
@@ -588,44 +476,19 @@ class WorldModel:
 class ChunkMatcher:
     """DREAM-Chunk's *other* half: dream every candidate, rank, take the best.
 
-    ``WorldModel`` answers "is the motion playing still working?".  This
-    answers the question the paper is actually named for -- *reactive action
-    matching*: roll all 26 candidates forward through the world model from
-    where the infant is right now, and score them.  The doc's cost breakdown,
-    re-anchored:
-
-    ``task fit``      predicted distress at the horizon under that motion's
-                      learned gain -- the whole point, and the only term that
-                      needs the world model
-    ``continuity``    the arm version avoids a jump in joint space; here a
-                      change of motion is itself a small disturbance to a
-                      settling baby, so switching pays a penalty
-    ``resistance``    ``dob_a`` is the world pushing back on the current plan.
-                      The infant's version of pushing back is habituation, so
-                      recent use of a candidate counts against it
-    ``veto``          the excursion guard's analogue: a motion this baby has
-                      *measurably* been made worse by is never returned
-
-    Unknown candidates are scored by feature generalisation (shape/size/
-    speed/tremble), the same trick ``ReflexBrain`` uses, plus an optimism
-    bonus -- untried motions are worth learning about.
-    """
+    Reactive action matching: roll all 26 candidates forward through the world
+    model from where the infant is now and score them on the doc's terms --
+    ``fit`` (dreamed distress at the horizon under the motion's learned gain),
+    ``switch`` (changing motion disturbs a settling baby), ``resist`` (recent
+    use, i.e. habituation) and a ``veto`` on motions measurably making this
+    baby worse.  Unknown candidates get feature generalisation + optimism."""
 
     SLOT_S = 20.0        # one motion holds this long before the next
-    # Plans of one.  The machinery below dreams schedules of any depth -- the
-    # paper's actual mechanism -- but measured over 100 paired nights, depth 3
-    # costs +12.0% upset / +37.3% crying against depth 1 (and +11.8% with the
-    # slot matched to the machine's own 10 s cadence, so it is not a mismatched
-    # constant).  The transitions that would justify sequencing are 1 pair in
-    # 676 and turn up ~5 times in 100 nights.  Raise it to see the tree branch;
-    # do not raise it expecting a calmer infant.
+    # plans of one: deeper is the paper's mechanism but measured worse
     DEPTH = 1            # motions per dreamed plan -- the chunk
     BEAM = 2             # plans kept per opening (26^3 exhaustive is wasteful)
     W_SWITCH = 0.020     # continuity: the cost of changing motion at all
-    # A single play is a coin flip -- the infant's own dwell process moves the
-    # level as much as any motion does -- so the bar for exiling a motion has
-    # to clear that noise.  At -0.15 over 3 samples an hour's run vetoed 21 of
-    # 26 motions, 19 of them ones the infant liked.
+    # a single play is a coin flip, so the exile bar has to clear that noise
     VETO_GAIN = -0.40    # measured to make this baby worse: never returned
     FADE = 0.55          # each repeat inside one plan is worth this much less
     PAIR_TRUST = 3.0     # samples before a learned transition is fully believed
@@ -640,15 +503,11 @@ class ChunkMatcher:
                  pairs: Optional[dict] = None,
                  wear: Optional[dict] = None,
                  counts: Optional[dict] = None) -> None:
-        # `gains` is *taste* -- the fixed half.  `wear` is the transient half,
-        # kept apart so a tired motion is passed over today and offered again
-        # tomorrow, while a disliked one stays out.
+        # `gains` is taste (fixed), `wear` transient -- kept apart on purpose
         self.gains = gains if gains is not None else {}
         self.wear = wear if wear is not None else {}
         self.counts = counts if counts is not None else {}
-        # (previous, next) -> [gain samples].  docs/IDEA.md's own example is a
-        # *sequential* taste -- "2모션 하다가 4모션으로 가는걸 좋아함" -- and no
-        # amount of per-motion scoring can represent it.
+        # (previous, next) -> [gain samples]: IDEA.md's sequential taste
         self.pairs = pairs if pairs is not None else {}
         self.cfg = cfg or DreamConfig()
         self.last: list[tuple] = []       # the last ranking, for the log/UI
@@ -657,21 +516,15 @@ class ChunkMatcher:
         self.at_level = 0.0               # the level it dreamed from
 
     def bonus(self, motion: str, used: int = 0) -> float:
-        """The confidence bound: how much this motion's estimate might be
-        understating it.  Wide while the evidence is thin, and it shrinks as
-        the motion is played -- including within the plan being dreamed."""
+        """The confidence bound -- how much the estimate might understate this
+        motion.  Wide while evidence is thin, shrinking as it is played."""
         n = self.counts.get(motion, 0) + used
         total = sum(self.counts.values()) + 1
         return self.cfg.explore_c * math.sqrt(math.log(total + 1) / (1 + n))
 
     def gain_of(self, motion: str) -> float:
-        """The world model's taste for a candidate.
-
-        ``gains`` already carries every candidate -- ``WorldModel`` fills
-        untried ones in from their features -- so there is no inference to do
-        here.  Keeping it in one place is deliberate: two half-implementations
-        of feature generalisation is how they drift apart.
-        """
+        """The world model's taste for a candidate -- ``gains`` already carries
+        every one, ``WorldModel`` filling untried ones in from features."""
         return self.gains.get(motion, self.cfg.prior_gain)
 
     def effective(self, prev: Optional[str], motion: str,
@@ -681,12 +534,8 @@ class ChunkMatcher:
         return self.pair_gain(prev, motion) * (1.0 - worn)
 
     def pair_gain(self, prev: Optional[str], motion: str) -> float:
-        """The gain of playing ``motion`` *after* ``prev``.
-
-        A transition is only believed once it has been seen a few times --
-        until then this is the plain per-motion gain, so one lucky handover
-        cannot invent a combo that is not there.
-        """
+        """The gain of playing ``motion`` *after* ``prev``, believed only once
+        seen a few times, so one lucky handover invents no combo."""
         base = self.gain_of(motion)
         seen = self.pairs.get((prev, motion)) if prev else None
         if not seen:
@@ -704,12 +553,8 @@ class ChunkMatcher:
 
     def _live(self, level: float) -> list[str]:
         """The candidates worth dreaming; the rest are vetoed and recorded.
-
-        The veto reads *taste*, never the worn-down value, and only once a
-        motion has been seen enough times to mean it -- a permanent exile on
-        one bad stretch is how a model talks itself out of every motion the
-        infant actually likes.
-        """
+        The veto reads *taste*, never the worn-down value, and only with
+        samples enough to mean it."""
         self.vetoed, self.at_level = [], level
         live = []
         for c in CANDIDATES:
@@ -725,22 +570,12 @@ class ChunkMatcher:
              depth: Optional[int] = None) -> list[tuple]:
         """Dream whole **plans**, not single motions: [(cost, seq, trace)].
 
-        This is the part that makes it action *chunking*.  A chunk here is a
-        schedule -- three motions, ``SLOT_S`` each -- and the cost is the mean
-        distress the infant is predicted to sit at *across* it, so a plan that
-        settles early beats one that only ends well.  Two structures exist
-        that a one-motion-at-a-time score cannot see:
-
-        * **habituation** -- repeating a motion inside a plan is worth
-          ``FADE`` less each time, so rotation beats hammering a favourite;
-        * **transitions** -- a learned (prev, next) gain, which is exactly
-          docs/IDEA.md's combo.
-
-        Beam search: 26^3 is 17k plans for nothing, and the beam keeps the
-        search bounded on the sensor thread.  Only the first motion is
-        committed -- the machine asks again at its next checkpoint, so this
-        is a receding horizon, not a schedule anyone is stuck with.
-        """
+        A chunk is a schedule of ``SLOT_S`` motions scored by the mean distress
+        across it, so a plan that settles early beats one that only ends well.
+        Two structures a per-motion score cannot see: habituation (a repeat is
+        worth ``FADE`` less) and transitions (IDEA.md's combo).  The beam
+        bounds the search, and only the first motion is committed -- a
+        receding horizon, re-decided at the machine's next checkpoint."""
         depth = self.DEPTH if depth is None else depth
         live = self._live(level)
         order = {m: i for i, m in enumerate(EXPLORE)}
@@ -755,22 +590,17 @@ class ChunkMatcher:
                     fade = self.FADE ** used.get(c, 0)
                     g = max(-1.0, min(1.0, self.effective(prev, c) * fade))
                     y2 = max(0.0, y * (1.0 - g * settle))
-                    # the objective is *time spent upset*, not the end state:
-                    # the mean level across this slot, trapezoid
+                    # the objective is *time spent upset*: the slot's mean
                     step_cost = (y + y2) / 2.0
                     step_cost += 0.0 if c == prev else self.W_SWITCH
-                    # the confidence bound, narrowing as the plan itself
-                    # would gather evidence about this motion
+                    # the confidence bound, narrowing as the plan gathers
                     step_cost -= self.bonus(c, used.get(c, 0))
                     grown.append((cost + step_cost, y2, c, seq + (c,),
                                   {**used, c: used.get(c, 0) + 1},
                                   trace + (round(y2, 3),)))
             grown.sort(key=lambda r: (r[0], order.get(r[3][0], len(order)),
                                       r[3]))
-            # Beam *per first motion*, not globally: the first motion is the
-            # only thing committed, so the search must not let one promising
-            # opening crowd every alternative out of the beam (and the
-            # dashboard would otherwise draw six plans with the same prefix).
+            # beam *per first motion*: one opening must not crowd out the rest
             kept, seen_root = [], {}
             for row in grown:
                 root = row[3][0]
@@ -794,19 +624,14 @@ class ChunkMatcher:
         for c in live:
             fit = self.dream(c, level, prev=current)
             switch = 0.0 if c == current else self.W_SWITCH
-            # `resist` was a stand-in for habituation before the model kept
-            # its own wear; it is now what the dream already accounts for
+            # `resist` is habituation, which the dream already accounts for
             resist = round(self.wear.get(c, 0.0), 3)
             new = -self.bonus(c)
             out.append((fit + switch + new, c,
                         {"fit": round(fit, 3), "switch": switch,
                          "resist": resist, "new": round(new, 3),
                          "gain": round(self.pair_gain(current, c), 2)}))
-        # Cold start is one big tie: with nothing measured, every untried
-        # candidate inherits the same feature-inferred gain and the same
-        # terms.  Break it on EXPLORE -- one calm representative of each
-        # family first -- rather than on the id, which would just walk the
-        # library in numerical order.
+        # cold start is one big tie, so break it on EXPLORE rather than the id
         order = {m: i for i, m in enumerate(EXPLORE)}
         out.sort(key=lambda r: (r[0], order.get(r[1], len(order)), r[1]))
         self.last = out
@@ -822,11 +647,9 @@ class ChunkMatcher:
 class DreamBrain:
     """A brain that *plans* rather than reacts: ``ChunkMatcher.best()``.
 
-    The same interface as the other three, so ``make_brain('dream')`` and the
-    dashboard's live switcher treat it like any other -- and the machine still
-    validates whatever it says.  It ignores the rendered prompt: this brain
-    reads the world model directly rather than a description of it.
-    """
+    The same interface as the other three (and the machine still validates
+    whatever it says); it ignores the rendered prompt and reads the world model
+    directly rather than a description of it."""
 
     def __init__(self) -> None:
         self.policy = None
@@ -871,10 +694,8 @@ class DreamBrain:
     KEEP_PER_OPENING = 2    # so the drawn tree actually branches
 
     def _by_opening(self, plans: list) -> list:
-        """The plans worth drawing: the best few openings, each with its best
-        continuations.  The first motion is all that gets committed, so the
-        openings are the real choice; keeping a couple of continuations each
-        is what makes the dashboard's picture a tree rather than a fan."""
+        """The plans worth drawing: the best few openings -- the real choice --
+        each with a couple of continuations, so the picture is a tree."""
         out: list = []
         per: dict = {}
         for cost, seq, trace in plans:
@@ -891,14 +712,8 @@ class DreamBrain:
         return out
 
     def plan_snapshot(self) -> dict:
-        """What the planner imagined, for the dashboard to draw.
-
-        The whole point of a *planning* brain is that its reasoning is
-        inspectable -- unlike the LLM brains, every number here is one it
-        actually used.  ``fit`` is the dreamed distress at the horizon;
-        the rest are the doc's other cost terms, kept separate so the
-        picture shows *why* the winner won.
-        """
+        """What the planner imagined, for the dashboard to draw: ``fit`` is the
+        dreamed distress at the horizon, the other terms show why it won."""
         ranked = self.matcher.last
         return {
             "level": round(self.matcher.at_level, 3),
@@ -908,20 +723,13 @@ class DreamBrain:
             "playing": getattr(self, "playing", None),
             "dreamed": len(ranked) + len(self.matcher.vetoed),
             "vetoed": list(self.matcher.vetoed),
-            # The chunk: whole schedules, best first.  Only the first motion
-            # is committed, so the list is the best plan per distinct
-            # *opening* -- six variations on one opening would tell the
-            # reader nothing about the choice actually being made.
+            # the chunk: whole schedules, best first, one per distinct opening
             "plans": self._by_opening(self.matcher.plans),
             "candidates": [
                 {"id": mid, "cost": round(cost, 3), **terms}
                 for cost, mid, terms in ranked[:self.SHOW]
             ],
-            # The whole dreamed field, two numbers per motion, so the panel can
-            # plot where *all* of them were predicted to land rather than the
-            # six that happened to win.  Compact on purpose: this rides every
-            # SSE frame, and the detailed terms above are only worth sending
-            # for the handful the reader will actually read.
+            # the whole dreamed field, compact because it rides every SSE frame
             "strip": [[mid, round(terms["fit"], 3)] for _, mid, terms in ranked],
         }
 
@@ -932,17 +740,12 @@ class DreamBrain:
 class SoothePolicy:
     """Wire ``pick`` into ``CradleMachine.advisor`` and feed ``observe``.
 
-    ``observe(now, level, engine)`` runs every sensor tick.  A step's outcome
-    is the rank last seen while its motion was *engaged* -- playing at
-    strength, not ramping in, not tapering out -- and the step settles when
-    the engine parks.  Anything the baby does outside engagement (recovering
-    on its own between trials, calming during a taper) is deliberately not
-    credited to the motion; getting this wrong once taught the policy to
-    love a motion the baby hated.
-    ``pick(now, ema)`` is called by the machine at trial start and at
-    escalation checkpoints; it closes the open step, asks the brain, and
-    returns a candidate id or None (machine then uses its own ladder).
-    """
+    ``observe(now, level, engine)`` runs every sensor tick: a step's outcome is
+    the rank last seen while its motion was *engaged* -- at strength, not
+    ramping, not tapering -- so recovery outside engagement is never credited
+    to the motion.  ``pick(now, ema)``, called at trial start and escalation
+    checkpoints, closes the open step, asks the brain, and returns a candidate
+    id or None (the machine then uses its own ladder)."""
 
     ENGAGED_ENV = 0.2      # below this the motion is not really acting yet
 
@@ -953,8 +756,7 @@ class SoothePolicy:
         self.scenarios = scenarios or []
         self.steps: list[Step] = []
         self._seen: Optional[int] = None   # last rank while engaged
-        # What the infant makes of each motion.  A planning brain reads it;
-        # the machine never does -- every safety decision stays over there.
+        # a planning brain reads this; the machine never does
         self.model = WorldModel() if model else None
         self._t: Optional[float] = None
         self.level = 0.0       # the live distress a planning brain reads
@@ -1003,7 +805,6 @@ class SoothePolicy:
             "steps": [{"motion": s.motion, "before": s.rank_before,
                        "after": s.rank_after} for s in self.steps[-24:]],
             "model": self.model.snapshot() if self.model else {"on": False},
-            # a planning brain can show its work; the others have none to show
             "plan": (self.brain.plan_snapshot()
                      if hasattr(self.brain, "plan_snapshot") else None),
         }

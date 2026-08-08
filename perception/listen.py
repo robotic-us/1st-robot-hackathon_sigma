@@ -1,29 +1,11 @@
 #!/usr/bin/env python3
-"""Sound detection from the webcam's own microphone.  No pip installs.
+"""Sound detection from the webcam's own microphone (ALSA card "WEBCAM").
 
-The C270 shows up as *two* devices: /dev/video0 for pictures and ALSA card
-"WEBCAM" for sound.  One USB cable gives us both halves of the perception.
+Shells out to ``arecord`` for raw PCM (no sounddevice/pyaudio here).  ``level``
+(0..1 RMS loudness) x ``cry`` (0..1 energy, 300-1500 Hz voice band) = distress;
+report §4.2 decides a cry by duty cycle + vocal-unit length, never loudness.
 
-We shell out to ``arecord`` and read raw PCM off its stdout.  That sounds
-crude, but it is the lightest thing that works here: sounddevice/pyaudio are
-not installed and would need portaudio dragged in behind them, whereas arecord
-ships with the OS.  The whole reader is one thread and one numpy call.
-
-Two numbers come out, both 0..1:
-
-    level   loudness (RMS).  "Is anything happening?"
-    cry     how much of the energy sits in the 300-1500 Hz band, where a human
-            voice -- and an infant cry in particular -- puts its fundamental.
-            A door slam or a fan is broadband and scores low; a wail scores high.
-
-Neither alone is enough: ``level`` alone reacts to a chair scraping, ``cry``
-alone reacts to quiet speech.  Multiplied together they mean "something
-voice-like is loud right now", which is the signal we actually want.
-
-Run standalone::
-
-    python3 perception/listen.py       # live meter, Ctrl-C to stop
-    python3 perception/listen.py --list # what ALSA can see
+    python3 perception/listen.py [--list]   # live meter / ALSA capture devices
 """
 
 from __future__ import annotations
@@ -40,12 +22,11 @@ import numpy as np
 
 LOGGER = logging.getLogger("listen")
 
-SAMPLE_RATE = 16000        # plenty for voice; keeps the FFT cheap
-CHUNK = 1024               # 64 ms per read -- fast enough to feel live
+SAMPLE_RATE = 16000
+CHUNK = 1024               # 64 ms per read at 16 kHz
 CRY_BAND_HZ = (300.0, 1500.0)   # voice/cry fundamental + first harmonics
 
-# RMS that reads as level=1.0.  0.3 is loud-room loud; normal speech at arm's
-# length lands around 0.05-0.15 on this mic.
+# RMS that reads as level=1.0; speech at arm's length lands 0.05-0.15 here.
 FULL_SCALE_RMS = 0.30
 
 
@@ -55,7 +36,7 @@ class Sound:
 
     level: float      # 0..1 loudness
     cry: float        # 0..1 fraction of energy in the voice band
-    distress: float   # 0..1 = level * cry, the fused "someone is upset" signal
+    distress: float
     ts: float
 
     @property
@@ -64,14 +45,13 @@ class Sound:
 
 
 def _analyse(samples: np.ndarray) -> tuple[float, float]:
-    """One chunk -> (level, cry).  Pure, so the selftest can drive it directly."""
+    """One chunk -> (level, cry); pure, so tests.py can drive it directly."""
     if samples.size == 0:
         return 0.0, 0.0
 
     rms = float(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
     level = min(1.0, rms / FULL_SCALE_RMS)
 
-    # Power spectrum. rfft because the signal is real -- half the work.
     spectrum = np.abs(np.fft.rfft(samples * np.hanning(samples.size))) ** 2
     freqs = np.fft.rfftfreq(samples.size, 1.0 / SAMPLE_RATE)
     total = float(spectrum.sum())
@@ -118,8 +98,6 @@ class Microphone:
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
             )
         except FileNotFoundError:
-            # Sound is a bonus signal, not a hard dependency: the face half of
-            # the pipeline is still perfectly usable without it.
             LOGGER.warning("arecord not found -- running without sound")
             self.failed = True
             return
@@ -175,7 +153,7 @@ class Microphone:
             return self._latest
 
 def run_meter(device: str, seconds: float) -> int:
-    """Live bar meter -- the quickest way to sanity-check the mic and thresholds."""
+    """Live bar meter -- sanity-checks the mic and the thresholds."""
     with Microphone(device) as mic:
         if mic.failed:
             return 1

@@ -7,7 +7,7 @@ import type { CradleState } from "@/lib/types";
  * cards above can stay in plain English, and so nobody is tempted to put
  * engineering units back on the front page.  When serve.py runs the
  * verification scenario (--verify), the judge state and the scripted phase
- * show here too -- docs/VERIFY.md layer 1, watchable live.
+ * show here too -- docs/VERIFICATION.md layer 1, watchable live.
  */
 export default function Internals({ S }: { S: CradleState }) {
   const c = S.cradle;

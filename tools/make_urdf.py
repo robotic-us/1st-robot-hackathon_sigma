@@ -1,36 +1,12 @@
 #!/usr/bin/env python3
 """One assembly STL -> per-part meshes + a URDF we can show in RViz.
 
-Fusion exported the whole robot as one STL: 188k triangles, no joints, no part
-names, no kinematics.  A URDF needs the opposite -- separate meshes per link and
-an explicit parent/child chain.  This bridges the two as far as geometry alone
-allows.
+Splits the Fusion export into rigid bodies, spots the four phact actuators by
+size (their thin axis, Y, is the rotation axis), merges fasteners into their
+nearest link, and classifies roles from the contact graph: base on the ground,
+platform where the arm tops meet, each arm = actuator -> lower -> upper.
 
-What it can work out on its own:
-
-* **Separate rigid bodies**, by welding shared vertices and taking connected
-  components.  Triangles that touch belong to the same part.
-* **Which bodies are phact actuators**, by size: the catalogue says phact-401 is
-  Phi85 x 40 mm, and exactly four bodies measure 85 x 34 x 85.  Their centres are
-  the joint origins.
-* **Each joint's rotation axis.**  A pancake actuator turns about its thin axis,
-  and these are thin in Y -- so the axes are Y.
-* **Fasteners**, by volume.  The ~99 tiny bodies are M3/M4 bolts and 6807ZZ
-  bearings; they get merged into whichever large body they sit nearest so they
-  do not become links of their own.
-
-What geometry *cannot* tell us on its own is which touching part moves the
-other, so the roles are classified from the contact graph plus two anchors:
-the base sits on the ground, and the platform is the one large body the arm
-tops all meet.  Each arm is then actuator -> lower link -> upper link, paired
-by contact and assigned to the actuator column it stands on.
-
-Built for the complete export (docs/udrf_assembly.stl): all four arms exist
-as real bodies, and the platform IS the coupler -- the upper links lap it
-directly, which is where the 6807ZZ bearings sit.  The coupler
-counter-rotates the arm angle, so it translates while staying level -- a
-classic parallelogram rocker.  (The earlier half-built export needed its
-right side synthesised; that code is gone, see git history if it returns.)
+Usage::  python3 tools/make_urdf.py    (reads docs/urdf_assembly.stl)
 """
 
 from __future__ import annotations
@@ -49,28 +25,11 @@ ACTUATOR_SIZE_MM = (85.0, 85.0)   # phact-401 face, Phi85 (the 3rd dim is depth)
 ACTUATOR_TOL_MM = 6.0
 FASTENER_VOL_CM3 = 15.0           # below this it is a bolt/bearing/washer, not a link
 
-# The kinematic tree, filled in by build() from the contact graph:
-#
-#   base_link ─┬─ axis_0 → lower_0 → upper_0 ─(bearing: joint_platform)─ platform
-#              ├─ axis_1 → lower_1 → upper_1
-#              ├─ axis_2 → lower_2 → upper_2   (+ disc_N mounting plates,
-#              └─ axis_3 → lower_3 → upper_3      fixed to their actuator)
-#
-# Only ONE bearing can be an explicit joint (URDF is a tree); the other three
-# laps stay closed because the linkage is a true parallelogram: with equal
-# actuator angles and the coupler counter-rotated, every arm top tracks its
-# lap exactly, at any angle.  Unequal angles split the laps -- which is also
-# what they would do to the real hardware.
+# The kinematic tree, filled in by build() from the contact graph.
 PARENT: dict[str, str] = {}
 
-# Links that rotate. The joint sits at the actuator's centre, about its thin axis.
-# Every joint on this rig turns about Y.  The table below is keyed by CHILD
-# link and gives the joint name -- which also decides revolute vs fixed: a link
-# absent from it gets a fixed joint.
-#
-# The knee (crank meets rod) used to be welded, and only upper_0 reached the
-# holder, so each leg was one rigid arm and three of the four top bearings
-# joined nothing.  Both are real pins, and both are joints now.
+# Revolute joints, keyed by CHILD link -> joint name; a link absent from the
+# table gets a fixed joint.  Every joint on this rig turns about Y.
 JOINT_NAME = {
     "axis_0": "joint_axis_0",            # the only actuator still on the base
     "upper_0": "joint_knee_0",           # leg 0 runs UP to the holder
@@ -86,9 +45,7 @@ PLATFORM = "platform"
 PLATFORM_JOINT = "joint_platform"
 FRAME_OVERRIDE: dict[str, "np.ndarray"] = {}   # filled in build(): bearing centre
 
-# file:// keeps RViz working with no ROS package to install. Swap for
-# package://sigma_description/meshes when this becomes a real package.
-# Set in build() from --out, so it survives this script moving around.
+# file:// keeps RViz working with no ROS package; set in build() from --out.
 MESH_URI = ""
 
 
@@ -190,10 +147,8 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
         nearest = min(big, key=lambda p: np.linalg.norm(p.centre - s.centre))
         merged[nearest.index].append(s)
 
-    # Anchors: actuators are axis_N by (x, y); the base is whatever sits on
-    # the ground plane (break ties by bulk -- the top face would pick a
-    # bearing, because bearings are short); the platform is the biggest body
-    # left, riding on top of the arms.
+    # Anchors: actuators are axis_N by (x, y); base = lowest on the ground
+    # plane (ties broken by bulk); platform = biggest body left.
     actuators = sorted([p for p in big if p.actuator], key=lambda p: (p.centre[0], p.centre[1]))
     for i, p in enumerate(actuators):
         p.name = f"axis_{i}"
@@ -214,8 +169,7 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
     assert len(uppers) == 4 and len(lowers) == 4, \
         f"expected 4 arms, found {len(uppers)} uppers / {len(lowers)} lowers"
 
-    # Name the arms first: each lower laps exactly one upper, and stands on the
-    # actuator column nearest it in plan view.
+    # Each lower laps exactly one upper and stands on its nearest actuator column.
     for lower in lowers:
         upper = next(u for u in uppers
                      if contact_points(lower.tri, u.tri) is not None)
@@ -228,20 +182,9 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
                    key=lambda a: np.linalg.norm(a.centre - disc.centre))
         disc.name = f"disc_{axis.name[-1]}"
 
-    # The tree.  A URDF is a tree, so the holder can have exactly one parent --
-    # but every upper arm carries it in hardware, and a model where three of
-    # them join nothing is not the machine.  So leg 0 runs up to the holder and
-    # legs 1-3 hang DOWN from it:
-    #
-    #   base_link - axis_0 - lower_0 - upper_0 -+
-    #                                           +- platform (the holder)
-    #               axis_1 - lower_1 - upper_1 -+
-    #               axis_2 - lower_2 - upper_2 -+
-    #               axis_3 - lower_3 - upper_3 -+
-    #
-    # Every upper arm is now joined to the holder, which is the connection that
-    # has to hold. The open end moves to the actuators -- and those are bolted
-    # to the base, so with the angles solved they land back on their pivots.
+    # The tree.  A URDF is a tree, so the holder gets one parent -- but every
+    # upper arm carries it in hardware.  Re-root: leg 0 runs UP to the holder,
+    # legs 1-3 hang DOWN from it; the open end moves to the bolted actuators.
     PARENT.clear()
     PARENT["axis_0"] = "base_link"
     PARENT["lower_0"] = "axis_0"
@@ -260,9 +203,7 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
                     for p in big}
 
     # Every pin, measured from the meshes.  Each link's frame sits on the joint
-    # that attaches it to its parent, which is what makes the tree above work:
-    # leg 0's rod is framed on its knee (it hangs off the crank), while legs
-    # 1-3's rods are framed on their bearings (they hang off the holder).
+    # that attaches it to its parent.
     knee, bearing = {}, {}
     for i in range(4):
         lap = contact_points(combined_tri[f"lower_{i}"], combined_tri[f"upper_{i}"])
@@ -274,9 +215,8 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
         print(f"leg {i}: knee {np.round(knee[i], 1)}  "
               f"bearing {np.round(bearing[i], 1)} mm")
 
-    # Every actuator is framed on its own axis of rotation, including the three
-    # that now hang off the holder -- otherwise they inherit the knee's frame,
-    # which sits a whole crank length away and makes any closure check nonsense.
+    # Every actuator is framed on its own rotation axis, including the three
+    # hanging off the holder.
     for i in range(4):
         FRAME_OVERRIDE[f"axis_{i}"] = by_name[f"axis_{i}"].centre
     FRAME_OVERRIDE["upper_0"] = knee[0]        # leg 0 runs up: framed on the knee
@@ -298,8 +238,7 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
 
     meshes = out_dir / "meshes"
     meshes.mkdir(parents=True, exist_ok=True)
-    # Wipe first: a previous run with different thresholds leaves stale
-    # part_N.stl files behind, and they silently pollute any later analysis.
+    # Wipe first: stale part_N.stl files silently pollute later analysis.
     for old in meshes.glob("*.stl"):
         old.unlink()
     for p in big:
@@ -309,8 +248,7 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
     urdf.write_text(render_urdf(big, base), encoding="utf-8")
     print(f"\nwrote {urdf} and {len(big)} meshes in {meshes}/")
 
-    # core/rig.py carries these three as its geometry constants -- paste
-    # them there whenever the CAD changes.
+    # core/rig.py carries these three geometry constants -- paste on CAD change.
     metres = lambda v: ", ".join(f"{x * MM_TO_M:.4f}" for x in v)
     print("\ngeometry for core/rig.py (metres):")
     print(f"  AXIS0 = np.array([{metres(by_name['axis_0'].centre)}])")
@@ -322,10 +260,7 @@ def build(stl: Path, out_dir: Path, report_only: bool) -> int:
 def frame_origin(part, by_name):
     """World position of the frame a link is expressed in, in mm.
 
-    A revolute link gets its own frame at the actuator centre -- that is where
-    the rotation axis has to pass through. The platform's frame sits at its
-    bearing. Everything else inherits its parent's frame, so rigid
-    sub-assemblies keep sharing one origin.
+    Revolute links get their own frame on their joint; others inherit the parent's.
     """
     if part.name in FRAME_OVERRIDE:
         return FRAME_OVERRIDE[part.name]
@@ -341,8 +276,7 @@ def render_urdf(parts: list[Part], base: Part) -> str:
            '  <material name="accent"><color rgba="0.2 0.6 0.9 1"/></material>', ""]
 
     for p in parts:
-        # The mesh keeps its CAD coordinates, so shift the visual back by the
-        # frame origin -- otherwise every rotated link jumps to the origin.
+        # Meshes keep CAD coordinates: shift the visual back by the frame origin.
         off = -frame_origin(p, by_name) * MM_TO_M
         colour = "accent" if p.actuator else "grey"
         out += [
@@ -390,7 +324,7 @@ def render_urdf(parts: list[Part], base: Part) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--stl", default="docs/udrf_assembly.stl")
+    parser.add_argument("--stl", default="docs/urdf_assembly.stl")
     parser.add_argument("--out", default="cad")
     parser.add_argument("--report", action="store_true", help="print parts, write nothing")
     args = parser.parse_args(argv)

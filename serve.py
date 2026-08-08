@@ -1,51 +1,16 @@
 #!/usr/bin/env python3
 """The evidence-report cradle machine, live in a web browser.
 
-One stdlib HTTP server:
-
-    /            the dashboard (web/index.html; /style.css and /app.js beside it)
-    /events      Server-Sent Events: the whole state as JSON, ~20 Hz
-    /history     the last ~15 min as 1 Hz samples (seeds the emotion timeline)
-    /frame       MJPEG camera stream with the sensing overlay
-    /baby        full-screen virtual infant + iPad motion capture
-    /motion-sensor  iPad -> server motion feature packets (POST)
-    /motions     the M01-M50 library from the evidence report, once
-    /jam         simulate a mechanism fault (trips the safety gate)
-    /motion      queue a library command by id (R grade needs --research)
-    /auto        the report's state machine on/off (?set=on|off)
-    /policy      switch the decision brain live (?set=off|reflex|ollama|claude)
-    /taste       retune the virtual infant's hidden temperament (--baby only)
-
-Motion behaviour follows docs/infant_robotic_cradle_evidence_report_ko.pdf
-(see core/cradle.py): the default is *not moving*.  Two sensing modes feed
-the CradleMachine's 0..1 distress input:
-
-* **Verification scenario** (``--verify``, alias ``--fake``, and the default):
-  no camera.  A scripted nursery episode asserts its state and level phase by
-  phase and drives the real CradleMachine with them -- the ladder, the trials,
-  the taper and the gate are all exercised.  The camera panel shows a drawn
-  baby acting the script, clearly watermarked as synthetic.  Since the
-  infant-face stack was removed (2026-08-08) the phases are scripted ground
-  truth rather than judged signals; docs/VERIFY.md says what that costs.
-* **Virtual infant** (``--baby``, closed-loop sim): a random state process
-  (perception/baby.py) that the sway genuinely soothes -- or, for hunger
-  cries, does not.
-
-Either way the CradleMachine runs the report's ladder over that state: gate
-first, sleep taper, quiet hold, 30 s sway trials with improvement checks and
-caregiver alerts.  The engine's plate offset drives the same joint angles the
-canvas and RViz already animate; serve.py itself stays 2D and leaves the 3D
-view to the viz.
-
-No new dependencies: SSE and MJPEG are both plain HTTP, which is why the
-stdlib server is enough.  Open it from any laptop on the same network.
+One stdlib HTTP server (SSE + MJPEG are plain HTTP): dashboard, /events,
+/history, /frame, /baby + /motion-sensor, /motions, and the controls
+(/motion /auto /policy /taste /jam).  Sensing: --verify (scripted episode,
+the default) or --baby (closed-loop virtual infant); motion behaviour
+follows the evidence report (core/cradle.py) -- the default is not moving.
 
 Run::
 
-    python3 serve.py --verify      # no camera: the acted verification episode
-    python3 serve.py --baby        # no camera: a virtual infant, closed loop
-    python3 serve.py --research    # unlock the R-grade modes (sim only!)
-    python3 tests.py               # all suites, incl. these endpoints
+    python3 serve.py --verify      # the acted verification episode
+    python3 serve.py --baby        # a virtual infant, closed loop
 """
 
 from __future__ import annotations
@@ -72,16 +37,13 @@ import numpy as np
 from core.cradle import LIBRARY_BY_ID, CradleMachine, MotionEngine, catalog
 from core.rig import cradle_angles, cradle_joint_state
 from perception import nubzuki as nz
-# The camera framing lives with the recognizer, so serve.py and
-# `nubzuki.py --camera` cannot drift into reading different pixels.
+# Framing shared with `nubzuki.py --camera` so both read the same pixels.
 from perception.nubzuki import centre_region, crop_frame, magnify, parse_crop
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
-# The served files, as a fixed whitelist -- not a static directory, so there is
-# nothing to traverse.  The font entries are built from what web/fonts/ holds
-# at import (the IBM Plex subsets ship with the repo so the dashboard keeps its
-# type on a nursery LAN with no route to a font CDN).
+# Fixed whitelist, not a static directory -- nothing to traverse.  Fonts are
+# self-hosted (the demo LAN has no route to a font CDN).
 STATIC: dict[str, tuple[str, str]] = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
@@ -97,11 +59,8 @@ STATIC.update({f"/fonts/{p.name}": (f"fonts/{p.name}", "font/woff2")
 class IPadMotion:
     """Latest physical cradle motion reported by the tablet web page.
 
-    Browser ``DeviceMotionEvent.acceleration`` is expressed in m/s^2 and its
-    rotation rate in deg/s.  The tablet reduces its high-rate samples into a
-    100 ms feature packet; the server deliberately accepts only a small,
-    finite numeric surface.  A stale tablet can never keep soothing the
-    virtual infant: ``fresh`` expires after one second.
+    Accel in m/s^2, rotation rate in deg/s; only a small finite numeric
+    surface is accepted, and ``fresh`` expires after one second.
     """
 
     FRESH_S = 1.0
@@ -139,12 +98,8 @@ class IPadMotion:
         return self.received_at > 0.0 and now - self.received_at <= self.FRESH_S
 
     def strength(self, now: float) -> float:
-        """0..1 measured motion exposure for the virtual infant.
-
-        0.12 m/s^2 RMS is a useful demo-scale reference for the gentle
-        horizontal library; angular motion also counts for AP/tilt entries.
-        This is a virtual-infant input, never a physical safety measurement.
-        """
+        """0..1 motion exposure for the virtual infant (0.12 m/s^2 RMS ~ full
+        scale); never a physical safety measurement."""
         if not self.fresh(now):
             return 0.0
         linear = self.accel_rms / 0.12
@@ -163,13 +118,8 @@ class IPadMotion:
             "dominant_hz": round(self.dominant_hz, 3),
             "strength": round(self.strength(now), 3),
             "permission": self.permission,
-            # Physically DERIVED figures for the demo: with the rig playing
-            # SD-card slots the engine's envelope numbers describe a screen
-            # motion, not the machine -- but this tablet rides the cradle, so
-            # its accelerometer is ground truth.  Peak push is direct
-            # (rms*sqrt2); travel assumes a rocking sinusoid A = a/(2*pi*f)^2
-            # and is only offered when a dominant frequency exists -- shaken
-            # by hand it would be a nonsense number, so it is None instead.
+            # Measured (the tablet rides the cradle): peak = rms*sqrt2; travel
+            # assumes a sinusoid A = a/(2*pi*f)^2, None without a dominant Hz.
             "meas_peak_g": round(self.accel_rms * 1.414 / 9.80665, 4),
             "meas_travel_mm": (
                 round(1000.0 * self.accel_rms * 1.414
@@ -185,12 +135,8 @@ class Shared:
     def __init__(self, allow_research: bool = False,
                  pace_s: float = 10.0, give_up: bool = False) -> None:
         self.engine = MotionEngine(allow_research=allow_research)
-        # Demo rhythm: each motion gets ~10 s before the machine re-decides
-        # (the report spec's own cadence is 30 -- serve.py --pace 30).
-        # The report's §5 hand-over is off here by default: on the stand the
-        # cradle should keep trying motions rather than park and call for a
-        # human every time a stretch of soothing does not land.  --give-up
-        # restores it.  The safety gate is unaffected either way.
+        # Demo rhythm ~10 s/motion (report cadence is 30).  §5 hand-over off
+        # by default (--give-up restores it); the safety gate is unaffected.
         self.machine = CradleMachine(self.engine, check_every_s=pace_s,
                                      give_up=give_up)
         self.jam = False              # simulated mechanism fault (the gate)
@@ -207,8 +153,7 @@ class Shared:
         self.play_once = False  # --once: clear the hold after one success
         self.face = None        # --sense: the plant's truth, drawn on the iPad
         self.ipad_motion = IPadMotion()
-        # 1 Hz samples for the dashboard's emotion timeline: a fresh page
-        # seeds the last ~15 min from /history instead of starting empty.
+        # 1 Hz samples: /history seeds the timeline on a fresh page.
         self.history: deque[dict] = deque(maxlen=900)
         self.viz_gain = 1.0     # RViz display exaggeration; 1.0 = honest
         self.offsets = (0.0, 0.0, 0.0)   # last (ap, ml, z) the engine produced
@@ -219,17 +164,15 @@ class Shared:
 
 
 # --------------------------------------------------------------------------- #
-# The verification scenario (docs/VERIFY.md layer 1, live)
+# The verification scenario (docs/VERIFICATION.md layer 1, live)
 # --------------------------------------------------------------------------- #
 def infant_level(reading) -> float:
     """The machine's 0..1 distress input."""
     return float(reading.distress) if reading.present else 0.0
 
 
-# All 17 poses, partitioned into the plant's four states by the reference
-# sheet's own circumplex (valence x arousal).  The drawn face rotates inside
-# a state's pool (web/baby.js STATE_POOL mirrors this); the reading maps any
-# of them straight back to the state word, so the round-trip stays exact.
+# All 17 poses -> the plant's four states, by the sheet's circumplex;
+# web/baby.js STATE_POOL mirrors this, so the state round-trip is exact.
 POSE_STATE = {
     "neutral": "CALM", "sitHeart": "CALM", "lounging": "CALM",
     "nerdy": "CALM", "bashful": "CALM", "kiss": "CALM",
@@ -243,19 +186,10 @@ POSE_STATE = {
 def mascot_reading(seen: list) -> SimpleNamespace:
     """Camera sightings -> the machine's sensor contract.
 
-    The vision link, in one place so tests can hit it without a camera.  The
-    largest figure in frame is the reading (the iPad fills most of the view;
-    anything smaller is clutter).  ``distress`` is the sighting's
-    *asserted* level -- capped inside the fuss band by construction, because
-    §5 says vision alone may never cross CRY_LEVEL -- and an empty frame maps
-    to UNKNOWN with ``present=False``, which is the safety gate's input, not
-    a distress claim.
-
-    "Largest" skips any figure that *encloses* another, because that shape is
-    a frame and not a mascot.  Measured, not guessed: whenever the surround is
-    darker than the page -- an iPad bezel, a dim nursery -- the ink mask keeps
-    the ring around the page, it passes ``is_nubzuki`` and gets confidently
-    named, and at ~4x Nubzuki's area it would otherwise *be* the reading.
+    Largest figure wins, but a figure that *encloses* another is a frame
+    (bezel ring), not a mascot.  ``distress`` is the asserted level, capped
+    in the fuss band (§5: vision alone never crosses CRY_LEVEL); an empty
+    frame is UNKNOWN with ``present=False`` -- the safety gate's input.
     """
     if not seen:
         return SimpleNamespace(present=False, distress=0.0,
@@ -271,12 +205,6 @@ def mascot_reading(seen: list) -> SimpleNamespace:
 
     figures = [q for q in seen if not any(encloses(q, o) for o in seen)] or seen
     s = max(figures, key=lambda q: q.box[2] * q.box[3])
-    # Every pose maps back to a plant state (POSE_STATE partitions all 17 by
-    # the sheet's own circumplex), so whatever the face wears, the reported
-    # word matches the plant's -- an exact state round-trip.  The asserted
-    # level follows the state's semantics and stays inside section 5's caps:
-    # a CRY pose asserts the DISTRESS_FACE band, a FUSS pose mid-fuss, and
-    # nothing from vision alone ever crosses CRY_LEVEL.
     emotion = POSE_STATE.get(s.pose, "CALM")
     distress = (s.asserted_level if emotion == "CRY"
                 else 0.20 if emotion == "FUSS"
@@ -287,11 +215,8 @@ def mascot_reading(seen: list) -> SimpleNamespace:
 
 
 def desired_slot(engine: MotionEngine) -> Optional[int]:
-    """The PCM slot the engine's mode maps to, or ``None`` when parked.
-
-    ``None`` during a taper as well: the machine has decided to stop, and the
-    bridge must not queue another replay behind the one still running.
-    """
+    """The PCM slot the engine's mode maps to, or ``None`` when parked or
+    tapering (never queue a replay behind a decided stop)."""
     m = engine.mode
     return None if m is None or engine.tapering else m.slot
 
@@ -299,25 +224,12 @@ def desired_slot(engine: MotionEngine) -> Optional[int]:
 class ScenarioPlayer:
     """A scripted nursery episode: the stand-in infant, driving the machine.
 
-    **This used to be a recognizer test and is now a machine test.**  It fed
-    raw signals through the AudioTrack -> InfantJudge chain, so what the
-    dashboard showed was the report's section-4/5 logic actually running.  That
-    chain was removed with the infant-face stack (2026-08-08), and nothing here
-    pretends to replace it: each phase now *asserts* its state and level as
-    scripted ground truth.  What is still verified end to end is everything
-    downstream -- the escalation ladder, the trial logic, the taper, the gate.
-
-    One consequence worth stating plainly: the scenario reaches the cry band
-    because it declares it, not because anything perceived it.  Since the
-    removal there is no live path that can cross CRY_LEVEL on its own --
-    `perception/nubzuki.py` is vision, and vision is capped in the fuss band by
-    the same §5 rule that always capped it.
+    Each phase *asserts* its state and level (scripted ground truth, not
+    perception -- the judge chain was removed 2026-08-08); what stays
+    verified end to end is the ladder, the trials, the taper and the gate.
     """
 
-    # The quiet opener is deliberately short: it only has to establish the
-    # awake baseline, and 20 s of nothing read as "is this even on?".  The
-    # fussing phase absorbs the difference so every later phase keeps its
-    # wall-clock position (tests.py::serve times its trial check against it).
+    # Durations are load-bearing: tests.py::serve times phases against them.
     #        name                    dur  level  state              eyes   flow roll
     PHASES = (("quiet and awake",      8, 0.05, nz.AWAKE,           "open", .03,  0),
               ("starts fussing",      42, 0.34, nz.DISTRESS_FACE,   "open", .10,  0),
@@ -333,9 +245,7 @@ class ScenarioPlayer:
 
     def __init__(self) -> None:
         self.reading = None
-        # The parts of the frame that never change, drawn once: canvas, the
-        # cradle ellipse and the watermark.  30 Hz redraws of static pixels
-        # were a measurable slice of a Jetson core.
+        # Static parts drawn once; redrawing them at 30 Hz cost real CPU.
         bg = np.full((480, 640, 3), 24, np.uint8)
         cv2.ellipse(bg, (320, 300), (250, 150), 0, 10, 170, (60, 55, 50), 14)
         cv2.putText(bg, "SYNTHETIC VERIFICATION SCENARIO - not a camera",
@@ -355,9 +265,7 @@ class ScenarioPlayer:
     def _voiced(level: float, t: float) -> bool:
         """Is the mouth open this instant?  Drawing only -- nothing judges it.
 
-        The rhythm still tells the two apart the way §4.2 did, because it is
-        what the acted baby should *look* like: a fuss is short and sparse, a
-        wail is long and chained.
+        §4.2 rhythm: a fuss is short and sparse, a wail long and chained.
         """
         if level >= .45:
             return (t % 2.2) < 1.5
@@ -423,24 +331,17 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
             shared.log("hidden temperament: " + quirks.describe())
     elif sense_cap is None:
         scenario = ScenarioPlayer()
-        shared.log("verification scenario: docs/VERIFY.md layer 1, live")
-    # The capture is opened in main() and passed in still open: a probe-and-
-    # release preflight races anything else on the device, and a failed open
-    # in this thread could only die quietly while the server kept serving a
-    # frozen page.
+        shared.log("verification scenario: docs/VERIFICATION.md layer 1, live")
+    # Capture opened in main(), handed over still open: fail loudly there.
     cap = sense_cap
     plant = None
     if cap is not None:
-        # The plant behind the drawn face is the REAL VirtualBaby -- states,
-        # dwell times, cumulative settling, and (with --personality) the
-        # hidden temperament -- not a bespoke mascot approximation.  Its
-        # truth drives what the iPad draws; the machine still only sees what
-        # the camera reads back.  One algorithm, two windows onto it.
+        # The plant behind the drawn face is the real VirtualBaby: its truth
+        # drives the iPad; the machine only sees what the camera reads back.
         from perception.baby import Personality, VirtualBaby
         quirks = (Personality.random(random.Random(baby_seed))
                   if personality else None)
-        # tempo 2.5: a demo audience should see the state vocabulary, not
-        # a realistic infant's twenty quiet minutes
+        # tempo 2.5: a demo audience should see the state vocabulary
         plant = VirtualBaby(seed=baby_seed, personality=quirks, tempo=2.5)
         plant_state_since = None      # (state, t0): when this state began
         shared.baby = plant           # /taste retunes it live, as in --baby
@@ -461,22 +362,16 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                    "is what the machine is told (presence is not voted)"
                    if vote_s > 0 else
                    "state vote: OFF -- every frame's pose goes straight through")
-    # The cradle swings the very screen the camera watches, so single frames
-    # blur into nothing mid-play.  A miss inside the grace window keeps the
-    # last sighting instead of reporting an absent baby -- genuine absence
-    # still stops the cradle at grace + the machine's own 0.7 s gate.
+    # A miss inside the grace window keeps the last sighting (mid-play blur);
+    # genuine absence still stops the cradle via the machine's 0.7 s gate.
     last_seen_t = None           # overlay bookkeeping: how stale is vision
-    # The anti-flicker vote: modal pose over the last `vote_s` seconds.
-    # `recent_pose` keeps the newest sighting of each pose so the winning vote
-    # can be turned back into a reading with its own label and level.
+    # Anti-flicker vote: modal pose over `vote_s`; `recent_pose` rebuilds the reading.
     vote = nz.Tracker(vote_s)
     recent_pose: dict = {}
 
     if infant is not None:
         from perception.baby import baby_frame
-    # The linkage solve is pure in (ap, ml, z, gain), and the cradle spends
-    # most of its life parked at (0, 0, 0) -- cache the last solve instead of
-    # running 8 leg IKs per tick to recompute an unchanged pose.
+    # Cache the last IK solve: the cradle is mostly parked at (0, 0, 0).
     ik_key = ik_pose = ik_joints = None
 
     t0 = time.monotonic()
@@ -484,15 +379,11 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
     while not shared.stop.is_set():
         now = time.monotonic()
         if infant is not None:
-            # Closed loop: the engine's live amplitude is the soothing input,
-            # and the frame IS the baby -- a circle riding the plate offset.
+            # Closed loop: engine amplitude soothes; the frame IS the baby.
             time.sleep(1.0 / 30.0)
             commanded = shared.engine.env * shared.engine.amp_scale
-            # When the tablet is alive, its IMU is the physical truth: its
-            # strength replaces the commanded envelope AND its felt character
-            # (tempo/intensity/tremble) is what the taste judges -- so the
-            # baby responds to what the cradle (or a human hand) actually
-            # does.  With no tablet the desk simulation is unchanged.
+            # A fresh tablet IMU is the physical truth: its strength replaces
+            # the commanded envelope, its felt character is what taste judges.
             live_imu = shared.ipad_motion.fresh(now)
             soothing = (shared.ipad_motion.strength(now) if live_imu
                         else commanded)
@@ -506,11 +397,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
             reading = scenario.update(now - t0)
             frame = scenario.frame(now - t0)
         else:
-            # The vision link: the camera watches the iPad the machine itself
-            # draws on, perception/nubzuki names the pose, and the reading
-            # goes through the same contract as every other source.  A frame
-            # with no figure maps to present=False and the 0.7 s safety gate
-            # does the stopping -- never this loop.
+            # Vision link: the camera reads the iPad the machine draws on.  No
+            # figure -> present=False; the 0.7 s gate stops it, never this loop.
             ok_cam, raw = cap.read()
             if not ok_cam:
                 reading = mascot_reading([])
@@ -520,26 +408,16 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                             (60, 60, 220), 2, cv2.LINE_AA)
                 time.sleep(0.2)
             else:
-                # The region of interest, if one was given, before anything
-                # looks at the frame -- the recognizer and the dashboard's
-                # camera panel then share one view of the world.
+                # Crop/zoom before anything reads the frame: recognizer and
+                # dashboard panel share one view.
                 raw = magnify(crop_frame(raw, crop), zoom)
-                # half the stock size gate: a swaying, motion-blurred figure
-                # shrinks in the mask before it vanishes from it
                 h_, w_ = raw.shape[:2]
-                # 0.0012, down from 0.002: a swaying figure half out of
-                # the crop is small before it is gone
+                # 0.0012 (below stock): a swaying figure is small before it is gone
                 seen = nz.read(raw, min_area=int(0.0012 * h_ * w_))
                 held = ""
                 if seen:
-                    # One frame is a vote, not an answer.  At a blend midpoint
-                    # the drawn face genuinely sits between two poses and
-                    # consecutive frames round either way, so the state sent
-                    # to the machine is the *most shown* of the last few
-                    # seconds -- what the panel is displaying, not what this
-                    # frame happened to land on.  Presence is deliberately NOT
-                    # voted: it keeps the grace window below, so a figure that
-                    # truly goes away still reaches the safety gate on time.
+                    # One frame is a vote, not an answer (blend midpoints
+                    # flicker); presence is NOT voted, so the gate stays on time.
                     big = max(seen, key=lambda q: q.box[2] * q.box[3])
                     recent_pose[big.pose] = big
                     modal = vote.update(now, big.pose) or big.pose
@@ -549,12 +427,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                     last_seen_t = now
                 else:
                     reading = None      # no sighting: the plant answers below
-                # The plant is the REAL VirtualBaby, ticking on the same
-                # physical inputs as --baby: the tablet's measured shake when
-                # streaming (the cradle rocks the very screen the face lives
-                # on), else the commanded envelope.  Its truth goes OUT to
-                # the iPad as the drawn face; the machine's input stays what
-                # the camera read back.  One algorithm, two windows onto it.
+                # The plant ticks on the same inputs as --baby; its truth goes
+                # OUT to the iPad, the machine's input is what the camera read.
                 live_imu = shared.ipad_motion.fresh(now)
                 soothing = (shared.ipad_motion.strength(now) if live_imu
                             else shared.engine.env * shared.engine.amp_scale)
@@ -562,11 +436,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                     now, soothing=soothing,
                     motion=shared.engine.mode.id if shared.engine.mode else None,
                     sensed=shared.ipad_motion.snapshot(now) if live_imu else None)
-                # "deep" is decided by time-in-state, not by the level:
-                # the level jitters across any threshold and would flap the
-                # face between sibling poses every few frames.  15 s settled
-                # earns the deeper pose (sitHeart / dreaming); the reported
-                # state word is unchanged, so the exact match holds.
+                # "deep" is time-in-state, not level (level jitter would flap
+                # sibling poses); 15 s settled earns the deeper pose.
                 if (plant_state_since is None
                         or plant_state_since[0] != truth.emotion):
                     plant_state_since = (truth.emotion, now)
@@ -574,12 +445,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                                "state": truth.emotion,
                                "deep": now - plant_state_since[1] > 15.0}
                 if reading is None:
-                    # No sighting -> the machine hears the plant itself, not
-                    # a stale echo: the figure it cannot find is a drawing of
-                    # a state the server already knows exactly.  Vision takes
-                    # back over on the next sighting; the overlay names the
-                    # source either way.  The gate is untouched -- the jam
-                    # input and a dead camera (ok_cam above) still trip it.
+                    # No sighting -> the machine hears the plant itself; jam
+                    # and a dead camera still trip the gate.
                     gap = 0.0 if last_seen_t is None else now - last_seen_t
                     reading = SimpleNamespace(
                         present=True, distress=truth.distress,
@@ -587,21 +454,11 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                         x=0.0, phase="plant (unseen)")
                     held = f"  (unseen {gap:.0f}s -- plant state)"
                 else:
-                    # Vision names the state -- the proof the loop reads back
-                    # what the screen drew -- but the LEVEL the machine acts
-                    # on is always the plant's continuous truth.  A pose can
-                    # only encode four flat bands, so acting on the band made
-                    # the input sawtooth between band and truth every time
-                    # the named state and the plant disagreed (a blend
-                    # midpoint, a flickering detection).  The band was also
-                    # what let a hand on the iPad's pose wheel steer the
-                    # machine; that trick goes with it, stated here so its
-                    # loss is a decision and not a surprise.
+                    # Vision names the state, but the LEVEL is always the plant's
+                    # continuous truth (a pose's flat band sawtoothed the input).
                     reading.distress = truth.distress
                 frame = nz.annotate(raw, seen)
-                # Sized to the frame, not to 640x480: a crop can leave this
-                # only 160 px wide, and a fixed 0.62 font there covers the
-                # figure it is labelling (the dashboard then upscales it).
+                # Overlay sized to the frame: a crop can leave it 160 px wide.
                 k = nz.overlay_scale(frame)
                 cv2.putText(frame, f"{reading.emotion}  "
                             f"asserts {reading.distress:.2f}{held}",
@@ -616,8 +473,7 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
             ok, msg = shared.engine.command(motion_req, now)
             shared.log(msg if ok else "refused: " + msg)
 
-        # The soothing policy watches the same distress the machine gets, so
-        # it can settle each advised motion's outcome (core/policy.py).
+        # The policy watches the same distress the machine gets (core/policy.py).
         if shared.policy is not None:
             shared.policy.observe(now, infant_level(reading), shared.engine)
 
@@ -634,9 +490,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
         if (ap_mm, ml_mm, z_mm, shared.viz_gain) != ik_key:
             ik_key = (ap_mm, ml_mm, z_mm, shared.viz_gain)
             ik_pose = cradle_angles(ap_mm, ml_mm, z_mm)
-            # The full linkage: cranks, knees and the bearing.  Gain applies
-            # to plate travel before solving, so the exaggerated pose is
-            # still a real pose and the rods stay on their bearings.
+            # Gain applies to plate travel before solving, so the exaggerated
+            # pose is still a real pose.
             if ros is not None:
                 ik_joints = cradle_joint_state(ap_mm, ml_mm, z_mm,
                                                gain=shared.viz_gain)
@@ -646,11 +501,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
             ros.send_joints(ik_joints)
 
         if bridge is not None:
-            # The physical cradle plays the same decision as slots.  The gate
-            # needs no special case here: a fault makes the machine taper, so
-            # desired_slot() goes None and no further slot is requested.  A
-            # raw --play <slot> hold bypasses the engine, so IT checks the
-            # gate itself -- same rule, stated once.
+            # A fault makes the machine taper, so desired_slot() goes None; a
+            # raw --play hold bypasses the engine, so IT checks the gate.
             if shared.play_slot is not None:
                 gated = shared.jam or shared.machine.state == "gate_fail"
                 bridge.tick(now, None if gated else shared.play_slot)
@@ -669,7 +521,6 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
                 "alarm": bool(fault or shared.machine.state == "gate_fail"),
             })
 
-        # Both remaining sources draw their own frame.
         ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
         state = build_state(shared, reading, now)
         with shared.lock:
@@ -682,9 +533,8 @@ def sensor_loop(shared: Shared, camera_index: int, fake: bool, ros,
 
 
 def _ipad_state(shared: Shared, now: float) -> dict:
-    """The IMU snapshot plus its *felt* reading in the taste vocabulary --
-    classified once, server-side, so the dashboard and the virtual baby can
-    never disagree about what a motion felt like."""
+    """The IMU snapshot plus its *felt* reading -- classified once,
+    server-side, so dashboard and virtual baby can never disagree."""
     snap = shared.ipad_motion.snapshot(now)
     if snap["connected"]:
         from perception.baby import Personality
@@ -713,8 +563,7 @@ def build_state(shared: Shared, reading, now: float) -> dict:
                 "name": getattr(reading, "name", ""),
                 "alarm": bool(getattr(reading, "alarm", False)),
                 "phase": getattr(reading, "phase", "")},
-        # the drawn face's own channel (--sense): the plant's truth, which
-        # may differ from tag.* -- tag is what the machine believes it saw
+        # --sense: the plant's truth; tag.* is what the machine believes it saw
         **({"face": shared.face} if shared.face is not None else {}),
         "jam": shared.jam,
         "ipad": _ipad_state(shared, now),
@@ -726,28 +575,20 @@ def build_state(shared: Shared, reading, now: float) -> dict:
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
-# A client that walks away mid-stream.  Over plain HTTP that surfaces as
-# BrokenPipe/ConnectionReset; over TLS the same event arrives as SSLEOFError
-# (the tablet closed the socket without a close_notify), which is an SSLError
-# and *not* a ConnectionError -- so it has to be named or every closed tab
-# prints a traceback.
+# A departed client: BrokenPipe/Reset over HTTP; over TLS it arrives as
+# SSLEOFError, an SSLError and *not* a ConnectionError, so it must be named.
 GONE = (BrokenPipeError, ConnectionResetError, ssl.SSLError)
 
 
 class DashboardServer(ThreadingHTTPServer):
     """ThreadingHTTPServer that does TLS per connection, in the worker thread.
 
-    Wrapping the *listening* socket (the obvious ssl recipe) runs every TLS
-    handshake inside the single accept loop -- so one client stalling mid
-    handshake (a phone parked on a certificate warning, a browser preconnect
-    that never speaks) wedges the whole server, and every later connection
-    times out, loopback included.  Wrapping here, in the per-connection
-    worker thread with a handshake deadline, keeps a stalling client's
-    damage to its own thread.
+    Wrapping the *listening* socket runs every handshake in the accept loop,
+    so one stalling client wedges the whole server; wrapping here, with a
+    deadline, confines the damage to its own thread.
     """
 
-    request_queue_size = 32   # stdlib default of 5 is too small for a
-                              # dashboard tab (SSE+MJPEG+preconnects) + tablet
+    request_queue_size = 32   # stdlib 5 is too small for a dashboard tab + tablet
     ssl_context: Optional[ssl.SSLContext] = None
 
     def finish_request(self, request, client_address):
@@ -797,10 +638,7 @@ class Handler(BaseHTTPRequestHandler):
                 if ctype == "font/woff2":   # never changes under its own name
                     self.send_header("Cache-Control", "public, max-age=604800")
                 else:
-                    # The dashboard trio is edited constantly and carries no
-                    # ETag or Last-Modified, so a browser is free to invent its
-                    # own freshness window and serve a stale app.js -- which
-                    # looks exactly like "my change did nothing".
+                    # no ETag/Last-Modified: forbid heuristic caching (stale app.js)
                     self.send_header("Cache-Control", "no-cache, must-revalidate")
                 self.end_headers()
                 self.wfile.write(body)
@@ -874,9 +712,8 @@ class Handler(BaseHTTPRequestHandler):
     def _policy(self, url) -> None:
         """Switch the decision brain live: ?set=off|reflex|ollama|claude.
 
-        Re-selecting the current brain is the "reset memory" gesture --
-        every switch starts a fresh SoothePolicy.  The machine keeps every
-        safety decision either way; a brain only ever suggests P1 motions.
+        Every switch starts a fresh SoothePolicy (re-select = reset memory);
+        the machine keeps every safety decision, a brain only suggests.
         """
         kind = parse_qs(url.query).get("set", [""])[0].lower()
         shared = self.shared
@@ -900,8 +737,7 @@ class Handler(BaseHTTPRequestHandler):
     def _taste(self, url) -> None:
         """Retune the virtual infant's hidden temperament live (--baby only).
 
-        ?random=1, or ?love=M13&hate=M10,M12&combo=M09,M13 -- everything
-        must be a P1 candidate id.  Habituation resets with the new taste.
+        ?random=1, or ?love/?hate/?combo of P1 candidate ids; habituation resets.
         """
         baby = self.shared.baby
         if baby is None:
@@ -974,10 +810,7 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
           personality: bool = False, sense_cap=None, slot_cap: int | None = None,
           crop: Optional[tuple[float, float, float, float]] = None,
           zoom: float = 1.0, vote_s: float = 3.0):
-    # Bind FIRST, before any thread exists.  A busy port used to surface as
-    # a raw traceback then a C++ abort ("terminate called without an active
-    # exception"): the bind failed after worker/ROS threads were already
-    # alive and the interpreter tore down under them.  Fail here, cleanly.
+    # Bind FIRST, before any thread exists, so a busy port fails cleanly.
     Handler.shared = shared
     try:
         server = DashboardServer(("0.0.0.0", port), Handler)
@@ -994,16 +827,15 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
             ros = RosSide()
         except Exception as exc:   # ROS absent or misconfigured: not fatal
             shared.log(f"RViz mirroring off ({type(exc).__name__})")
-    # After RosSide on purpose: RosSide calls rclpy.init() unguarded, while
-    # PhorceRobot's is guarded -- this order works in both directions.
+    # After RosSide on purpose: its rclpy.init() is unguarded, PhorceRobot's
+    # is guarded -- this order works in both directions.
     robot = bridge = None
     if robot_target is not None:
         from core.phorce_iface import PlayOutcome, SlotBridge, make_robot
         try:
             def _played(slot: int, outcome) -> None:
-                # --once: the hold clears itself after the first *successful*
-                # completion (rejects keep retrying under the bridge's own
-                # hold-offs -- once means once played, not once attempted)
+                # --once means once *played*, not once attempted: rejects
+                # keep retrying under the bridge's hold-offs
                 if outcome is PlayOutcome.OK and shared.play_once \
                         and shared.play_slot is not None:
                     shared.play_slot = None
@@ -1011,19 +843,15 @@ def start(shared: Shared, port: int, camera_index: int, fake: bool, use_ros: boo
             robot = make_robot(mock=False, target=robot_target,
                                on_play_result=_played)
             robot.start()
-            # One physical episode per decision (the team's demo rule): a
-            # completed slot is not replayed while the machine keeps naming
-            # it -- the rig moves again when the decision changes.  The one
-            # exception is --play WITHOUT --once, whose documented job is to
-            # loop a raw slot.  1 s rest still spaces any two plays.
+            # One physical episode per decision; --play without --once loops
+            # by design.  1 s rest still spaces any two plays.
             looping = shared.play_slot is not None and not shared.play_once
             bridge = SlotBridge(robot, log=shared.log, rest_s=1.0,
                                 max_slot=slot_cap, repeat=looping)
             shared.log(f"phorce: playing slots on {robot_target}")
         except Exception as exc:
             # Asked-for hardware that is absent is a real failure, not a
-            # degraded mode: nobody should watch RViz rock while believing
-            # the physical cradle is doing the same.
+            # degraded mode.
             raise SystemExit(
                 f"--robot {robot_target}: {type(exc).__name__}: {exc}\n"
                 "real robot: ./robot.sh first, and export ROS_DOMAIN_ID=21 "
@@ -1074,7 +902,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "perception/nubzuki -- the vision link")
     parser.add_argument("--verify", "--fake", dest="fake", action="store_true",
                         help="no camera: the acted verification episode "
-                             "through the real recognizer (docs/VERIFY.md)")
+                             "through the real recognizer (docs/VERIFICATION.md)")
     parser.add_argument("--baby", action="store_true",
                         help="no camera: a virtual infant (random state "
                              "process) the sway can genuinely soothe")
@@ -1089,7 +917,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="start with a decision brain advising the trial "
                              "motion: 'reflex' = local algorithm, 'dream' = "
                              "the DREAM-Chunk planner (dreams every candidate "
-                             "forward, docs/dream-chunk.md), 'ollama' = "
+                             "forward, docs/DREAM-CHUNK.md), 'ollama' = "
                              "local LLM (OLLAMA_URL/OLLAMA_MODEL), 'claude' = "
                              "Anthropic API (paid, ANTHROPIC_API_KEY).  The "
                              "dashboard can switch brains live either way.")
@@ -1141,12 +969,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--personality needs an infant to wear it: --baby, or "
                      "--sense (the plant behind the drawn face)")
 
-    # --fake is a desk demo: a synthetic tag, no camera and no rig, so there is
-    # nothing an R-grade mode can hurt.  Unlock the whole library there so the
-    # dashboard's selector can drive all 50 without a second flag.  This does
-    # not put R into automatic behaviour -- TRIAL_LADDER is P1 only, and the
-    # machine never commands anything outside it plus M05/M06/M08.  --baby
-    # still needs --research explicitly.
+    # --fake has no rig, so unlock the whole library for the selector; R never
+    # enters automatic behaviour, and --baby still needs --research explicitly.
     research = args.research or args.fake
     shared = Shared(allow_research=research, pace_s=args.pace,
                     give_up=args.give_up)
@@ -1159,11 +983,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         shared.log(f"robot card holds slots 1..{slot_cap}: every brain now "
                    f"decides among {len(keep)} motions")
     if args.play:
-        # One motion, held, automatic care off, safety gate still armed.
-        # A bare NUMBER is the demo form: the SD card's slots are their own
-        # motions, so `--play 5` asks the rig for slot 5 directly and the
-        # screen stays parked (we cannot draw a motion we did not author).
-        # A library id (N05/M12) still works and plays on screen too.
+        # One motion held, auto care off, safety gate still armed.  A bare
+        # NUMBER holds a raw SD slot (screen parked); a library id plays on
+        # screen too.
         shared.machine.auto = False
         if args.play.isdigit():
             slot = int(args.play)
@@ -1208,9 +1030,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         shared.machine.advisor = shared.policy.pick
         shared.log(f"decision brain: {args.policy} "
                    f"({len(shared.policy.scenarios)} taught scenarios)")
-    # A bare launch means the verification episode; the camera is asked for
-    # explicitly (--sense), because a missing camera should be a loud failure
-    # on the mode that needs it, not a silent fallback on the mode that don't.
+    # Bare launch = verification episode; the camera must be asked for
+    # (--sense) so a missing camera fails loudly.
     if args.sense and args.baby:
         parser.error("--sense already runs the virtual baby as the plant "
                      "behind the drawn face; --baby is the no-camera mode")
@@ -1226,9 +1047,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if zoom < 1.0:
         parser.error(f"--zoom magnifies, so it starts at 1 -- got {zoom:g}")
     if zoom > 1.0 and crop is None:
-        # "Zoom the webcam" with nothing else said means the middle of the
-        # frame, which also keeps the cost flat: the region shrinks by N as
-        # the scale grows by N, so the recognizer sees the same pixel count.
+        # bare --zoom reads the middle 1/N, keeping the pixel count flat
         crop = centre_region(zoom)
     cam_size = None
     if args.camera_size:
@@ -1244,24 +1063,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         crop, zoom = None, 1.0
     sense_cap = None
     if args.sense:
-        # Opened HERE and handed to the loop still open: a probe-and-release
-        # preflight races anything else on the device, and a failed open in
-        # the worker could only kill that thread quietly while the server
-        # kept serving a frozen page.  Open once, fail loudly.
+        # Opened here and handed to the loop still open: open once, fail loudly.
         sense_cap = cv2.VideoCapture(args.camera_index)
         if not sense_cap.isOpened():
             raise SystemExit(
                 f"--sense: camera {args.camera_index} would not open "
                 f"(in use? try --camera-index 1; ls /dev/video*)")
-        # One frame in the driver's queue, not the default four: nz.read on a
-        # big crop can take ~0.7 s/frame, and a deeper queue makes read()
-        # return the *oldest* buffered frame -- the machine then reads a
-        # screen seconds in the past and every reading lags reality.
+        # One buffered frame, not four: a deeper queue returns the *oldest*
+        # frame and every reading lags reality.
         sense_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if cam_size is not None:
             # A request, not a setting: UVC cameras silently keep their own
-            # size when asked for one they do not have, so report what the
-            # device actually handed back rather than what we asked for.
+            # size, so report what came back.
             sense_cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_size[0])
             sense_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_size[1])
         got = (int(sense_cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
@@ -1278,11 +1091,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                                        sense_cap=sense_cap,
                                        slot_cap=slot_cap, crop=crop, zoom=zoom,
                                        vote_s=args.vote)
-    # HTTPS is the default, because the demo's most fragile feature -- the
-    # iPad motion permission -- silently refuses on plain HTTP.  A local CA +
-    # server cert pair is minted once (tools/make_https_cert.sh) into
-    # .local-certs/ and reused; it is re-minted when the LAN IP changes,
-    # since the cert names the IP the tablet will actually dial.
+    # HTTPS by default: iPad motion permission silently refuses on plain HTTP.
+    # The local cert is reused, re-minted when the LAN IP changes (it names it).
     if args.http:
         if args.certfile:
             parser.error("--http and --certfile contradict each other")

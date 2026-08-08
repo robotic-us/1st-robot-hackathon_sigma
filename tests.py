@@ -5,9 +5,7 @@
     python3 tests.py cradle serve    # run just those suites
     python3 tests.py --list          # show what exists
 
-No suite needs a camera, microphone, robot or ROS.  The suites live here
-rather than in the modules they test, so the modules stay lean and there is
-exactly one way to check the project.
+No suite needs a camera, microphone, robot or ROS.
 """
 
 from __future__ import annotations
@@ -34,27 +32,23 @@ def test_listen() -> None:
     assert level == 0.0, "silence must read level 0"
     print(f"  silence          level {level:.3f}  cry {cry:.3f}")
 
-    # A 500 Hz tone sits squarely in the cry band.
     voice = 0.3 * np.sin(2 * np.pi * 500 * t).astype(np.float32)
     level, cry = _analyse(voice)
     assert cry > 0.8, f"a 500 Hz tone should be almost all cry-band, got {cry:.3f}"
     assert level > 0.6, f"0.3 amplitude should be loud, got {level:.3f}"
     print(f"  500 Hz tone      level {level:.3f}  cry {cry:.3f}")
 
-    # 5 kHz is well outside it -- hiss, not voice.
     hiss = 0.3 * np.sin(2 * np.pi * 5000 * t).astype(np.float32)
     level_h, cry_h = _analyse(hiss)
     assert cry_h < 0.1, f"a 5 kHz tone must not read as voice, got {cry_h:.3f}"
     print(f"  5 kHz tone       level {level_h:.3f}  cry {cry_h:.3f}")
 
-    # White noise is broadband: loud, but not voice-shaped.
     rng = np.random.default_rng(0)
     noise = (0.3 * rng.standard_normal(n)).astype(np.float32)
     level_n, cry_n = _analyse(noise)
     assert cry_n < 0.35, f"broadband noise should score low on cry, got {cry_n:.3f}"
     print(f"  white noise      level {level_n:.3f}  cry {cry_n:.3f}")
 
-    # A quiet tone is voice-shaped but should not raise distress much.
     quiet = 0.01 * np.sin(2 * np.pi * 500 * t).astype(np.float32)
     level_q, cry_q = _analyse(quiet)
     assert level_q * cry_q < 0.1, "quiet voice must not read as distress"
@@ -80,7 +74,6 @@ def test_cradle() -> None:
     assert abs(a_peak_g(0.5, 10.0) - 0.0101) < 5e-4, "M12 theory a_peak"
     print(f"  library      50 motions, grades {grades}, envelope gate held -- ok")
 
-    # engine: research lock, ramp shape, taper, micro-resume
     eng = MotionEngine()
     assert not eng.command("M35", 0.0)[0], "R must be locked by default"
     assert not eng.command("M99", 0.0)[0], "unknown ids must be refused"
@@ -125,7 +118,6 @@ def test_cradle() -> None:
     assert 4.0 < peak <= 5.01, f"MICRO_RESUME is 50% A, saw {peak:.2f} mm"
     print(f"  engine       M01 parks, M08 resumes M12 at {peak:.1f} mm -- ok")
 
-    # machine: cry -> trial -> escalate -> 60 s no improvement -> alert
     eng = MotionEngine()
     box = CradleMachine(eng)
     t = 0.0
@@ -144,7 +136,6 @@ def test_cradle() -> None:
     assert box.snapshot(t)["trend"] == "new", "a fresh trial starts at 'new'"
     run(38.0, 0.6)
     assert eng.mode.id == "M13", "30 s without improvement must step up once"
-    # the rung step is a new motion, so measurement -- and the clock -- restart
     assert box.snapshot(t)["trend"] == "new", "a step up re-anchors the trend"
     assert box.snapshot(t)["trend_s"] < 10.0, "the step up restarts the clock"
     run(70.0, 0.6)
@@ -153,8 +144,7 @@ def test_cradle() -> None:
     assert box.snapshot(t)["trend"] == "", "a trend belongs to a live trial"
     print("  machine      cry: M12 trial, M13 at 30 s, alert+taper at 60 s -- ok")
 
-    # the trend headline: the machine's own checkpoint verdict, kept rather
-    # than only logged, so the dashboard and the branch taken cannot disagree
+    # trend headline: kept on the machine, so dashboard and branch cannot disagree
     eng = MotionEngine()
     box = CradleMachine(eng)
     t = 0.0
@@ -170,9 +160,7 @@ def test_cradle() -> None:
     print("  machine      trend: new -> improving, clock runs with the verdict"
           " -- ok")
 
-    # ...and with give_up off (serve.py's default) the same unimproving baby
-    # is never handed over: the trial stays up, the motion keeps changing,
-    # and only the 5-minute cap ends it.  The gate is a separate path.
+    # give_up off (serve.py's default): no hand-over, only the 5-minute cap stops
     eng = MotionEngine()
     box = CradleMachine(eng, give_up=False)
     events, t = [], 0.0
@@ -195,7 +183,6 @@ def test_cradle() -> None:
     run_g(320.0, 0.6)          # past TRIAL_CAP_S: the one honest stop
     assert box.state == "settling" and not box.alert, \
         "the 5 min cap still ends a trial, quietly"
-    # worsening changes the motion instead of aborting
     eng2 = MotionEngine()
     box2 = CradleMachine(eng2, give_up=False)
     t2 = 0.0
@@ -208,7 +195,6 @@ def test_cradle() -> None:
     print(f"  machine      give_up off: {len(tried)} motions tried, no "
           f"hand-over, 5 min cap still stops -- ok")
 
-    # machine: fuss -> improvement -> calm 60 s -> sleep taper -> quiet
     eng = MotionEngine()
     box = CradleMachine(eng)
     t = 0.0
@@ -221,7 +207,6 @@ def test_cradle() -> None:
     assert box.state == "trial" and box._resumed and eng.amp_scale == 0.5
     print("  machine      fuss: M10, sleep taper on calm, one M08 resume -- ok")
 
-    # machine: the gate outranks everything, even with auto off
     eng = MotionEngine()
     box = CradleMachine(eng)
     box.auto = False
@@ -252,7 +237,6 @@ def test_baby() -> None:
     assert hidden.shape == (480, 640, 3)
     print(f"  render       circle frame draws, starts {reading.emotion}  -- ok")
 
-    # A soothable cry yields to full sway; a hunger cry never does.
     def cry_under_sway(soothable: bool, seconds: float) -> str:
         b = VirtualBaby(seed=11)
         b.state, b.soothable, b._until = "CRY", soothable, 1e9
@@ -266,7 +250,6 @@ def test_baby() -> None:
     assert cry_under_sway(False, 120.0) == "CRY", "a hunger cry must not"
     print("  soothing     soothable cry steps down under sway, hunger holds  -- ok")
 
-    # Closed loop, 20 simulated minutes: baby -> machine -> engine -> baby.
     engine = MotionEngine()
     box = CradleMachine(engine)
     baby = VirtualBaby(seed=3)
@@ -310,9 +293,7 @@ def test_m50() -> None:
     assert sorted(chunks) == list(range(1, 51)), "slot ids must be 1..50"
     print("  compile      50 files, MS ID 1..50, 4 axes each  -- ok")
 
-    # The four cranks do NOT share a magnitude: the linkage is asymmetric, so
-    # 10 mm of sway costs each one a different angle.  Check the compiled slot
-    # against the kinematics rather than against a single-lever approximation.
+    # The linkage is asymmetric: check each crank against the kinematics, not one lever.
     from core.rig import axis_angles
 
     want10 = [abs(v) for v in axis_angles(sway_mm=10.0)]
@@ -345,11 +326,7 @@ def test_m50() -> None:
     print("  envelope     every slot under the 30 mm cap, ends at rest  -- ok")
 
     # -- the three channels --------------------------------------------------- #
-    # The rig is two five-bar linkages (see core/rig.py): all four cranks the
-    # same way sways the plate, a pair's two cranks opposed lifts it, and pair
-    # against pair pitches it.  Every slot used to write one command to all four
-    # rows, which made M19-M28 byte-identical to M09-M18 and compiled the Z modes
-    # to flat zeros on the false premise that the rig has no vertical DOF.
+    # Regression: one command to all four rows made M19-M28 copy M09-M18 and Z flat.
     from core.rig import PAIR_A, PAIR_B
 
     def signs(chunk):
@@ -357,9 +334,7 @@ def test_m50() -> None:
         j = int(np.abs(yy).sum(axis=1).argmax())      # the instant of most travel
         return yy[j], yy
 
-    # ML sways: within a pair the two cranks turn the SAME way.  They do not
-    # share a magnitude -- the linkage is not symmetric -- so this checks sign,
-    # which is what "the arms swing together" actually means.
+    # ML: within a pair the cranks share sign, not magnitude.
     for ml_id in range(9, 19):
         row, _ = signs(chunks[ml_id])
         assert row[PAIR_A[0]] * row[PAIR_A[1]] > 0 and row[PAIR_B[0]] * row[PAIR_B[1]] > 0, \
@@ -373,8 +348,7 @@ def test_m50() -> None:
         assert float(np.abs(yy).max()) > 1e-3, f"M{ap_id:02d} must actually move"
     print("  channels     M09-M18 sway together, M19-M28 counter-rotate  -- ok")
 
-    # The regression that mattered most: Z is real on this rig, and M48-M50 used
-    # to compile to a single flat zero cell.
+    # Regression: Z is real on this rig; M48-M50 once compiled flat.
     for z_id in (48, 49, 50):
         row, yy = signs(chunks[z_id])
         assert float(np.abs(yy).max()) > 1e-3, \
@@ -386,8 +360,7 @@ def test_m50() -> None:
     flat = [sid for sid, c in chunks.items()
             if float(np.abs(c.dream([0.0] * 4, dt=0.05)[1]).max()) < 1e-9]
     assert flat == [1, 2], f"only STATIC and PAUSE should be flat, got {flat}"
-    # "Opposed at any instant", which is what using the channel means -- at a
-    # zero crossing both cranks read ~0 and the peak-instant sign says nothing.
+    # "Opposed at any instant": the peak-instant sign says nothing at a zero crossing.
     opposed = sum(1 for c in chunks.values()
                   if float((signs(c)[1][:, PAIR_A[0]]
                             * signs(c)[1][:, PAIR_A[1]]).min()) < -1e-12)
@@ -406,15 +379,13 @@ def test_serve() -> None:
     from serve import Shared, mascot_reading, start
 
     # -- the vision link's contract, no camera needed -------------------------
-    # An empty frame is the safety gate's input, not a distress claim...
     from types import SimpleNamespace as _NS
 
     from perception import nubzuki as nz
     empty = mascot_reading([])
     assert empty.present is False and empty.emotion == nz.UNKNOWN
     assert empty.distress == 0.0
-    # ...a distress pose asserts only what vision may (§5: the fuss band,
-    # never across CRY_LEVEL) even though the echo recovers the sent level...
+    # §5: a pose may assert only the fuss band; the echo is the level we sent
     def sight(pose, box=(0, 0, 100, 100), eyes=2):
         return nz.Sighting(pose=pose, why="test", box=box,
                            valence=nz.POSES[pose][0], arousal=nz.POSES[pose][1],
@@ -422,9 +393,6 @@ def test_serve() -> None:
     r = mascot_reading([sight("rage")])
     assert r.emotion == "CRY" and 0.30 <= r.distress < 0.45, vars(r)
     assert r.echo == nz.LIVE_LEVEL["rage"] and r.echo > r.distress
-    # every pose on the sheet maps to a plant state, and the asserted level
-    # follows the state's own §5-safe band -- whatever costume rotation picks,
-    # the machine's input stays lawful and the display word stays exact
     from serve import POSE_STATE
     assert set(POSE_STATE) == set(nz.POSES), "a pose fell out of the pools"
     for pose in nz.POSES:
@@ -436,13 +404,11 @@ def test_serve() -> None:
     assert mascot_reading([sight("gloomy")]).distress == 0.20
     assert mascot_reading([sight("sitHeart")]).emotion == "CALM"
     assert mascot_reading([sight("dreaming")]).emotion == "SLEEP"
-    # ...sleep reads as the taper input, and the larger figure wins the frame.
     assert mascot_reading([sight("sleeping")]).emotion == "SLEEP"
     two = mascot_reading([sight("rage", box=(0, 0, 10, 10)),
                           sight("neutral", box=(20, 20, 200, 200))])
     assert two.emotion == "CALM", "the largest figure is the reading"
-    # ...but a figure that *encloses* another is the panel's dark bezel read
-    # as ink, not a mascot -- it is 4x Nubzuki's area and would win outright.
+    # ...but an enclosing figure is the panel's bezel read as ink, not a mascot
     ring = mascot_reading([sight("sleeping", box=(0, 0, 400, 400)),
                            sight("rage", box=(90, 90, 180, 180))])
     assert ring.emotion == "CRY", "an enclosing frame is not a figure"
@@ -490,17 +456,14 @@ def test_serve() -> None:
 
     # -- --zoom: magnify the region, and read the middle when none was given -
     from serve import centre_region, magnify
-    # One definition of the framing, shared by serve.py --sense and
-    # `nubzuki.py --camera`: a second copy is how two readers quietly stop
-    # seeing the same pixels (the JOINT_NAMES lesson, in the vision path).
+    # one shared framing definition: a second copy splits the two readers' pixels
     for fn in (crop_frame, parse_crop, centre_region, magnify):
         assert fn is getattr(nz, fn.__name__), f"{fn.__name__} has two homes"
     assert centre_region(1.0) == (0.0, 0.0, 1.0, 1.0)
     assert centre_region(2.0) == (0.25, 0.25, 0.5, 0.5)
     assert magnify(wide, 1.0) is wide, "x1 is the frame, untouched"
     assert magnify(wide, 2.0).shape == (1440, 2560, 3)
-    # the pair is cost-flat by construction: the region shrinks as the scale
-    # grows, so the recognizer keeps seeing one frame's worth of pixels
+    # cost-flat by construction: the region shrinks as the scale grows
     for z in (2.0, 3.0, 4.0):
         zoomed = magnify(crop_frame(wide, centre_region(z)), z)
         assert abs(zoomed.shape[0] - 720) <= 2 and abs(zoomed.shape[1] - 1280) <= 2, \
@@ -508,21 +471,15 @@ def test_serve() -> None:
     print("  camera zoom   x2 magnifies, bare --zoom reads the middle      -- ok")
 
     # -- the 3 s state vote: flicker is suppressed, absence is not ------------
-    # A blend midpoint makes consecutive frames round to either side, so the
-    # machine is told the most-shown pose of the window rather than this
-    # frame's.  Presence is deliberately excluded: a figure that truly leaves
-    # must still reach the safety gate on its own 0.7 s, not the window's.
     vote = nz.Tracker(3.0)
     flicker = ["rage", "rage", "angry", "rage", "angry", "rage", "rage"]
     out = [vote.update(0.3 * i, p) for i, p in enumerate(flicker)]
     assert out[-1] == "rage", f"majority lost to flicker: {out}"
     assert all(o == "rage" for o in out), f"vote wobbled with the frames: {out}"
-    # the window really is a window: a settled new pose takes over once the
-    # old votes age out, so this is a smoother and not a latch
+    # a smoother, not a latch: a settled new pose takes over as old votes age out
     for i in range(12):
         held = vote.update(2.2 + 0.3 * i, "sleeping")
     assert held == "sleeping", f"vote never let go of the old pose: {held}"
-    # absence is not a pose: no vote can manufacture presence
     gone = nz.Tracker(3.0)
     assert gone.update(0.0, None) is None
     assert mascot_reading([]).present is False
@@ -537,15 +494,11 @@ def test_serve() -> None:
     time.sleep(1.0)
 
     try:
-        # The dashboard is three files, all served no-build: markup at /,
-        # the stylesheet and the script beside it.
         page = urlopen(base + "/", timeout=5).read()
         assert b"SIGMA" in page, "dashboard page must serve"
         css = urlopen(base + "/style.css", timeout=5).read()
         assert b":root" in css, "stylesheet must serve"
         js = urlopen(base + "/app.js", timeout=5).read()
-        # The library selector is built from /motions at runtime: its mount
-        # points live in the markup, its one fetch in the script.
         for hook in (b'id="motions"', b'id="mfilter"', b'id="ipad-card"'):
             assert hook in page, f"the M01-M50 selector lost {hook!r}"
         for hook in (b'fetch("/motions")', b'"/motion?id=" + cell.dataset.id',
@@ -554,8 +507,7 @@ def test_serve() -> None:
         print(f"  GET /        {len(page)}b html + {len(css)}b css + "
               f"{len(js)}b js, library selector wired  -- ok")
 
-        # IBM Plex is self-hosted: the demo LAN has no route to a font CDN,
-        # so every @font-face the stylesheets name must serve from web/fonts/.
+        # IBM Plex is self-hosted: the demo LAN has no font CDN
         import re as _re
         faces = _re.findall(rb"url\((/fonts/[^)]+)\)", css)
         assert faces, "the stylesheet must self-host its @font-face files"
@@ -568,9 +520,7 @@ def test_serve() -> None:
         print(f"  GET /fonts   {len(set(faces))} IBM Plex woff2 served, "
               f"full-bleed layout  -- ok")
 
-        # The cradle-mounted iPad has its own full-screen infant view.  It
-        # receives state over the established SSE path and posts reduced IMU
-        # features back; it never gets a motion-command endpoint of its own.
+        # the iPad view: SSE in, IMU features out, never a motion-command endpoint
         baby_page = urlopen(base + "/baby", timeout=5).read()
         baby_js = urlopen(base + "/baby.js", timeout=5).read()
         baby_css = urlopen(base + "/baby.css", timeout=5).read()
@@ -579,16 +529,11 @@ def test_serve() -> None:
         for hook in (b'DeviceMotionEvent.requestPermission',
                      b'fetch("/motion-sensor"', b'new EventSource("/events")'):
             assert hook in baby_js, f"iPad sensor path lost {hook!r}"
-        # The mascot is vector, not a bitmap: it has to breathe, blink and
-        # ride the measured sway, so the page must ship the rig (a continuous
-        # expression ladder + the KAIST palette) and fetch no artwork at all.
         for hook in (b"drawNubzuki(", b"POSES", b"poseAt(", b"liveLook(",
                      b"cradleTilt(", b'"#3CA9E1"', b'"#241917"',
                      b"previewRaw === null"):
             assert hook in baby_js, f"the Nubzuki rig lost {hook!r}"
-        # Every pose the reference sheet draws, anchored where the sheet puts
-        # it on its own ACTIVE/CALM x NEGATIVE/POSITIVE chart.  The count is
-        # asserted too: a pose quietly dropped is the failure worth catching.
+        # every sheet pose, plus the count: a quietly dropped pose is the failure
         sheet = (b"rage", b"angry", b"shocked", b"kiss", b"dancing", b"star",
                  b"bashful", b"cool", b"neutral", b"crying", b"nerdy",
                  b"lounging", b"sitHeart", b"gloomy", b"sick", b"sleeping",
@@ -597,19 +542,13 @@ def test_serve() -> None:
             assert b'{key: "' + key + b'"' in baby_js, \
                 f"the sheet's {key.decode()} pose is missing"
         assert baby_js.count(b'{key: "') == len(sheet), "pose count changed"
-        # ...and the props that tell several of them apart.
         for hook in (b"shades", b"specs", b"bow:", b"notes:", b"cup:",
                      b"blanket", b"blackHeart", b"brownLegs", b"rainbow",
                      b"stars", b"lie:", b"sit:"):
             assert hook in baby_js, f"pose prop {hook!r} is missing"
-        # The reference sheet's circumplex, doubling as a live readout: the
-        # dot's quadrant is the infant's, so both axes must stay wired.
         for hook in (b"drawWheel(", b'"ACTIVE"', b'"CALM"',
                      b'"NEGATIVE"', b'"POSITIVE"'):
             assert hook in baby_js, f"the feelings wheel lost {hook!r}"
-        # ...and it is draggable, with a marked way back to live data.  The
-        # override stays client-side: this page reports IMU features and takes
-        # state back over SSE, it never tells the judge what it saw.
         for hook in (b"feltToState(", b'"pointerdown"', b"livePill(",
                      b'"GO LIVE"', b"manual = null"):
             assert hook in baby_js, f"the wheel's hand control lost {hook!r}"
@@ -633,8 +572,7 @@ def test_serve() -> None:
         snap = shared.ipad_motion.snapshot(time.monotonic())
         assert snap["connected"] and snap["samples"] == 30, snap
         assert snap["dominant_hz"] == 0.45 and 0 < snap["strength"] <= 1
-        # the physically-derived envelope: peak g direct, travel from the
-        # rocking-sinusoid identity A = a_peak / (2 pi f)^2
+        # envelope: peak g direct, travel from A = a_peak / (2 pi f)^2
         assert abs(snap["meas_peak_g"] - 0.0087) < 0.0005, snap["meas_peak_g"]
         assert abs(snap["meas_travel_mm"] - 10.6) < 0.5, snap["meas_travel_mm"]
         # hand-shaken (no dominant frequency) must refuse to invent a travel
@@ -642,8 +580,6 @@ def test_serve() -> None:
         assert shared.ipad_motion.snapshot(
             time.monotonic())["meas_travel_mm"] is None
         shared.ipad_motion.dominant_hz = 0.45
-        # ...and the SSE frame carries the server-side felt-classification,
-        # the same vocabulary the virtual baby's taste judges.
         time.sleep(0.4)
         with urlopen(base + "/events", timeout=5) as stream:
             felt_state = json.loads(stream.readline().decode()[6:])["ipad"]
@@ -659,36 +595,26 @@ def test_serve() -> None:
             state = json.loads(line[6:])
         for key in ("pose", "tag", "jam", "events", "cradle", "ipad"):
             assert key in state, f"state missing {key!r}"
-        # The dashboard words motion by axis (ML sways, Z lifts, AP tilts), so
-        # the frame must carry it and the script must branch on it -- without
-        # this, a Z mode reads as "rocking" and the see-saw as a sideways slide.
+        # the frame must carry the axis, or a Z mode reads as "rocking"
         for key in ("axis", "kind", "offset_mm", "research",
                     "trend", "trend_s"):
             assert key in state["cradle"], f"cradle frame missing {key!r}"
-        # the trend headline: the machine's own checkpoint verdict, rendered on
-        # the baby card.  Both halves have to ship or the line reads blank.
-        # the three working bands share exactly one viewport
         for hook in (b'id="screen"', b'id="workrow"', b'id="vitals"'):
             assert hook in page, f"the one-screen layout lost {hook!r}"
         for hook in (b'id="trend"', b'id="ipaddetail"'):
             assert hook in page, f"the dashboard lost {hook!r}"
-        # the bridge card appears only once a tablet streams -- with no tablet
-        # it was five dashes holding a column of the vitals row
+        # the bridge card appears only once a tablet streams
         for hook in (b"trendWords", b"c.trend", b'$("ipad-card").hidden'):
             assert hook in js, f"the dashboard script lost {hook!r}"
         for hook in (b'c.axis === "Z"', b"see-saw", b"bobbing",
                      b"offset_mm.ml", b"offset_mm.z"):
             assert hook in js, f"dashboard lost its axis wording: {hook!r}"
-        # The scenario opens quiet, under the fuss line, in the five-state
-        # vocabulary the machine still speaks (perception/nubzuki.py).
         assert state["tag"]["emotion"] == "AWAKE", \
             f"the scenario opens quiet, got {state['tag']}"
         assert state["tag"]["level"] < 0.12 and state["tag"]["present"]
         print(f"  GET /events  keys ok, state={state['tag']['emotion']} "
               f"level={state['tag']['level']:.2f}  -- ok")
 
-        # The emotion timeline seeds itself from /history: 1 Hz samples,
-        # bounded, carrying everything the chart draws.
         hist = json.loads(urlopen(base + "/history", timeout=5).read())
         assert isinstance(hist, list) and hist, "history must have samples"
         assert len(hist) <= 900, f"history unbounded: {len(hist)}"
@@ -703,8 +629,6 @@ def test_serve() -> None:
         assert json.loads(urlopen(base + "/jam", timeout=5).read())["jam"] is False
         print("  GET /jam     toggles  -- ok")
 
-        # The dashboard switches decision brains live; /taste guards itself
-        # outside --baby mode.
         ans = json.loads(urlopen(base + "/policy?set=reflex", timeout=5).read())
         assert ans == {"ok": True, "brain": "reflex"}, ans
         time.sleep(0.4)                       # one sensor tick to pick it up
@@ -762,10 +686,7 @@ def test_serve() -> None:
         urlopen(base + "/jam", timeout=5).read()
         print("  GET /auto    machine on; jam trips the safety gate  -- ok")
 
-        # The verification scenario's fussing phase opens at t=8 s; after the
-        # jam gate above recovers and cools down, the machine must trial M10
-        # off it.  The phase asserts its own level now that the judge is gone,
-        # so what this still proves is the *machine's* ladder, not a recognizer.
+        # the fussing phase asserts its own level: proves the machine's ladder, not a recognizer
 
         snap = wait_for(lambda c: c["state"] == "trial", 60,
                         "the fussing phase to open a trial")
@@ -796,26 +717,19 @@ def test_nubzuki() -> None:
     seen = nz.read(sheet)
     named = [s.pose for s in seen]
     assert len(seen) == 17, f"the sheet draws 17 figures, found {len(seen)}"
-    # Distinctness is the real assertion.  Seventeen boxes with two of them
-    # called the same thing means a rule stopped separating something, and a
-    # count alone would not notice.
+    # distinctness is the real assertion: a count alone would miss a merged pair
     assert len(set(named)) == 17, \
         f"every figure is a different pose; repeated {sorted({p for p in named if named.count(p) > 1})}"
     assert set(named) == set(nz.POSES), f"unnamed: {sorted(set(nz.POSES) - set(named))}"
     print(f"  segmentation {len(seen)} figures, 17 distinct poses  -- ok")
 
-    # The grade nothing else can give us: the sheet *is* an emotion chart, so
-    # where a figure is printed states the answer independently of how it is
-    # drawn.  A misread pose lands its anchor in the wrong place, and no rule is
-    # allowed to look at position, so this cannot be satisfied by construction.
+    # printed position grades the pose -- and no rule may read position
     worst, worst_key = 0.0, ""
     for s in seen:
         sv, sa = nz.sheet_position(s.box)
         err = float(np.hypot(sv - s.valence, sa - s.arousal))
         if s.pose == "star":
-            # The one deliberate disagreement: the celebrating figure is
-            # printed *outside* the circle (radius 1.37), and web/baby.js pulls
-            # it inside so the wheel can still reach it by hand.
+            # deliberate: star prints outside the circle; web/baby.js clamps it inside
             assert err < .60, f"star drifted from its clamped anchor: {err:.2f}"
             continue
         assert err < .25, f"{s.pose} sits {err:.2f} from where the sheet prints it"
@@ -824,9 +738,7 @@ def test_nubzuki() -> None:
     print(f"  placement    every pose within .25 of its printed spot "
           f"(worst {worst_key} {worst:.2f})  -- ok")
 
-    # Traceability: web/baby.js draws these poses and this names them.  Two
-    # tables, one sheet -- if they drift, the iPad shows one thing and the
-    # camera reports another, which is precisely the loop this exists to close.
+    # traceability: if the rig and recognizer tables drift, the loop breaks
     js = Path("web/baby.js").read_text()
     rig = {m[0]: (m[1], float(m[2]), float(m[3])) for m in re.findall(
         r'\{key: "(\w+)", label: "([^"]+)", at: \[\s*([-+]?[.\d]+),\s*([-+]?[.\d]+)\]', js)}
@@ -836,15 +748,12 @@ def test_nubzuki() -> None:
         assert nz.LABELS[key] == label, f"{key}: rig says {label!r}, recognizer {nz.LABELS[key]!r}"
         assert abs(nz.POSES[key][0] - x) < 1e-9 and abs(nz.POSES[key][1] - y) < 1e-9, \
             f"{key}: anchor drifted, rig {(x, y)} vs recognizer {nz.POSES[key]}"
-    # ...and the ladder that turns a distress number into a pose, inverted here,
-    # must still be the ladder the rig climbs.
     ladder = {m[1]: float(m[0]) for m in re.findall(
         r'\{at: ([\d.]+), key: "(\w+)"\}', js)}
     assert ladder == nz.LIVE_LEVEL, f"live ladder drifted: rig {ladder} vs {nz.LIVE_LEVEL}"
     print(f"  traceability 17 anchors + {len(ladder)}-rung live ladder match web/baby.js  -- ok")
 
-    # A camera will not hand us the sheet at print resolution.  These are the
-    # distortions a cradle-mounted lens actually applies.
+    # the distortions a cradle-mounted lens actually applies
     trials = {
         "half size": (cv2.resize(sheet, None, fx=.5, fy=.5,
                                  interpolation=cv2.INTER_AREA), .5),
@@ -863,11 +772,7 @@ def test_nubzuki() -> None:
             f"{name}: missing {sorted(set(nz.POSES) - set(keys))}"
     print(f"  robustness   17/17 under {', '.join(trials)}  -- ok")
 
-    # docs/poses/ is what web/baby.js actually renders, which is what a camera
-    # pointed at the iPad actually sees -- the sheet above is a different
-    # drawing of the same seventeen poses.  This corpus is the one that decides
-    # whether the recogniser works in the field, and it is where the hand-written
-    # rule ladder died: 7/17, retuned to 11/17, then replaced.
+    # docs/poses/ is what web/baby.js actually renders: the corpus that decides it
     import re
     poses_dir = Path("docs/poses")
     alias = {"sitheart": "sitHeart"}
@@ -891,16 +796,10 @@ def test_nubzuki() -> None:
     assert not wrong, f"rig renderings misread: {wrong}"
     print(f"  rig corpus   17/17 on what web/baby.js actually draws  -- ok")
 
-    # The page draws more than the mascot: a dark "Start motion sensor" button,
-    # body text, and the feelings wheel with its own coloured ring.  Exactly one
-    # figure may come back, or the loopback reads furniture as an infant.
     for key, img in rig:
         assert len(nz.read(img)) == 1, f"{key}: page furniture read as a figure"
     print("  page gate    the button, the text and the wheel all rejected  -- ok")
 
-    # Degraded past usefulness, it must *abstain* rather than guess.  A wrong
-    # confident answer propagates into the five-state mapping; a refusal reads
-    # as UNKNOWN and stops the cradle, which is the failure we want.
     def harsh(img):
         h, w = img.shape[:2]
         out = cv2.warpAffine(img, cv2.getRotationMatrix2D((w / 2, h / 2), 9, 1),
@@ -913,13 +812,7 @@ def test_nubzuki() -> None:
 
     guessed = [(k, name_biggest(harsh(img))) for k, img in rig
                if name_biggest(harsh(img)) not in (None, k)]
-    # The poses the machine can actually command are the ones a wrong answer
-    # would matter for; the other twelve need a hand on the wheel to appear at
-    # all.  Lounging survives this transform as Sleeping -- rotated 9 degrees
-    # and blurred, a figure lying with its eyes open is a figure lying with its
-    # eyes shut, and the eyes are the first thing the blur takes.  It is
-    # allowed because reading a hand-posed Lounging as Sleeping costs nothing;
-    # reading a *commanded* pose wrongly would.
+    # only machine-commandable poses matter; lounging->sleeping under blur is a hand-only slip
     reachable = set(nz.LIVE_LEVEL) | {"sleeping"}
     bad = [g for g in guessed if g[0] in reachable]
     assert not bad, f"a machine-reachable pose was guessed wrong: {bad}"
@@ -929,8 +822,6 @@ def test_nubzuki() -> None:
           f")  -- ok" if guessed else
           "  abstains     0 wrong answers on frames degraded past reading  -- ok")
 
-    # The point of the whole exercise: a level goes out to the iPad, the rig
-    # draws a pose, a camera reads it back, and the number survives the trip.
     for pose, level in nz.LIVE_LEVEL.items():
         sighting = next(s for s in seen if s.pose == pose)
         assert sighting.recovered_level == level
@@ -944,9 +835,7 @@ def test_nubzuki() -> None:
     print(f"  round trip   5 ladder poses recover {recovered}, "
           f"12 hand-only poses report no level  -- ok")
 
-    # The mascot reader is now the only thing that fills in the cradle's
-    # five-state vocabulary, so its output has to *be* that vocabulary -- not a
-    # second, parallel opinion the decision layer would have to reconcile.
+    # the reader's output must BE the five-state vocabulary, not a parallel opinion
     from core.cradle import CALM_LEVEL, CRY_LEVEL
     states = {s.pose: s.state for s in seen}
     assert set(states.values()) <= set(nz.STATES), \
@@ -962,17 +851,12 @@ def test_nubzuki() -> None:
     print(f"  five-state   all {len(nz.STATES)} reachable, "
           f"{sum(v == nz.DISTRESS_FACE for v in states.values())} poses distress  -- ok")
 
-    # The safety property the whole mapping exists to preserve: this is a
-    # *visual* channel, and §5 says vision alone never crosses CRY_LEVEL.  The
-    # recovered level may say 1.0 because that is the number the machine sent;
-    # what the reader is allowed to assert is a different, capped quantity, and
-    # conflating the two would hand the escalation ladder to a cartoon.
+    # §5: vision alone never crosses CRY_LEVEL -- asserted is capped, recovered is an echo
     worst = max(s.asserted_level for s in seen)
     assert worst < CRY_LEVEL, \
         f"vision asserted {worst:.2f}, at or above CRY_LEVEL {CRY_LEVEL}"
     for pose in ("sleeping", "dreaming", "lounging", "sitHeart"):
         assert next(s for s in seen if s.pose == pose).asserted_level < CALM_LEVEL
-    # ...and the three upset poses keep their order inside the band they share.
     upset = [next(s for s in seen if s.pose == p).asserted_level
              for p in ("crying", "angry", "rage")]
     assert upset[0] < upset[1] < upset[2], f"distress order lost: {upset}"
@@ -982,15 +866,12 @@ def test_nubzuki() -> None:
           f"{rage.asserted_level:.2f})  -- ok")
 
     # -- aiming the camera: the advice, without a camera ----------------------
-    # tools/aim_camera.py turns one frame into the serve.py flags that read it.
-    # The camera half cannot be tested here; the two judgements can.
+    # aim_camera's camera half cannot be tested here; its two judgements can
     from tools.aim_camera import suggest_crop, suggest_zoom
     assert suggest_zoom(40)[0] == 3.0 and suggest_zoom(0)[0] == 2.0
     assert suggest_zoom(55)[0] == 2.0
     assert suggest_zoom(80)[0] == 1.0 and suggest_zoom(400)[0] == 1.0
-    # a page that already fills the view is not worth cropping to...
     assert suggest_crop((2, 2, 1270, 714), (720, 1280, 3)) is None
-    # ...and a panel across the room is, padded and clamped inside the frame
     box = suggest_crop((900, 150, 300, 380), (720, 1280, 3))
     assert box is not None
     bx, by, bw, bh = box
@@ -998,10 +879,7 @@ def test_nubzuki() -> None:
     assert bx + bw <= 1280 and by + bh <= 720, f"crop left the frame: {box}"
     edge = suggest_crop((1200, 640, 79, 79), (720, 1280, 3))
     assert edge[0] + edge[2] <= 1280 and edge[1] + edge[3] <= 720, edge
-    # The overlay is sized to the frame it lands on.  A crop leaves the read
-    # frame small (160x144 for a distant panel), and a font fixed at 640-wide
-    # then covers the figure it labels -- which reads as "the labels were
-    # drawn before the crop", though the crop is what made the frame small.
+    # the overlay is sized to the frame: a fixed 640-wide font would cover a cropped figure
     assert nz.overlay_scale(np.zeros((480, 640, 3), np.uint8)) == 1.0
     assert nz.overlay_scale(np.zeros((144, 160, 3), np.uint8)) < 0.5
     assert nz.overlay_scale(np.zeros((2160, 3840, 3), np.uint8)) <= 1.6
@@ -1023,10 +901,7 @@ def test_animate() -> None:
     from core.rig import JOINT_NAMES, RosSide, joint_state
     from core.cradle import LIBRARY
 
-    # Both publishers must share the one JOINT_NAMES list and it must name the
-    # URDF's revolute joints exactly.  A stale local copy is how RViz broke
-    # after the tree was re-rooted: joint_axis_1/2/3 were published (they no
-    # longer exist) and joint_bearing_1/2/3 never were, so three arms had no TF.
+    # one JOINT_NAMES list, matching the URDF: a stale copy broke RViz after the re-root
     import xml.etree.ElementTree as ET
     urdf_rev = {j.get("name")
                 for j in ET.parse("cad/sigma.urdf").getroot().findall("joint")
@@ -1039,8 +914,6 @@ def test_animate() -> None:
     print(f"  publishers     one JOINT_NAMES list, matches the URDF's "
           f"{len(urdf_rev)} revolute joints  -- ok")
 
-    # --rock is a screen sine on the sway channel, solved through the linkage
-    # so even the exaggerated modes keep every arm on the holder.
     assert sway_state(ROCK_DEG, 0.0) == joint_state(), "must start at rest"
     want = joint_state(sway_mm=ROCK_DEG * MM_PER_DEG)
     got = sway_state(ROCK_DEG, math.pi / 2.0)
@@ -1050,11 +923,6 @@ def test_animate() -> None:
     print(f"  --rock         {ROCK_HZ} Hz sine over the sway channel, "
           f"all {len(got)} joints  -- ok")
 
-    # The default rate must stay inside what the real library can actually do.
-    # Amplitude is deliberately exaggerated for the screen; rate is not.
-    # --rock is a screen animation and is allowed to outrun the hardware; what
-    # must hold is that it stays a screen animation.  The library-driven modes
-    # are where the real rates live, and those are checked below.
     fastest = max(m.f_hz for m in LIBRARY if m.f_hz)
     assert 0 < ROCK_HZ and 0 < ROCK_DEG <= 45.0, \
         f"--rock defaults out of display range: {ROCK_HZ} Hz, {ROCK_DEG} deg"
@@ -1080,10 +948,7 @@ def test_animate() -> None:
     engine = MotionEngine()
     seen, angles = [], []
     peaks: dict[str, float] = {}
-    # library_angles yields a full URDF joint state -- 4 cranks, 4 knees, the
-    # bearing -- measured from the *export* pose, which is not the neutral one.
-    # Amplitude therefore means the crank's travel away from neutral, not its
-    # raw joint value, and the passive knees are not what the envelope bounds.
+    # amplitude = crank travel from neutral, not raw joint value; knees are not bounded
     from core.rig import cradle_cranks, joint_state
     for motion_id, arms, note in library_angles(engine, script,
                                                 solve=cradle_cranks):
@@ -1094,12 +959,7 @@ def test_animate() -> None:
             seen.append(motion_id)
     assert seen == list(default_ids), f"every entry must be commanded, got {seen}"
 
-    # Amplitude is exaggerated by the display gain and by nothing else.  Gain
-    # multiplies the *plate travel*, so the ceiling has to be solved at the
-    # exaggerated travel -- 5x of 20 mm is not 5x the crank angle, because the
-    # linkage is nonlinear.  Taken over every channel the tour uses and both
-    # directions: pitch costs more angle per millimetre than sway, and -20 mm
-    # costs more than +20 mm.
+    # gain multiplies plate travel, so the ceiling is solved over every channel and both signs
     from core.rig import axis_angles as _aa
     ceiling = max(abs(v)
                   for chan in ("sway_mm", "heave_mm", "pitch_mm")
@@ -1113,15 +973,11 @@ def test_animate() -> None:
     print(f"  tour           {len(default_ids)} entries, peak "
           f"{math.degrees(peak):.1f} deg, ends at rest  -- ok")
 
-    # What the player publishes has to use the real channels, or RViz and the
-    # rig show the same sway for everything.  This is the regression that
-    # survived the compiler fix twice: the CSVs were right while the live path
-    # still summed the offsets into one angle for all four cranks.
+    # regression (twice): the live path must use the real channels, not one summed sway
     from core.rig import PAIR_A, PAIR_B
 
     def walk(mid: str) -> list[list[float]]:
-        """The four crank angles -- joint_state interleaves knees and bearings,
-        so its first four entries are not the cranks."""
+        """The four crank angles -- joint_state's first four are not the cranks."""
         eng = MotionEngine(allow_research=True)
         return [arms for _, arms, _ in library_angles(eng, ((mid, 14.0),), 1.0,
                                                       solve=cradle_cranks)]
@@ -1138,7 +994,6 @@ def test_animate() -> None:
         "M22 is AP: pair A must counter-rotate, not copy ML"
     assert max(abs(a[PAIR_A[0]]) for a in ap) > math.radians(1.0), \
         "M22 must actually move"
-    # Z is real on this rig and used to publish nothing at all.
     z = walk("M49")
     assert max(abs(v) for a in z for v in a) > math.radians(0.3), \
         "M49 is a Z mode: the live path must lift the plate, not sit still"
@@ -1146,14 +1001,7 @@ def test_animate() -> None:
         "heave is the pair counter-rotating"
     print("  channels       ML sways, AP pitches, Z lifts -- all four cranks  -- ok")
 
-    # The bug this suite missed for four rounds.  Every upper arm carries the
-    # holder in hardware, but the URDF joined only upper_0 to it and welded the
-    # knees, so three arms hung off nothing.  The tree now runs
-    # base -> axis_0 -> lower_0 -> upper_0 -> platform -> upper_1/2/3 -> ...,
-    # which puts every upper arm on the holder and moves the open end to the
-    # actuators -- and those are bolted down, so closure means each one lands
-    # back on its own pivot.  Walk the published joints through the real URDF,
-    # exactly as robot_state_publisher does, and check that.
+    # closure: walked through the real URDF, each actuator must land on its own pivot
     import xml.etree.ElementTree as ET
 
     import numpy as np
@@ -1194,23 +1042,15 @@ def test_animate() -> None:
     print(f"  linkage       every arm on the holder, actuators home to "
           f"{worst:.3f} mm  -- ok")
 
-    # The point of --tour is variety, so prove it is not one sine relabelled:
-    # the entries must differ in rate and in reach, not merely in name.
     rates = {LIBRARY_BY_ID[mid].f_hz for mid in TOUR if LIBRARY_BY_ID[mid].f_hz}
-    # whole degrees: 25.1 and 25.3 are one amplitude sampled at two phases,
-    # not two levels, and counting them separately would flatter the tour
+    # whole degrees: 25.1 and 25.3 are one amplitude at two phases, not two levels
     reach = {round(math.degrees(v)) for v in peaks.values() if v > 1e-3}
     assert len(rates) >= 7, f"only {len(rates)} distinct rates in the tour: {rates}"
     assert len(reach) >= 3, f"only {len(reach)} distinct amplitudes: {sorted(reach)}"
     print(f"  variety        {len(rates)} rates {min(rates)}-{max(rates)} Hz, "
           f"{len(reach)} reaches {sorted(reach)} deg  -- ok")
 
-    # The complaint that produced this tour was dead air between entries, so
-    # guard against it coming back: everything except a deliberate taper has to
-    # visibly move inside its slot.  4 deg is the bar because M08's half
-    # amplitude lands at ~6 deg and must pass, while M03 -- whose ramp the
-    # library fixes at 30 s -- only reaches ~3.3 deg in a 10 s dwell, which is
-    # exactly why it is not in the tour.
+    # no dead air; the 4 deg bar lets M08's half amplitude (~6 deg) pass, M03's 30 s ramp not
     quiet = {"taper", "pause", "static"}
     floor = math.radians(4.0)
     dead = [mid for mid in TOUR
@@ -1219,10 +1059,6 @@ def test_animate() -> None:
     print(f"  no dead air    every moving entry clears 4 deg in "
           f"{TOUR_DWELL_S:.0f} s  -- ok")
 
-    # --research adds shapes, not duplicates: on one horizontal DOF several
-    # library entries render as a flat zero or as a copy of another, so the
-    # research list must earn its place by actually moving and by reaching
-    # somewhere the default tour does not.
     reng = MotionEngine(allow_research=True)
     rpeaks: dict[str, float] = {}
     for motion_id, arms, _ in library_angles(
@@ -1252,8 +1088,6 @@ def test_bridge() -> None:
     from serve import desired_slot
 
     # -- the phorce-CLI backend, against a stub binary ----------------------- #
-    # The demo's proven path is the organizer's own `phorce play N`; the stub
-    # answers the measured --json contract so the mapping is covered headless.
     with tempfile.TemporaryDirectory() as td:
         stub = pathlib.Path(td) / "phorce"
         stub.write_text(
@@ -1438,9 +1272,7 @@ def test_policy() -> None:
         assert rank_of(level) == want, f"rank_of({level}) != {want}"
     print("  ranks        distress 0..1 -> happiness ladder 0..4  -- ok")
 
-    # The shared language: prompts render, replies parse whatever the LLM
-    # says.  The search space is now the team's N system (M ids are the
-    # report machine's own vocabulary, not the policy's).
+    # The search space is the N system; M ids are the report machine's own vocabulary.
     assert parse_reply("N16") == "N16"
     assert parse_reply("I'd try n16 next.") == "N16"
     assert parse_reply("stop now, baby is happy") == "STOP"
@@ -1450,9 +1282,7 @@ def test_policy() -> None:
     assert "shape" in prompt, "the prompt must teach the feature vocabulary"
     print("  language     prompt renders, sloppy replies parse  -- ok")
 
-    # The taught strategy: worse -> switch; improving -> keep (while it
-    # cries); happy -> STOP; and while merely fussing, no motion may
-    # monopolise -- experiments continue, guided by feature similarity.
+    # Taught strategy: worse -> switch, improving -> keep, happy -> STOP, no monopoly.
     from core.policy import FEATURES
     brain = ReflexBrain()
     assert brain("", [], 0) == "STOP", "at HAPPY the answer is STOP"
@@ -1471,8 +1301,7 @@ def test_policy() -> None:
         f"wide+slow worked, so the next experiment generalises: {pick}"
     print("  reflex       explore, no monopoly, feature generalisation  -- ok")
 
-    # Personality: the loved motion soothes a cry, the hated one never does
-    # and worsens a fuss -- the hidden temperament the policy must discover.
+    # Personality: the hidden temperament the policy must discover.
     quirks = Personality(love="N16", hate=frozenset({"N05"}))
 
     def under(motion: str, state: str, seconds: float) -> str:
@@ -1488,7 +1317,6 @@ def test_policy() -> None:
     assert under("N05", "CRY", 240.0) == "CRY", "a hated motion must not"
     assert under("N05", "FUSS", 240.0) == "CRY", "a hated motion agitates"
 
-    # ...and the feature layer: tastes generalise across the N system.
     feels = Personality(shape_love="circle", shape_hate="vert", vibe_pref=-1)
     assert feels.gain("N24", None) > feels.gain("N27", None) > 0, \
         "the loved shape must outscore a neutral one"
@@ -1499,9 +1327,7 @@ def test_policy() -> None:
         "a grumpy stretch dulls fast motions"
     print("  temperament  ids + features + mood shape the soothing  -- ok")
 
-    # The tablet's IMU teaches the taste what a motion actually FELT like:
-    # measured tempo/intensity/tremble outrank the id's declared features,
-    # and a hand-rocked phone (no motion id at all) still counts.
+    # The IMU teaches what a motion FELT like; a hand-rocked phone still counts.
     assert Personality.felt(None) is None
     assert Personality.felt({"samples": 3}) is None, "too little signal"
     gentle = Personality.felt({"samples": 30, "dominant_hz": 0.3,
@@ -1528,8 +1354,7 @@ def test_policy() -> None:
     assert b.state != "FUSS", "matching hand-rocking must soothe the fuss"
     print("  felt motion  measured IMU character overrides declared taste  -- ok")
 
-    # Time-related emotion: heavy use wears a motion out, rest restores it,
-    # and the mood cycle stays inside its documented band.
+    # Habituation: use wears a motion out, rest restores it; mood stays in band.
     b = VirtualBaby(seed=5, personality=quirks)
     b.state, b._until = "CALM", 1e9
     t = 0.0
@@ -1547,8 +1372,6 @@ def test_policy() -> None:
     print(f"  habituation  90 s use -> fatigue {worn:.2f}, "
           f"10 min rest -> {rested:.2f}  -- ok")
 
-    # The brain vocabulary: make_brain resolves all three; the local-LLM
-    # brain fails safe (empty reply + a reason) when nothing is listening.
     from core.policy import OllamaBrain, make_brain
     assert type(make_brain("reflex")).__name__ == "ReflexBrain"
     assert type(make_brain("dream")).__name__ == "DreamBrain"
@@ -1579,8 +1402,6 @@ def test_policy() -> None:
     print(f"  card cap     {len(keep)} motions decidable on a 14-slot card, "
           "restored  -- ok")
 
-    # The machine validates the advisor: R-grade or garbage falls back to the
-    # report ladder; a valid P1 pick is used.
     def first_trial(advice):
         engine = MotionEngine()
         box = CradleMachine(engine)
@@ -1600,10 +1421,7 @@ def test_policy() -> None:
     assert first_trial("N16") == "N16", "a valid N-system pick must be used"
     print("  advisor      P1/N picks used, R/static/garbage -> ladder  -- ok")
 
-    # DREAM-Chunk's world model (docs/dream-chunk.md), re-anchored on the
-    # infant: what it makes of each motion, kept apart from how worn each one
-    # is.  The paper's other half -- a divergence tube cutting a motion that
-    # left its dreamed curve -- measured +2.9%% upset and was removed.
+    # DREAM-Chunk's world model (docs/DREAM-CHUNK.md): taste kept apart from wear.
     from core.policy import (ChunkMatcher, DreamBrain, WorldModel,
                              SoothePolicy as _SP)
 
@@ -1611,10 +1429,7 @@ def test_policy() -> None:
         for lv in levels:
             mon.observe(lv, engaged, dt)
 
-    # ...and the chunking half: it dreams whole schedules, not one motion.
-    # DEPTH slots of SLOT_S each, only the first of which is committed.
-    # DEPTH ships at 1 -- deeper plans measured worse (see the doc) -- so the
-    # chunking machinery is exercised at an explicit depth here.
+    # DEPTH ships at 1 -- deeper plans measured worse -- so chunking is forced here.
     assert ChunkMatcher.DEPTH == 1, "the shipped default is the measured one"
     mm3 = ChunkMatcher()
     mm3.DEPTH = 3
@@ -1627,11 +1442,9 @@ def test_policy() -> None:
     assert plans[0][2][-1] < 0.6, "a plan must dream the infant calmer"
     assert list(plans[0][2]) == sorted(plans[0][2], reverse=True), \
         "the dreamed trace must settle, not wander"
-    # habituation inside one plan: repeating a motion is worth FADE less, so
-    # the best plan rotates rather than hammering one motion three times
+    # habituation inside one plan: a repeat is worth FADE less, so the plan rotates
     assert len(set(plans[0][1])) > 1, f"the plan must rotate: {plans[0][1]}"
-    # a learned transition -- docs/IDEA.md's combo -- is what only a sequence
-    # can use.  Taught "N10 right after N05", it must cash that in.
+    # a learned transition (docs/IDEA.md's combo) is what only a sequence can use
     mm4 = ChunkMatcher()
     mm4.gains = {c: 0.2 for c in CANDIDATES}
     mm4.pairs = {("N05", "N10"): [0.95, 0.95, 0.95]}
@@ -1640,16 +1453,12 @@ def test_policy() -> None:
     assert mm4.best(0.6, current="N16") != "N10" or True   # only after N05
     assert mm4.pair_gain("N05", "N10") > mm4.pair_gain("N16", "N10"), \
         "the transition gain must apply to the transition, not the motion"
-    # one sample is not a combo: trust needs PAIR_TRUST samples
     mm5 = ChunkMatcher()
     mm5.gains = {c: 0.2 for c in CANDIDATES}
     mm5.pairs = {("N05", "N10"): [0.95]}
     assert mm5.pair_gain("N05", "N10") < mm4.pair_gain("N05", "N10"), \
         "one lucky handover must not be believed like three"
-    # Taste vs wear: the model must not record "played until it stopped
-    # working" as "disliked".  A motion worn out and then rested has to come
-    # back at full value, or a carried model talks itself out of every motion
-    # the infant likes -- which is exactly what it did (21 of 26 vetoed).
+    # Taste vs wear: "played out" must not record as "disliked" (it vetoed 21 of 26)
     monW = WorldModel()
     monW.start("N05", 0.6)
     feed(monW, [0.6 - 0.03 * i for i in range(20)])   # it works well
@@ -1669,7 +1478,6 @@ def test_policy() -> None:
     assert monW.gain["N05"] > 0.9 * worn_taste, \
         "a rested motion must be offered at its taste again"
 
-    # and the monitor must actually record transitions for it to learn from
     mon6 = WorldModel()
     mon6.start("N05", 0.6)
     feed(mon6, [0.6 - 0.02 * i for i in range(20)])
@@ -1679,14 +1487,12 @@ def test_policy() -> None:
     mon6.settle()
     assert ("N05", "N10") in mon6.pairs, f"transitions unlearned: {mon6.pairs}"
 
-    # the brain wrapper: same interface as the other three, STOP at HAPPY
     db = DreamBrain()
     pol_d = _SP(db)
     assert db.policy is pol_d, "the planner must bind to its policy"
     assert db("", [], 0) == "STOP"
     pol_d.level = 0.6
-    # taste is estimated, not assigned, so teach it: every motion mediocre
-    # except N16, which delivers every time
+    # taste is estimated, not assigned, so teach it: only N16 delivers
     for c in CANDIDATES:
         pol_d.model._id_sum[c] = 0.05
         pol_d.model.counts[c] = 1
@@ -1698,8 +1504,6 @@ def test_policy() -> None:
     print(f"  matcher      all {len(CANDIDATES)} dreamed, best wins, veto + "
           f"continuity + habituation, features generalise  -- ok")
 
-    # The demo rhythm: at pace 10 each motion gets ~10 s -- checkpoints,
-    # the escalation ramp and the give-up deadline all scale with it.
     engine = MotionEngine()
     box = CradleMachine(engine, check_every_s=10.0)
     events, t = [], 0.0
@@ -1715,9 +1519,7 @@ def test_policy() -> None:
         f"pace 10 must give up at 20 s: {events}"
     print("  pace         10 s checkpoints, 20 s deadline, scaled ramps  -- ok")
 
-    # Closed loop: a baby that hates the ladder's first rungs and whose real
-    # tastes live in the feature space.  The policy must avoid what worsens,
-    # keep exploring (no monopoly), and cry no more than the fixed ladder.
+    # Closed loop: a baby that hates the ladder's first rungs, tastes in feature space
     def closed_loop(advise: bool, seed: int = 21):
         temperament = Personality(love="N24",
                                   hate=frozenset({"M10", "M12", "N05"}),
@@ -1759,7 +1561,6 @@ def test_policy() -> None:
           f"<= ladder {ladder_cry:.0f}s, {len(set(picks))} distinct motions, "
           f"picks {picks}  -- ok")
 
-    # The scenario corpus round-trips into the prompt (the LLM's 학습 data).
     import tools.make_scenarios as ms
     from tools.make_scenarios import main as make_scenarios
     sim_s = ms.SIM_S
@@ -1777,14 +1578,11 @@ def test_policy() -> None:
     assert "Example sessions" in prompt
     print(f"  scenarios    generated 2, round-trip into the prompt  -- ok")
 
-    # The dashboard's learning panel: the snapshot the SSE stream carries and
-    # the markup/script hooks that draw it (web/ has no build step, so this
-    # is the only place a lost hook would surface).
+    # web/ has no build step, so this is the only place a lost hook would surface.
     snap = policy.snapshot()
     assert set(snap) == {"brain", "scenarios", "error", "scores", "steps",
                          "model", "plan"}
     assert snap["brain"] == "reflex" and snap["steps"], snap
-    # the world model rides along in the same payload
     assert snap["model"]["on"] and "taste" in snap["model"], snap["model"]
     assert all(m in CANDIDATES for m in snap["scores"]), snap["scores"]
     page = Path("web/index.html").read_text()
@@ -1797,20 +1595,15 @@ def test_policy() -> None:
     for hook in ("S.policy", "drawBrain", "RANK_BANDS", "/policy?set=",
                  "/taste?", "drawOrb", "fillTaste", "npath", "ipad.felt",
                  "drawPlan", "plan.candidates",
-                 # the planner card follows the *brain*, not the momentary
-                 # payload -- keyed to candidates it re-flowed the row between
-                 # decisions, and the ladder branch left a stale card up
+                 # the planner card follows the *brain*, not the momentary payload
                  'S.policy.brain === "dream"', "drawPlan(null)",
-                 # the planner's field, plotted on the timeline's own comfort
-                 # axis -- six near-identical bars showed almost nothing
+                 # the planner's field, on the timeline's own comfort axis
                  "dreamStrip", "plan.strip",
-                 # the taste editor re-seeds when the server's taste changes,
-                 # so Randomize cannot leave the selects contradicting it
+                 # the taste editor re-seeds when the server's taste changes
                  "tasteSig"):
         assert hook in js, f"learning panel script lost {hook!r}"
 
-    # The planner shows its work: the plan block carries every number the
-    # pick used, and the other brains carry none (nothing to show).
+    # The planner shows its work; the other brains carry no plan.
     from core.policy import DreamBrain
     planner = SoothePolicy(DreamBrain())
     assert planner.snapshot()["plan"]["candidates"] == [], "no plan before a pick"
@@ -1820,8 +1613,7 @@ def test_policy() -> None:
     assert plan["chosen"] == pick and plan["dreamed"] == len(CANDIDATES)
     assert len(plan["candidates"]) == DreamBrain.SHOW
     assert plan["candidates"][0]["id"] == pick, "the drawn list must be ranked"
-    # the strip plots the *whole* field, so the reader can see whether the
-    # candidates are spread (a real preference) or bunched (a cold model)
+    # the strip plots the whole field: spread = real preference, bunched = cold model
     assert len(plan["strip"]) == len(CANDIDATES) - len(plan["vetoed"]), \
         "the strip must carry every motion that was actually dreamed"
     assert plan["strip"][0] == [pick, plan["candidates"][0]["fit"]], \
@@ -1829,8 +1621,7 @@ def test_policy() -> None:
     assert all(k in plan["candidates"][0]
                for k in ("fit", "switch", "resist", "new", "gain", "cost")), \
         "every cost term the doc lists must reach the panel"
-    # cold start is a real tie -- broken on the taught exploration order, not
-    # by motion number, and the panel is told to say so
+    # cold start is a real tie -- broken on the taught exploration order, not by number
     from core.policy import EXPLORE
     assert pick == EXPLORE[0], f"cold start must explore in taught order: {pick}"
     assert SoothePolicy(ReflexBrain()).snapshot()["plan"] is None
@@ -1847,8 +1638,6 @@ def test_policy() -> None:
                                        now=1.0)
     print("  panel        snapshot -> /events -> web hooks wired  -- ok")
 
-    # The nightly report: the presentation artifact renders and tells the
-    # right story (policy total <= ladder total on the tricky baby).
     import tools.learn_report as lr
     night_s = lr.NIGHT_S
     try:
@@ -1864,8 +1653,6 @@ def test_policy() -> None:
         assert marker in html, f"report lost {marker!r}"
     print("  report       learn_report renders svg + trail  -- ok")
 
-    # The four-algorithm state figure: every arm runs, the traces are real
-    # state samples, and the page carries its own numbers.
     import tools.state_figure as sf
     night_s, sample_s = sf.NIGHT_S, sf.SAMPLE_S
     try:
@@ -1882,8 +1669,7 @@ def test_policy() -> None:
     assert fig.count("<svg") == 2, "lanes and bars, one svg each"
     assert "data-tip" in fig and "<table" in fig, \
         "the figure needs its hover layer and its table view"
-    # the arms must actually differ -- a broken advisor would draw four
-    # identical lanes and nobody would notice from the picture alone
+    # the arms must actually differ -- identical lanes look fine in the picture
     person = Personality.random(random.Random(5))
     traces = {k: tuple(sf.run_night(5, person, k, True, trace=True)["trace"])
               for k, _t, _s in sf.ARMS}
@@ -1893,7 +1679,6 @@ def test_policy() -> None:
     print(f"  figure       state_figure: {len(sf.ARMS)} distinct lanes, "
           f"svg + tooltips + table  -- ok")
 
-    # The robot files: the N system compiles by sampling the live engine.
     from tools.make_motions import main as make_motions_main
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "n34"

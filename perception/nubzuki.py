@@ -1,39 +1,13 @@
 #!/usr/bin/env python3
 """Reading Nubzuki's expression back out of a camera frame.
 
-This is a vision front end for the mascot, not for an infant.  Given an image
-it finds every Nubzuki figure in it, names the pose each one is holding, and
-reports where that pose sits on the reference sheet's own circumplex --
-ACTIVE/CALM against NEGATIVE/POSITIVE, the axes drawn on docs/Nubzuki.jpg.
-
-    camera frame ──► find_figures() ──► is_nubzuki() ──► classify() ──► Sighting
-                        blobs           colour gate      nearest ref    pose + v/a
-
-Why it exists: the cradle-mounted iPad draws Nubzuki (web/baby.js) at whatever
-distress level the Jetson last sent, and the cradle's camera can see that iPad.
-Reading the face back off the screen closes a loop that otherwise cannot be
-closed without an infant -- the state the machine commanded should be the state
-the camera recovers.  It is the only labelled vision target this project has.
-
-How it names a pose: by comparing the figure to reference crops of all
-seventeen and taking the nearest (data/nubzuki_templates.npz, baked by
-tools/make_nubzuki_templates.py).  This started as a ladder of hand-written
-rules and the comment above classify() records why that was abandoned --
-briefly, the rules were tuned on the sticker sheet and the camera sees the
-rig's rendering, which draws the same poses differently enough to score 7/17.
-
-Colour *is* still hard-coded, in two places that earn it: the segmentation
-mask, and is_nubzuki(), which decides whether a blob is the character at all.
-Those two are about "is this Nubzuki and where", which colour answers well;
-naming *which* pose needed the whole picture.
-
-It is deliberately not a claim about infant perception: this reads a screen the
-machine already wrote, and nothing in this file may be pointed at a real baby.
+Vision front end for the mascot, never an infant: finds every Nubzuki figure,
+names its pose (nearest reference crop, data/nubzuki_templates.npz), and places
+it on the sheet's circumplex.  Closes the iPad loop: the state the machine
+commanded should be the state the camera recovers.
 
     python3 perception/nubzuki.py docs/Nubzuki.jpg --grade   # grade vs the sheet
-    python3 perception/nubzuki.py --camera 0                 # live, camera only
     python3 perception/nubzuki.py --camera 0 --server http://localhost:8080
-                                                             # ...the whole loop
 """
 
 from __future__ import annotations
@@ -52,12 +26,8 @@ import numpy as np
 # --------------------------------------------------------------------------- #
 # The five-state vocabulary
 # --------------------------------------------------------------------------- #
-# Moved here verbatim from perception/watch.py when the infant-face stack was
-# removed (2026-08-08).  It is kept -- rather than dropped with the code that
-# used to produce it -- because it is the vocabulary the cradle's decision
-# layer was designed around, and because a second, parallel notion of "how is
-# the infant" is the thing this project has spent its safety argument avoiding.
-# What changed is who fills it in, not what it means.
+# Kept from the removed infant-face stack (2026-08-08): the vocabulary the
+# decision layer is built on.  Only who fills it in changed.
 UNKNOWN = "UNKNOWN"                  # nothing recognisable -> STOP_AND_CHECK
 AWAKE = "AWAKE"                      # eyes open              -> HOLD
 EYES_CLOSED = "EYES_CLOSED"          # eyes not visible       -> HOLD_OR_TAPER
@@ -73,11 +43,9 @@ MOTION_HINTS = {
     DISTRESS_FACE: "GENTLE_TEST_ONLY",
 }
 
-# Each state as a 0..1 distress level, placed against the report's thresholds
-# (CALM_LEVEL 0.12, CRY_LEVEL 0.45).  DISTRESS_FACE lands in the fuss band and
-# *cannot* reach the cry ladder on its own -- strength only moves it inside
-# [0.30, 0.42].  UNKNOWN is not a level at all: it drops ``present`` and lets
-# the safety gate do the stopping and checking.
+# Each state as a 0..1 distress level.  DISTRESS_FACE is capped in the fuss
+# band [0.30, 0.42] < CRY_LEVEL 0.45: vision alone never opens the cry ladder.
+# UNKNOWN is not a level: it drops ``present`` to the safety gate.
 _STATE_LEVEL = {
     UNKNOWN: 0.0, AWAKE: 0.05, EYES_CLOSED: 0.0,
     SLEEP_CANDIDATE: 0.0, DISTRESS_FACE: 0.30,
@@ -95,21 +63,13 @@ def distress_of(state: str, strength: float = 0.0) -> float:
 # --------------------------------------------------------------------------- #
 # The sheet's own frame of reference
 # --------------------------------------------------------------------------- #
-# docs/Nubzuki.jpg draws a circumplex: a light grey circle with dashed axes
-# through it, ACTIVE at the top and POSITIVE at the right.  These are that
-# circle, fitted to the printed ring itself (least squares over the ring
-# pixels, 2.3 px rms) rather than eyeballed, so a figure's centroid converts
-# straight into circumplex coordinates.  Only the grader needs them; the
-# classifier never looks at where a figure sits, because that is exactly the
-# thing being tested.
+# docs/Nubzuki.jpg's printed circumplex, fitted to the ring itself (2.3 px
+# rms).  Grader only -- the classifier never sees where a figure sits.
 SHEET_CENTRE = (493.56, 525.31)
 SHEET_RADIUS = 412.59
 
-# x is valence (POSITIVE right), y is screen-down so ACTIVE is negative -- the
-# same frame web/baby.js draws its wheel in, and these are the same anchors it
-# blends poses at.  Kept in the two places on purpose: the rig has to draw them
-# and this has to name them, and tests.py::nubzuki asserts the tables agree so
-# they cannot drift apart silently.
+# x valence (POSITIVE right), y screen-down so ACTIVE is negative -- the frame
+# web/baby.js blends in; tests.py::nubzuki asserts the two tables agree.
 POSES: dict[str, tuple[float, float]] = {
     "rage":     (-.73, -.68),
     "angry":    (-.50, -.58),
@@ -139,83 +99,52 @@ LABELS: dict[str, str] = {
     "sleeping": "Sleeping", "dreaming": "Dreaming",
 }
 
-# web/baby.js::LIVE_LADDER, inverted.  The rig turns one distress number into a
-# blend of two named poses; seeing a named pose therefore recovers the number
-# that drew it.  Only the five poses on the live ladder have a level -- the rest
-# of the sheet is reachable by hand on the wheel but never by the machine, so
-# reading one back means a person is driving, which is worth knowing.
+# web/baby.js::LIVE_LADDER inverted: a named pose recovers the level that drew
+# it.  A pose off the ladder means a person is driving the wheel by hand.
 LIVE_LEVEL: dict[str, float] = {
     "sitHeart": 0.0, "neutral": .22, "crying": .38, "angry": .78, "rage": 1.0,
 }
 SLEEP_POSES = ("sleeping", "dreaming")
 DISTRESS_POSES = ("rage", "angry", "crying")
 
-# Where each distress pose sits *within* the fuss band.  distress_of() spends
-# this on the 0.30..0.42 span it is allowed, so the three keep their order
-# without any of them reaching the ladder.
+# Where each distress pose sits within the allowed 0.30..0.42 fuss band.
 POSE_STRENGTH: dict[str, float] = {"crying": 0.0, "angry": .5, "rage": 1.0}
 
 
 # --------------------------------------------------------------------------- #
 # Segmentation
 # --------------------------------------------------------------------------- #
-# The figure mask is "saturated colour, or ink" -- deliberately not "darker
-# than white".  Every Nubzuki is drawn standing on a soft grey drop-shadow, and
-# a plain brightness threshold swallows those shadows, which then bridge
-# neighbouring figures into one blob: on the reference sheet that merged the
-# startled one with the kiss.  Grey is unsaturated and not dark, so this drops
-# it, and the printed wheel with it.
+# The figure mask is "saturated colour, or ink" -- never "darker than white",
+# which would keep the grey drop-shadows and bridge neighbouring figures.
 INK_V = 90          # anything this dark is outline ink
 COLOUR_S = 55       # ...and anything this saturated is the character's paint
 COLOUR_V = 60
 # How far above the background's own saturation the paint cut must sit.
 BACKGROUND_MARGIN = 14
-# 55 rather than a safer-looking 70 because the angry pose's flush is a
-# *gradient* -- it fades from magenta into blue across the bottom of the head,
-# and at 70 the pale middle of it dropped out under a brighter exposure, cutting
-# the head off the body.  The figure then read as two half-figures and lost its
-# flush.  There is a wide margin below: the printed drop-shadows, the thing this
-# threshold exists to reject, peak at S=4.
+# 55 not 70: the angry pose's flush is a gradient that drops out at 70; the
+# drop-shadows this rejects peak at S=4, so the margin below is wide.
 MIN_FIGURE_PX = 6000
-# Every threshold in this file was written against renders, where the page is
-# pure white and the paint fully saturated.  A photograph of an actual panel is
-# neither: the page takes the room's colour and the paint loses most of its
-# saturation to glare and gamma.  Measured on a simulated capture, the body
-# blue arrives at S~30 against the S>55 the mask asks for -- so the paint
-# vanishes and only the ink outline survives, which is exactly the "it detects
-# the sheet fine but rarely finds it on the iPad" failure.
-#
-# Rather than loosen every threshold until the room qualifies too, the frame is
-# mapped back to the statistics the thresholds were written for: white-balance
-# on the page, then restore saturation.  Harmless on a render (the statistics
-# are already right, so the gains land near 1.0) and the difference between
-# working and not on a photograph.
+# Thresholds were written against renders (pure white page, saturated paint).
+# A photographed panel is neither, so the frame is mapped back to those
+# statistics -- white-balance on the page, then restore saturation -- rather
+# than loosening every threshold until the room qualifies too.
 NORMALISE_WHITE_PCT = 97.0      # the page is the brightest thing in frame
 NORMALISE_WHITE = 245.0
 NORMALISE_SAT_PCT = 92.0        # the paint is the most saturated thing on it
 NORMALISE_SAT = 175.0
-# Smallest blob worth calling a figure, as a fraction of the frame.  A fixed
-# pixel count silently means "quite big" at 4K and "the whole scene" at 320x240.
+# Smallest blob worth calling a figure: a fraction of the frame, never a
+# fixed pixel count.
 MIN_FIGURE_FRAC = 0.004
-# A page smaller than this is not a page, it is a bright object in the room.
-# Small, because "the iPad is across the room" is the normal case, not the edge
-# one: at 0.04 a panel filling under 4% of frame was discarded and the grey
-# desk behind it was taken as the page instead.
+# Smallest page, also a frame fraction -- a distant iPad is the normal case.
 PAGE_MIN_FRAC = 0.004
-# Which brightness counts as "the page".  Anchored near the maximum, not at the
-# 90th percentile: with a distant panel most of the frame *is* room, so the
-# 90th percentile sits on the furniture and the furniture qualifies.  The lit
-# panel is the brightest surface in shot, so measure against the brightest.
+# "Page" brightness anchors near the maximum, not the 90th percentile: with a
+# distant panel most of the frame is room, and the furniture would qualify.
 PAGE_BRIGHT_PCT = 99.5
 
 
 def normalise(bgr: np.ndarray) -> np.ndarray:
-    """Undo the panel and the lens: white-balance the page, restore saturation.
-
-    Two statistics, both anchored on things we know are in frame -- the page is
-    white, and the most saturated thing on it is the character's paint.  Only
-    percentiles are used, so a bright reflection or a dark bezel moves neither.
-    """
+    """White-balance the page, restore saturation -- percentile-anchored, so a
+    reflection or a dark bezel moves neither."""
     out = bgr.astype(np.float32)
     for channel in range(3):
         level = np.percentile(out[:, :, channel], NORMALISE_WHITE_PCT)
@@ -228,12 +157,7 @@ def normalise(bgr: np.ndarray) -> np.ndarray:
     if lively.any():
         level = float(np.percentile(sat[lively], NORMALISE_SAT_PCT))
         if level > 4.0:
-            # Never below 1.0: this exists to undo saturation a lens *lost*,
-            # not to impose a house level.  Allowed to cut, it damped the
-            # already-vivid sheet by 6% -- enough to thin the angry pose's
-            # flush gradient past the mask threshold and split its head off
-            # its body again, which is the same failure COLOUR_S was widened
-            # to fix.  Rescue only.
+            # Gain clamped >= 1.0: rescue lost saturation only, never cut it.
             gain = min(4.0, max(1.0, NORMALISE_SAT / level))
             hsv[:, :, 1] = np.clip(sat * gain, 0, 255)
     return cv2.cvtColor(np.clip(hsv, 0, 255).astype(np.uint8), cv2.COLOR_HSV2BGR)
@@ -242,17 +166,9 @@ def normalise(bgr: np.ndarray) -> np.ndarray:
 def find_page(bgr: np.ndarray) -> tuple[int, int, int, int] | None:
     """The bright, near-neutral region the mascot is drawn on, or None.
 
-    Restricting to the page before anything else is what makes a camera frame
-    workable at all.  :func:`normalise` raises saturation until the paint is
-    paint again, and applied to a whole room that same gain lifts the grey
-    walls into the mask too -- measured, it merged the entire 1280x720 frame
-    into one blob and found nothing.  The page bounds the gain to the surface
-    that is actually white, which is the assumption the gain was built on.
-
-    Found on the *raw* frame, before any gain, because bright-and-neutral is
-    exactly what a white panel still looks like through a bad lens.  Returns
-    None when nothing large enough qualifies, and the caller then treats the
-    whole frame as the page -- which is what a render or the sticker sheet is.
+    Order is page -> normalise -> mask: normalising the whole room lifts grey
+    walls into the mask.  Found on the *raw* frame, before any gain.  None ->
+    the caller treats the whole frame as the page (a render or the sheet).
     """
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     sat, val = hsv[:, :, 1].astype(int), hsv[:, :, 2].astype(int)
@@ -271,15 +187,9 @@ def find_page(bgr: np.ndarray) -> tuple[int, int, int, int] | None:
 def figure_mask(bgr: np.ndarray) -> np.ndarray:
     """Binary mask of Nubzuki-coloured pixels: paint or ink, never shadow.
 
-    The saturation cut is the floor COLOUR_S *or* clear of the background,
-    whichever is higher, and the second clause is what makes this survive a
-    camera.  ``normalise`` multiplies saturation to bring washed-out paint back,
-    and it multiplies the page's faint tint by the same amount: measured on a
-    simulated capture the page landed at S=56 against a fixed cut of 55, so the
-    page joined the mask, merged with the figure, and the combined blob failed
-    the colour gate -- detection "not working" while every threshold looked
-    fine.  Reading the background off the frame removes the coin flip.  On a
-    render the background is S=2 and this changes nothing.
+    The saturation cut is COLOUR_S *or* clear of the measured background,
+    whichever is higher: ``normalise`` amplifies the page's tint too, and a
+    fixed cut let the page join the mask on camera frames.
     """
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     s, v = hsv[:, :, 1].astype(int), hsv[:, :, 2].astype(int)
@@ -299,8 +209,7 @@ def find_figures(bgr: np.ndarray,
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
     boxes = [tuple(int(t) for t in stats[i][:4])
              for i in range(1, count) if stats[i][cv2.CC_STAT_AREA] >= min_area]
-    # Row-major, with a row band generous enough that figures which sit a few
-    # pixels apart vertically still read left-to-right.
+    # Row band tolerates a few pixels of vertical offset within a row.
     return sorted(boxes, key=lambda b: (b[1] // 60, b[0]))
 
 
@@ -309,12 +218,8 @@ def find_figures(bgr: np.ndarray,
 # --------------------------------------------------------------------------- #
 @dataclass
 class Features:
-    """Everything the rule ladder is allowed to look at.
-
-    Colour terms are fractions of the figure's own silhouette and the eye term
-    is divided by head width squared, so nothing here changes when the figure
-    is nearer the camera or drawn larger.
-    """
+    """Everything the rule ladder may look at.  Colour terms are fractions of
+    the silhouette, the eye term / head_w**2 -- scale-invariant throughout."""
     box: tuple[int, int, int, int]
     aspect: float               # width / height of the silhouette
     head_w: int                 # width of the widest row -- the head ellipse
@@ -335,22 +240,12 @@ class Features:
 
     @property
     def lying(self) -> bool:
-        """A standing figure is widest at the head, near the top.
-
-        .35, not the .60 this started at.  .60 was read off the sheet, where a
-        lying figure is widest at 79-86% down.  The rig draws the same poses
-        far less prone -- its lying figures peak at 37-56% -- so .60 missed all
-        three of them and they came back as Neutral.  Every standing figure in
-        both sets, once the prop rules above have taken their own, is widest
-        above .35, so the threshold separates on the shared evidence rather
-        than on either drawing's habits.
-        """
+        """Widest row >= 35% down: the cut that separates lying from standing
+        on both the sheet's and the rig's (much less prone) drawings."""
         return self.wide_at >= .35
 
 
-# Hue windows, measured off the sheet with cv2's 0..179 hue scale.  Named for
-# what they pick out rather than for the colour, because that is what the rules
-# below actually mean by them.
+# Hue windows (cv2's 0..179 scale), named for what they pick out.
 def _bands(h: np.ndarray, s: np.ndarray, v: np.ndarray) -> dict[str, np.ndarray]:
     return {
         "blue":   (h >= 95) & (h <= 115) & (s > 90) & (v > 90),
@@ -375,16 +270,9 @@ def _silhouette(mask: np.ndarray) -> np.ndarray:
 def _eye_pair(white: np.ndarray, head_w: int) -> tuple[int, int]:
     """Largest eye disc and how many of the pair we can see.
 
-    Picks the two white blobs that look like *a pair* -- similar size, level
-    with each other -- rather than simply the two biggest.  Held props and the
-    wordmark are white too, and taking the biggest two let a heart stand in for
-    an eye, which read a calm figure as a startled one.
-
-    The floor on blob size is a fraction of the head, never a pixel count: a
-    fixed one is a promise the figure will always be the size it is on the
-    sheet.  Held at 60 px it admitted the wordmark as an eye once the image was
-    enlarged, and the sunglasses pose -- which is a pose precisely *because* no
-    eyes are visible -- came back with two.
+    Wants a *pair* -- similar size, level with each other -- not the two
+    biggest white blobs (held props and the wordmark are white too).  The
+    size floor is a fraction of the head, never a fixed pixel count.
     """
     floor = max(12.0, .0025 * head_w * head_w)
     count, _, stats, cent = cv2.connectedComponentsWithStats(white, 8)
@@ -411,8 +299,7 @@ def features(bgr: np.ndarray, box: tuple[int, int, int, int],
     pad = 14
     x0, y0 = max(0, x - pad), max(0, y - pad)
     x1, y1 = min(bgr.shape[1], x + w + pad), min(bgr.shape[0], y + h + pad)
-    # Isolate *this* figure: a neighbour reaching into the padded window would
-    # otherwise donate its props to this one's feature vector.
+    # Isolate *this* figure so a neighbour's props stay out of its vector.
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask[y0:y1, x0:x1], 8)
     mine = max(range(1, count), key=lambda i: stats[i][cv2.CC_STAT_AREA])
     sil = _silhouette((labels == mine).astype(np.uint8))
@@ -441,10 +328,8 @@ def features(bgr: np.ndarray, box: tuple[int, int, int, int],
         out.pink_at = float(pink_y.mean()) / max(1, sil.shape[0] - 1)
     crown = int(.25 * sil.shape[0])
     out.pink_high = float(pink_mask[:crown].sum()) / total
-    # A flush is pink *or* purple lying on the head; a held prop is neither on
-    # the head nor, usually, either colour.  Both colours because the sheet
-    # flushes magenta and the rig flushes violet -- the same expression, drawn
-    # by two hands, and the rule has to survive both.
+    # Flush = pink *or* purple worn on the head: the sheet flushes magenta,
+    # the rig violet.
     bands = _bands(hh, ss, vv)
     face = np.zeros_like(inside)
     face[:int(.45 * sil.shape[0])] = True
@@ -455,33 +340,13 @@ def features(bgr: np.ndarray, box: tuple[int, int, int, int],
 # --------------------------------------------------------------------------- #
 # Naming a pose: nearest reference crop
 # --------------------------------------------------------------------------- #
-# This was a ladder of hand-written rules -- red head is rage, brown legs are
-# the poorly one -- graded 17/17 on the sticker sheet it was written against.
-# Then the rig's own renderings arrived and it scored 7/17, because the two
-# drawings do not share the proportions the rules keyed on: the rig's ordinary
-# eyes are as large as the sheet's streaming ones, and its lying poses are
-# barely prone.  Retuning recovered 11/17 and stalled, because the marks that
-# actually separate the remaining six -- tears *under* the eyes, spectacles
-# *around* them, a bow *on top* -- are positions on a face, and a fraction
-# measured over the whole figure has already thrown that away.
-#
-# So the figure is compared to reference crops of all seventeen poses instead,
-# and the nearest one wins.  Same evidence, kept whole.  Measured on the rig's
-# renderings: rules 11/17, this 17/17, including through a full camera
-# simulation (8 deg rotation, perspective, glare, blur, noise, JPEG q45).
-#
-# What it gives up is the sentence the ladder could produce.  What replaces it
-# is arguably better: the distance to the winner and to the runner-up, which
-# says how close the call was -- something no rule ever told us.
+# Naming is nearest-reference-crop, not colour rules: the separating marks
+# are positions on a face that whole-figure fractions discard (the rule
+# ladder's failure).  If a pose misreads, add or re-bake its reference crop.
 TEMPLATE_FILE = Path(__file__).resolve().parent.parent / "data" / "nubzuki_templates.npz"
 CROP_N = 48                # every figure is squared and scaled to this
-# Both measured over the rig's seventeen renderings under camera-like
-# distortion, not guessed.  A correct match costs 0 on the reference itself,
-# 1.7-9 through blur, downscale or a colour cast, and 23-26 through a full
-# camera simulation or an 8 deg tilt.  A frame degraded past usefulness (30%
-# downscale *and* blur *and* JPEG q25) sits at 38 with its runner-up only 5%
-# behind.  So: refuse past 32, and refuse whenever the runner-up is within 8%,
-# which is what "too blurred to tell these two apart" actually looks like.
+# Measured over the rig's renderings under camera-like distortion: refuse
+# past 32, and refuse when the runner-up is within 8% -- abstain, don't guess.
 MAX_DISTANCE = 32.0        # beyond this, nothing is recognised at all
 MIN_MARGIN = 1.08          # winner must beat the runner-up by this ratio
 
@@ -490,9 +355,7 @@ def square_crop(bgr: np.ndarray, box: tuple[int, int, int, int],
                 mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """One figure, isolated on a square canvas at CROP_N.
 
-    Squared by padding rather than by stretching: how tall a pose stands
-    against how wide it lies is one of the things being compared, and a
-    stretch would erase exactly that.
+    Squared by padding, not stretching -- aspect is part of what is compared.
     """
     x, y, w, h = box
     pad = 6
@@ -516,12 +379,8 @@ def square_crop(bgr: np.ndarray, box: tuple[int, int, int, int],
 def descriptor(bgr: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     """A crop as a vector that survives being photographed off a screen.
 
-    Hue goes in as a *unit vector* scaled by saturation, never as a number:
-    hue wraps at 180, so red would otherwise read as maximally distant from
-    itself.  Brightness goes in standardised over the figure, so a dim room or
-    a bright panel shifts nothing.  The silhouette goes in as its own channel
-    because shape carries as much of the answer as colour -- it is what tells a
-    lying pose from a standing one.
+    Hue enters as a unit vector scaled by saturation (hue wraps at 180),
+    brightness standardised over the figure, silhouette as its own channel.
     """
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     hue = hsv[:, :, 0].astype(np.float32) * (2 * np.pi / 180.0)
@@ -558,9 +417,8 @@ def classify(bgr: np.ndarray, box: tuple[int, int, int, int],
              mask: np.ndarray) -> tuple[str | None, str]:
     """Name the pose by its nearest reference.  Returns ``(pose_key, why)``.
 
-    ``None`` when nothing is close enough, or when the best two references
-    disagree and are too near each other to choose between.  A recogniser
-    reading a screen it half-sees should say so rather than pick.
+    ``None`` when nothing is close enough or the best two are too near to
+    choose between -- abstain rather than guess.
     """
     labels, vectors = templates()
     d = np.linalg.norm(vectors - descriptor(*square_crop(bgr, box, mask)), axis=1)
@@ -597,14 +455,9 @@ class Sighting:
     def recovered_level(self) -> float | None:
         """The distress number that would have drawn this, or None.
 
-        This is an *echo*, not a perception: the machine sent a level, the rig
-        drew it, and this is that number coming back.  It is the right quantity
-        for checking the loop and the wrong one for telling the machine
-        anything -- see :meth:`asserted_level`.
-
-        None means the pose is off the live ladder: the rig can only reach it
-        when somebody drags the wheel by hand, so reading it back off the iPad
-        says a person took the wheel, not that the machine is in that state.
+        An *echo* of what the machine sent -- right for checking the loop,
+        wrong as an input to the machine (see :meth:`asserted_level`).  None
+        means the pose is off the live ladder: a person took the wheel.
         """
         return LIVE_LEVEL.get(self.pose)
 
@@ -615,14 +468,10 @@ class Sighting:
 
     @property
     def asserted_level(self) -> float:
-        """What this reading is *allowed* to claim, via the watcher's own rule.
+        """What this reading is *allowed* to claim: under 0.42 by construction.
 
-        The gap between this and :attr:`recovered_level` is the point, not an
-        inconsistency.  Reading Crying off the screen recovers the .50 that was
-        sent, but as a *visual* observation it may only ever assert .30 --
-        because §5 says vision alone cannot cross CRY_LEVEL, and a mascot on a
-        screen is no more entitled to escalate the cradle than a face is.
-        Everything here stays under 0.42 by construction.
+        The gap vs :attr:`recovered_level` is the point -- §5 says vision
+        alone cannot cross CRY_LEVEL, however high the echoed level is.
         """
         return distress_of(self.state, POSE_STRENGTH.get(self.pose, 0.0))
 
@@ -634,15 +483,8 @@ class Sighting:
 def is_nubzuki(f: Features) -> bool:
     """Is this blob the character at all, or just something else on screen?
 
-    On the reference sheet everything found is a Nubzuki, so this never fires.
-    Pointed at the actual iPad it earns its keep: web/baby.css draws a dark
-    "Start motion sensor" button (#33251d) and body text, both dark enough to
-    be ink, both easily bigger than the blob floor.  Without this they arrive
-    as figures and get named, and a button confidently reported as Neutral is
-    worse than no reading at all.
-
-    The test is the paint: a Nubzuki is mostly its own blue, or -- for the four
-    poses that recolour the head -- unmistakably one of those colours instead.
+    The test is the paint: mostly its own blue, or one of the recoloured
+    heads.  Keeps dark UI (buttons, text) from being named as figures.
     """
     return (f.blue >= .15 or f.red >= .15 or f.purple >= .10 or f.yellow >= .05)
 
@@ -650,18 +492,11 @@ def is_nubzuki(f: Features) -> bool:
 # --------------------------------------------------------------------------- #
 # Framing the camera: which pixels get read at all
 # --------------------------------------------------------------------------- #
-# Lives here, not in serve.py, because both readers need it and a second copy
-# of a framing rule is how two callers quietly stop seeing the same thing --
-# the same reason JOINT_NAMES has one home.  serve.py imports these names.
+# One home for the framing rules: both readers must frame identically, so
+# serve.py imports these names rather than copying them.
 def parse_crop(spec: str) -> tuple[float, float, float, float]:
-    """``"x,y,w,h"`` -> a rectangle, as fractions of the frame.
-
-    Numbers are read as fractions when every one of them is <= 1, and as
-    pixels otherwise -- so ``0.25,0.1,0.5,0.8`` and ``320,72,640,576`` both
-    mean roughly the middle of a 1280x720 frame.  Pixels are only resolved
-    against the real frame in :func:`crop_frame`, since nothing here has seen
-    one yet.
-    """
+    """``"x,y,w,h"`` -> a rectangle: fractions when all <= 1, else pixels
+    (resolved against the real frame in :func:`crop_frame`)."""
     parts = [p.strip() for p in spec.replace(" ", ",").split(",") if p.strip()]
     if len(parts) != 4:
         raise ValueError(f"crop wants x,y,w,h -- got {spec!r}")
@@ -676,14 +511,8 @@ def parse_crop(spec: str) -> tuple[float, float, float, float]:
 
 def crop_frame(bgr: np.ndarray,
                crop: tuple[float, float, float, float] | None) -> np.ndarray:
-    """The frame cut down to the region of interest.
-
-    This settles the page competition before it starts: :func:`find_page`
-    takes the largest bright near-neutral region, so any lit whiteboard or
-    window bigger than the iPad wins the frame and the mascot is never looked
-    at.  The size gate (a fraction of the frame) stops being diluted by wall
-    at the same time.
-    """
+    """The frame cut to the region of interest: settles the page competition
+    (any lit region bigger than the iPad would otherwise win find_page)."""
     if crop is None:
         return bgr
     fh, fw = bgr.shape[:2]
@@ -704,19 +533,8 @@ def centre_region(zoom: float) -> tuple[float, float, float, float]:
 
 
 def magnify(bgr: np.ndarray, zoom: float) -> np.ndarray:
-    """The region of interest, scaled up -- digital zoom, and it does pay.
-
-    No pixel of detail is created by this, and :func:`classify` resizes every
-    figure to CROP_N anyway, so "no effect" was the honest expectation and it
-    is wrong.  The steps *before* the classifier -- the mask morphology,
-    :func:`square_crop`'s 6 px pad, the silhouette -- are written in fixed
-    pixels, and a small figure starves them.  Named-correct on a photographed
-    panel (warp, glare, blur, noise, JPEG q45), cropped to the panel, three
-    seeds: a 44 px figure 8-10/17 at x1, 14-15/17 at x2, 16/17 at x3; a 53 px
-    figure 12-14 -> 16-17; at 63 px and above all three are within noise.
-    So it is a rescue for a distant panel, not a free upgrade -- and it costs
-    real time (x3 ran ~570 ms a frame on the Jetson).
-    """
+    """Digital zoom: creates no detail, but the fixed-pixel steps before the
+    classifier starve a small figure -- a distant-panel rescue, not free."""
     if zoom is None or zoom <= 1.0:
         return bgr
     return cv2.resize(bgr, None, fx=zoom, fy=zoom,
@@ -752,8 +570,7 @@ def read(bgr: np.ndarray, min_area: int | None = None,
         if pose is None:               # seen, but not confidently named
             continue
         v, a = POSES[pose]
-        # Boxes go back into the caller's frame: the crop above is an internal
-        # detail, and an overlay drawn in page coordinates lands nowhere.
+        # Boxes go back into the caller's frame; the page crop is internal.
         out.append(Sighting(pose, why,
                             (box[0] + ox, box[1] + oy, box[2], box[3]),
                             v, a, feat))
@@ -761,21 +578,11 @@ def read(bgr: np.ndarray, min_area: int | None = None,
 
 
 def five_state(sighting: "Sighting | None") -> str:
-    """A sighting in the recognizer's original five-state vocabulary.
+    """A sighting in the five-state vocabulary, decided on visible evidence.
 
-    This is the vocabulary the decision layer was built around, and since the
-    infant-face stack was removed this file is the only thing that fills it in.
-    Each rung is decided on *evidence* -- what the reader can and cannot see --
-    not on the pose's name:
-
-        UNKNOWN          nothing recognisable in frame -- drops ``present`` and
-                         lets the safety gate do the stopping and checking
-        SLEEP_CANDIDATE  lying down with the eyes shut
-        DISTRESS_FACE    the three upset poses; capped in the fuss band
-        EYES_CLOSED      no open eye pair, but upright -- the shades, the bow
-                         and the celebration all hide the eyes.  Deliberately
-                         not a claim about sleep
-        AWAKE            a visible pair of open eyes
+    UNKNOWN (nothing recognisable) drops ``present`` to the safety gate;
+    EYES_CLOSED means no open eye pair while upright -- deliberately not a
+    claim about sleep; DISTRESS_FACE stays capped in the fuss band.
     """
     if sighting is None:
         return UNKNOWN
@@ -791,8 +598,7 @@ def five_state(sighting: "Sighting | None") -> str:
 # --------------------------------------------------------------------------- #
 # The wheel
 # --------------------------------------------------------------------------- #
-# Drawn in the sheet's own frame so it can be held up against docs/Nubzuki.jpg:
-# +x is POSITIVE, and y runs screen-down so ACTIVE is at the top.
+# Drawn in the sheet's own frame: +x POSITIVE, y screen-down, ACTIVE on top.
 STATE_COLOUR: dict[str, tuple[int, int, int]] = {     # BGR
     AWAKE: (120, 200, 90),
     EYES_CLOSED: (200, 170, 80),
@@ -805,13 +611,7 @@ STATE_COLOUR: dict[str, tuple[int, int, int]] = {     # BGR
 def wheel_image(seen: list["Sighting"], size: int = 300,
                 expected: str | None = None,
                 dark: bool = True) -> np.ndarray:
-    """The circumplex with every sighting plotted on it.
-
-    Seventeen faint anchors give the reading somewhere to sit: a dot alone says
-    "negative and active", a dot against its neighbours says *which* negative
-    and active pose, and that is the difference between a picture you can check
-    and one you have to trust.
-    """
+    """The circumplex with every sighting plotted against the 17 anchors."""
     ink = (235, 235, 235) if dark else (40, 40, 40)
     faint = (90, 90, 90) if dark else (190, 190, 190)
     img = np.full((size, size, 3),
@@ -850,14 +650,8 @@ def wheel_image(seen: list["Sighting"], size: int = 300,
 # Live: the loop this exists to close
 # --------------------------------------------------------------------------- #
 def nearest_rung(level: float, asleep: bool = False) -> str:
-    """The pose a given distress level should have drawn.
-
-    web/baby.js blends the *two* ladder poses either side of the level, so at
-    level .35 the iPad is showing 61% of the way from Neutral to Crying -- a
-    face that is genuinely neither.  A classifier that names pure poses can
-    therefore only ever recover the level to the nearest rung, and pretending
-    otherwise would turn an honest quantisation into a fake accuracy figure.
-    """
+    """The pose a level should have drawn.  web/baby.js blends the two rungs
+    either side, so recovery is only ever to the nearest rung."""
     if asleep:
         return "sleeping"
     return min(LIVE_LEVEL, key=lambda k: abs(LIVE_LEVEL[k] - level))
@@ -866,10 +660,8 @@ def nearest_rung(level: float, asleep: bool = False) -> str:
 class Tracker:
     """Modal pose over a short window, so the live readout does not flicker.
 
-    A single frame is a vote, not an answer: at a blend midpoint the drawn face
-    genuinely sits between two poses and consecutive frames land on either side
-    of the line.  Holding the majority of the last second reports what is being
-    shown rather than what the last frame happened to round to.
+    A frame is a vote, not an answer: at a blend midpoint consecutive frames
+    genuinely round either way.
     """
 
     def __init__(self, window: float = 1.0) -> None:
@@ -888,9 +680,8 @@ class Tracker:
 class ServerLink:
     """Reads serve.py's /events in the background: what the machine *sent*.
 
-    Best-effort by design -- a dropped connection dims the comparison line and
-    leaves the recogniser running, because the camera half of this test is
-    still worth watching when the Jetson half is not there.
+    Best-effort: a dropped connection dims the comparison line and leaves the
+    recogniser running.
     """
 
     def __init__(self, base: str) -> None:
@@ -971,15 +762,13 @@ def _live(args) -> int:
                 continue
             if args.mirror:
                 frame = cv2.flip(frame, 1)
-            # Framed before anything reads it, so the overlay, the votes and
-            # the --dump corpus are all about the same pixels.  Same flags,
-            # same meaning, same code as serve.py --sense.
+            # Framed before anything reads it -- overlay, votes and --dump see
+            # the same pixels.  Same flags and code as serve.py --sense.
             frame = magnify(crop_frame(frame, args.crop), args.zoom)
             frames += 1
             now = time.monotonic()
             seen = read(frame, args.min_area)
-            # The iPad shows one face.  Biggest wins: a reflection or a poster
-            # in shot is smaller than the screen being pointed at.
+            # The iPad shows one face; the biggest figure wins.
             best = max(seen, key=lambda s: s.box[2] * s.box[3], default=None)
             held = tracker.update(now, best.pose if best else None)
 
@@ -1019,9 +808,8 @@ def _live(args) -> int:
                     lines.append((f"jetson        not connected ({args.server})",
                                   (110, 110, 255)))
 
-            # The frame goes to disk with what the classifier made of it, so a
-            # retune can be measured against the camera it will actually face
-            # rather than against print-resolution vector art.
+            # Saved with the classifier's verdict, so a retune can be measured
+            # against the camera it will actually face.
             if args.dump and frames % max(1, args.every) == 0:
                 stem = args.dump / f"{args.label}_{dumped:04d}"
                 cv2.imwrite(str(stem) + ".png", frame)
@@ -1046,9 +834,7 @@ def _live(args) -> int:
                 json_file.flush()
 
             if args.debug:
-                # Every stage, so a failure is attributable: no page found, or
-                # a page but an empty mask, or blobs that the colour gate threw
-                # away.  "It sees nothing" is three different bugs.
+                # Every stage separately: "it sees nothing" is three bugs.
                 page = find_page(frame)
                 work = frame if page is None else frame[
                     max(0, page[1]):page[1] + page[3],
@@ -1061,10 +847,8 @@ def _live(args) -> int:
                 lines.append((f"debug         page {'yes' if page else 'NO'}"
                               f"  blobs {len(blobs)}  passed gate {len(kept)}"
                               f"  floor {floor}", (255, 255, 140)))
-                # "Passed the gate but named nothing" is the interesting case
-                # and the line above cannot distinguish it from "found nothing".
-                # Print the actual verdict per surviving blob: how big it is,
-                # what it came nearest to, and by how much it missed.
+                # Per-blob verdicts: "passed the gate but named nothing" needs
+                # its own line.
                 for b in sorted(kept, key=lambda b: -b[2] * b[3])[:3]:
                     names, vectors = templates()
                     d = np.linalg.norm(
@@ -1092,9 +876,7 @@ def _live(args) -> int:
 
             if not args.no_display:
                 shown = annotate(frame, seen)
-                # The wheel rides in the corner: the panel says what it decided,
-                # the wheel says where that sits relative to everything it
-                # could have decided instead.
+                # The wheel shows where the call sits among the alternatives.
                 side = min(300, shown.shape[0] // 2, shown.shape[1] // 2)
                 wheel = wheel_image(seen[:1] if best is None else [best], side,
                                     expected=want)
@@ -1127,9 +909,7 @@ def _live(args) -> int:
 def sheet_position(box: tuple[int, int, int, int]) -> tuple[float, float]:
     """Where a box sits on docs/Nubzuki.jpg's own circumplex.
 
-    Grading only.  This is the ground truth the classifier is measured against,
-    so no rule may consult it -- a classifier told where a figure sits on an
-    emotion chart has been told the answer.
+    Grading only: this is the ground truth, so no rule may consult it.
     """
     x, y, w, h = box
     return ((x + w / 2 - SHEET_CENTRE[0]) / SHEET_RADIUS,
@@ -1137,16 +917,8 @@ def sheet_position(box: tuple[int, int, int, int]) -> tuple[float, float]:
 
 
 def overlay_scale(bgr: np.ndarray) -> float:
-    """How big to draw on this frame, relative to the 640-wide it was tuned for.
-
-    A crop makes the read frame small -- 160x144 for a panel across the room --
-    and a fixed 0.62 font on that is lettering three heads high, which the
-    dashboard then upscales to fill its card.  It looks like the labels were
-    drawn before the crop; they were not (the status line sits at (16, 30),
-    which a crop starting at x=237 would have excluded entirely).  They are
-    simply drawn at a size nothing told them to revise.  Clamped, because a
-    4K frame does not want four-fold lettering either.
-    """
+    """How big to draw on this frame, relative to the 640-wide it was tuned
+    for.  A crop makes the read frame small; clamped so 4K stays sane too."""
     return max(0.35, min(1.6, bgr.shape[1] / 640.0))
 
 
@@ -1216,20 +988,15 @@ def _main(argv: list[str] | None = None) -> int:
                         "the frame (MIN_FIGURE_FRAC)")
     p.add_argument("--hold", type=float, default=1.0,
                    help="seconds of frames the live readout votes over")
-    # The same two flags serve.py --sense takes, and the same code behind
-    # them: tools/aim_camera.py prints values that work in either.
+    # Same two flags and code as serve.py --sense; aim_camera.py prints both.
     p.add_argument("--crop", metavar="X,Y,W,H",
                    help="read only this region of each frame (fractions when "
                         "all <= 1, else pixels).  Live modes only")
     p.add_argument("--zoom", type=float, default=1.0, metavar="N",
                    help="magnify what is read by N; with no --crop it reads "
                         "the middle 1/N, so the cost stays flat")
-    # 1280x720, not 640x360.  The mascot is a small object inside a screen
-    # inside the frame, so capture resolution lands on it four-fold: measured on
-    # a live capture the figure arrived 76x73 px, small enough that Bashful and
-    # Blowing-a-kiss -- both a heart held beside the head -- came out 24.2 and
-    # 25.0 apart and the match was refused as too close to call.  Pixels on the
-    # figure are the cheapest accuracy available here.
+    # 1280x720: the mascot is a small object inside a screen inside the frame,
+    # so pixels on the figure are the cheapest accuracy available.
     p.add_argument("--width", type=int, default=1280)
     p.add_argument("--height", type=int, default=720)
     p.add_argument("--mirror", action="store_true")

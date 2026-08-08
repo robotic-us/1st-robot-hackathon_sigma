@@ -1,17 +1,13 @@
 /* The dashboard's one script.  Served by serve.py at /app.js; no build step.
-   Reads the SSE stream (~20 Hz) and paints the page; the emotion timeline
-   seeds itself from /history so a freshly opened tab shows the last 15 min.
-
-   Colour rules: one calm blue accent for the cradle's own actions, a five
-   step comfort ramp (--r0..--r4) for the baby, slate for sleep.  Colour is
-   never the only carrier -- every coloured element sits beside its word. */
+   Reads the SSE stream (~20 Hz); the timeline seeds itself from /history.
+   Colour: accent = cradle actions, --r0..--r4 = comfort ramp, slate = sleep;
+   colour is never the only carrier -- every coloured element has its word. */
 "use strict";
 let S = null;
 const $ = id => document.getElementById(id);
 const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 
-/* Change-guarded innerHTML writer: the stream ticks ~20x a second and most
-   frames change nothing; rewriting identical HTML kills text selection. */
+/* Change-guarded innerHTML writer: rewriting identical HTML ~20x/s kills text selection. */
 function put(id, html) {
   const el = $(id);
   if (el.dataset.v !== html) { el.dataset.v = html; el.innerHTML = html; }
@@ -19,12 +15,8 @@ function put(id, html) {
 
 /* CSS tokens, cached until the colour scheme flips. */
 let TOKENS = {};
-/* A miss is never cached.  getPropertyValue returns "" if it is asked before
-   the stylesheet has resolved, and the old cache stored that "" for the life
-   of the page -- so one unlucky first frame permanently killed a token.  It
-   showed up as the safety meters falling back to the accent blue: setProperty
-   with "" *removes* the custom property, so `var(--fill, var(--accent))` took
-   the fallback and the bar read "cradle action" instead of "inside limits". */
+/* Never cache a miss: getPropertyValue returns "" before the stylesheet
+   resolves, and caching that "" kills the token for the life of the page. */
 const cssv = name => {
   if (TOKENS[name]) return TOKENS[name];
   const v = getComputedStyle(document.documentElement)
@@ -35,8 +27,7 @@ const cssv = name => {
 matchMedia("(prefers-color-scheme: dark)")
   .addEventListener("change", () => { TOKENS = {}; tlDirty = true; });
 
-/* Report thresholds, mirrored from core/cradle.py and core/policy.py so the
-   words on this page and the machine's decisions agree. */
+/* Report thresholds, mirrored from core/cradle.py and core/policy.py. */
 const CALM_LEVEL = 0.12, CRY_LEVEL = 0.45;
 const SWAY_CAP_MM = 30, ACC_CAP_G = 0.05;
 const RANK_BANDS = [0.12, 0.30, 0.45, 0.62];          // rank edges (policy.py)
@@ -47,8 +38,7 @@ const rankOf = v => { for (let i = 0; i < RANK_BANDS.length; i++)
                       return RANK_BANDS.length; };
 const rankColor = i => cssv(["--r0", "--r1", "--r2", "--r3", "--r4"][i] || "--faint");
 
-/* Baby state -> colour token.  The ramp is comfort, slate is sleep, and the
-   critical red is reserved for pain/lost-face/gate. */
+/* Baby state -> colour token; critical red is reserved for pain/lost-face/gate. */
 const ROLE = {SLEEP:"--sleep", EYES_CLOSED:"--sleep", DROWSY:"--sleep",
               SLEEP_CANDIDATE:"--sleep", SLEEP_TENTATIVE:"--sleep",
               SLEEP_STABLE:"--sleep",
@@ -80,9 +70,7 @@ function babyWord(tag) {
   return lvl >= CRY_LEVEL ? "Crying" : lvl >= CALM_LEVEL ? "Fussing" : "Calm";
 }
 
-/* A rate in hertz means nothing to most readers; a sway every N seconds
-   does.  Three real motions on this rig: ML sways side to side, Z lifts
-   (bobbing), AP tilts like a see-saw. */
+/* Hertz means nothing to most readers; "one sway every N seconds" does. */
 const SHAPE_WORD = {still: "gentle tremble", horiz: "side-to-side sway",
                     vert: "up-and-down bob", vert_fall: "bob with a quick drop",
                     v: "V-shaped swing", v_fall: "V-swing with a quick drop",
@@ -119,13 +107,9 @@ function cradleWords(c) {
   return [`${pace}${wide} rocking`, `one sway every ${every} s · ${mm} mm each way`];
 }
 
-/* The panel's headline answer to "is this working?".
-   `c.trend` is the machine's own checkpoint verdict (CradleMachine._set_trend),
-   not a second opinion computed here -- the words on screen and the branch the
-   cradle actually took can never disagree.  Identity is carried three ways,
-   glyph + word + colour, so it survives colour-blindness and a dead pixel.
-   Every state answers, so the line is always present and the card never
-   re-flows underneath it. */
+/* `c.trend` is the machine's own verdict (CradleMachine._set_trend), never
+   recomputed here.  Identity rides glyph + word + colour; every state
+   answers, so the card never re-flows. */
 const TREND = {improving: ["↓", "settling", "--r0"],
                holding:   ["→", "not improving yet", "--warn"],
                worse:     ["↑", "getting worse", "--r3"],
@@ -147,13 +131,8 @@ function trendWords(c) {
 function setMeter(id, frac, color) {
   const fill = $(id);
   fill.style.width = (clamp(frac, 0, 1) * 100) + "%";
-  /* Only write the colour when it actually changes.  Re-setting the custom
-     property on every frame restarted the 0.3 s background transition ~20
-     times a second, so the fill never got more than a percent away from its
-     starting value -- the safety meters sat on the `var(--fill, var(--accent))`
-     fallback and read "cradle action" blue while the machine was reporting
-     "inside limits" green.  Measured: rgb(1,103,199) against a target of
-     rgb(31,125,54), with the safety dot beside them already correct. */
+  /* Only write the colour on change: re-setting it every frame restarts the
+     0.3 s transition ~20x/s, so the fill never leaves its starting value. */
   const box = fill.parentNode;
   if (box.dataset.fill !== color) {
     box.dataset.fill = color;
@@ -246,10 +225,6 @@ function updatePanels() {
   setMeter("lvlbar", lvl, !S.tag.present ? cssv("--faint")
     : lvl >= CRY_LEVEL ? cssv("--r3")
     : lvl >= CALM_LEVEL ? cssv("--r1") : cssv("--r0"));
-  /* The rank used to paint a 3px stripe along the card's top edge.  DESIGN.md
-     allows no decorative chrome, and the hero already carries rank three
-     other ways -- the orb's colour, the state word, and the filled ladder
-     step -- so the stripe went rather than being restyled. */
   const rank = rankOf(ema);
   put("ladder", RANK_SHORT.map((w, i) =>
       `<span class="r${i}${i === rank ? " on" : ""}">${w}</span>`).join(""));
@@ -257,8 +232,7 @@ function updatePanels() {
   // cradle card
   put("hcradle", esc(c.state === "gate_fail" ? "stopping for safety" : doing));
   put("hdetail", esc(detail));
-  // measured exposure when the tablet streams (the rig may be playing SD
-  // slots the screen engine knows nothing about); commanded envelope else
+  // measured exposure when the tablet streams; commanded envelope otherwise
   const physEnv = S.ipad && S.ipad.connected ? S.ipad.strength : null;
   put("envval", physEnv != null
       ? Math.round(physEnv * 100) + " <small>% · measured</small>"
@@ -268,10 +242,7 @@ function updatePanels() {
            c.tapering ? cssv("--warn") : cssv("--accent"));
   put("rawmotion", esc(`${c.motion || "M01"} · ${c.name}`));
 
-  /* Safety card.  When the tablet is streaming, its accelerometer IS the
-     cradle's motion -- measured beats commanded, especially with the rig
-     playing SD slots the screen engine knows nothing about.  Without a
-     tablet the engine's own numbers stand, as before. */
+  /* Safety card: when the tablet streams, measured beats commanded. */
   const phys = S.ipad && S.ipad.connected ? S.ipad : null;
   const chans = [[Math.abs(c.offset_mm.ml), "swing"],
                  [Math.abs(c.offset_mm.z), "lift"],
@@ -291,9 +262,7 @@ function updatePanels() {
   setMeter("accbar", accFrac, safeCol);
 
   const alarm = !!S.tag.alarm;
-  /* the chip appears only when it has something to say -- "within safe
-     limits" all day is wallpaper, and wallpaper trains the eye to skip the
-     one chip that must never be skipped */
+  /* the chip appears only when it has something to say -- "within limits" all day is wallpaper */
   const safeMsg = alarm ? "pain/posture alarm — stopping"
       : c.state === "gate_fail" ? "safety gate tripped — winding down"
       : worst > 0.8 ? "close to the limit, still inside it" : "";
@@ -307,9 +276,7 @@ function updatePanels() {
   const ipad = S.ipad || {connected:false, strength:0};
   $("ipaddot").style.background = ipad.connected ? cssv("--good") : cssv("--faint");
   put("ipadstate", ipad.connected ? "sensor live" : "not connected");
-  /* Nothing to say until a tablet streams: without one -- every --baby and
-     --verify run -- the card was five dashes and a paragraph of instructions
-     holding a column of the vitals row.  It appears when it has data. */
+  /* Hidden until a tablet streams -- the card appears when it has data. */
   $("ipad-card").hidden = !ipad.connected;
   put("ipadstrength", ipad.connected
       ? `${Math.round(ipad.strength * 100)} <small>%</small>` : "–");
@@ -319,8 +286,7 @@ function updatePanels() {
       ? `${ipad.accel_rms.toFixed(3)} <small>m/s²</small>` : "–");
   put("ipadhz", ipad.connected
       ? `${ipad.dominant_hz.toFixed(2)} <small>Hz</small>` : "–");
-  // the server's felt-classification: what this motion IS to the baby's
-  // taste (speed/size/tremble), measured rather than commanded
+  // the server's felt-classification (speed/size/tremble), measured not commanded
   const felt = ipad.felt || null;
   put("ipadfeel", felt
       ? [felt.speed, felt.size, felt.vibe ? "trembling" : ""]
@@ -387,8 +353,7 @@ function drawBrain() {
       + ladderEvents());
     put("scores", `<div class="empty">nothing to learn in fixed-ladder mode</div>`);
     put("trail", "");
-    // this branch used to return without ever calling drawPlan, so switching
-    // Planner -> Ladder left a stale planner card sitting on the row
+    // clear the planner card, or switching Planner -> Ladder leaves it stale
     drawPlan(null);
     return;
   }
@@ -416,8 +381,7 @@ function drawBrain() {
   }).join("") : `<div class="empty">Armed — the brain is asked the moment the
       baby starts fussing.</div>`);
 
-  // learned preferences: one pill per motion, coloured by its verdict --
-  // green helped, red made it worse, grey did nothing
+  // learned preferences: one pill per motion, coloured by its verdict
   const rows = Object.entries(p.scores).sort((a, b) => b[1] - a[1]);
   put("scores", rows.length ? `<div class="pills">` + rows.map(([m, v]) => {
     const cls = v > 0 ? "up" : v < 0 ? "dn" : "flat";
@@ -433,22 +397,8 @@ function drawBrain() {
 const verdictWord = d => d > 0 ? "helps" : d < 0 ? "worse" : "no effect";
 
 /* ---- the planner's own reasoning (core/policy.py ChunkMatcher) ------------ */
-/* The one brain that can show its work: every candidate it dreamed, the
-   comfort each was predicted to reach, and the three cost terms that moved
-   it off that prediction.  Only the numbers the pick actually used. */
-/* ---- the dream, as a field ----------------------------------------------
-   What DREAM-Chunk actually does is score *every* candidate against a
-   predicted comfort, then take the best.  The old drawing showed six of them
-   as near-identical bars and, at DEPTH=1, a "tree" whose branches were all
-   straight lines to the same horizon -- it looked like deliberation and
-   carried almost none.
-
-   This plots the whole field on the axis the reader already knows: the
-   timeline's comfort scale, same bands, same colours, same direction.  One
-   tick per dreamed motion at its predicted level; the pick is labelled, what
-   is playing is ringed, and where the baby is now is a line.  You can see at
-   a glance whether the field is spread (a real preference) or bunched (a cold
-   model with nothing to say yet), which is the one thing the bars hid. */
+/* Every dreamed candidate on the timeline's own comfort axis: spread means a
+   real preference, bunched means a cold model with nothing to say yet. */
 function dreamStrip(plan) {
   const field = plan.strip && plan.strip.length ? plan.strip
               : (plan.candidates || []).map(c => [c.id, c.fit]);
@@ -490,7 +440,6 @@ function dreamStrip(plan) {
     out.push(`<text class="pick" x="${x(pick[1]).toFixed(1)}" y="${TOP + ROW + 17}"
         text-anchor="middle">${esc(pick[0])}</text>`);
 
-  // the blueprint frame: the band reads as an instrument, not a smear
   out.push(`<rect class="frame" x="${L}" y="${TOP}" width="${W - L - R}"
       height="${ROW}" fill="none"/>`);
 
@@ -500,33 +449,24 @@ function dreamStrip(plan) {
 
 function drawPlan(plan) {
   const card = $("card-plan");
-  /* Visibility follows the *brain*, which is stable, not the momentary plan
-     payload: keyed to plan.candidates the card vanished between decisions and
-     re-flowed the whole row every few seconds. */
+  /* Visibility follows the *brain*, not the momentary plan payload -- keyed
+     to plan.candidates the card vanished between decisions. */
   const on = !!S.policy && S.policy.brain === "dream";
   card.hidden = !on;
-  // the stage band goes two-up or three-up with it
   $("stage").classList.toggle("withplan", on);
   if (!on) return;
   if (!plan || !plan.candidates || !plan.candidates.length) {
     put("plans", ""); put("plan", ""); put("planveto", "");
     return;
   }
-  // A cold model predicts the same future for everything it has not tried.
-  // Say so — a list of equal costs is not a considered ranking, and the
-  // panel should not let it look like one.
+  // a cold model predicts the same future for everything untried -- say so
   const tied = plan.candidates.length > 1
     && Math.abs(plan.candidates[0].cost
                 - plan.candidates[plan.candidates.length - 1].cost) < 0.001;
 
   put("plans", dreamStrip(plan));
 
-  /* The podium, as a ruled table.  The old rows drew a bar per candidate --
-     but the bar restated the strip's x-position in a worse encoding, three
-     near-identical lengths in the same rank colour, with the verdict text
-     wrapping to three lines beside them.  A table row carries the same four
-     facts flat: id, predicted level, the rank word in its colour, and the
-     one reason that actually decided it. */
+  /* The podium: id, predicted level, rank word, and the reason that decided it. */
   put("plan", plan.candidates.slice(0, 3).map(c => {
     const win = c.id === plan.chosen;
     const tag = win ? "picked"
@@ -541,8 +481,7 @@ function drawPlan(plan) {
           <em style="color:${rankColor(rankOf(c.fit))}">${RANK_WORD[rankOf(c.fit)]}</em></span>
         ${tag ? `<span class="ptag">${tag}</span>` : ""}</div>`;
   }).join(""));
-  // taste and wear are drawn apart on purpose: recording "worn out" as
-  // "disliked" is what made a carried model talk itself out of every motion
+  // taste and wear are drawn apart on purpose: "worn out" is not "disliked"
   const d = S.policy && S.policy.model;
   const worn = d && d.wear ? Object.entries(d.wear)
       .sort((a, b) => b[1] - a[1]).slice(0, 4) : [];
@@ -564,9 +503,7 @@ function ladderEvents() {
 }
 
 /* ---- the temperament editor (virtual infant only) ------------------------ */
-/* The selects fill from /motions once it arrives: the N-system trial
-   candidates, each labeled with its features so picking a taste means
-   something ("N16 · v large slow"). */
+/* Selects fill from /motions: the N-system candidates, labeled by feature. */
 function fillTaste(list) {
   const cands = list.filter(m => m.candidate);
   const opt = m => `<option value="${m.id}">${m.id} · ${m.shape}`
@@ -591,11 +528,8 @@ function drawTaste() {
   const t = S.taste;
   $("card-taste").hidden = t === undefined;
   if (t === undefined) return;
-  /* Re-seed when the *server's* taste changes -- Randomize, or an Apply from
-     another browser -- but not every frame, which would fight a user halfway
-     through a dropdown.  Seeding once (the old rule) let Randomize leave the
-     selects showing a temperament the baby no longer has, so the card
-     contradicted its own summary line. */
+  /* Re-seed when the *server's* taste changes, but not every frame -- that
+     would fight a user halfway through a dropdown. */
   const sig = JSON.stringify([t.love, t.hate, t.combo]);
   if (sig !== tasteSig) {
     tasteSig = sig;
@@ -609,11 +543,9 @@ function drawTaste() {
 }
 
 /* ---- the living circle ----------------------------------------------------
-   A blob, not a circle: sine lobes turning at different speeds read as
-   breathing tissue.  Everything it does is published state -- distress sets
-   the wobble, the envelope sets the glow, the body rides the real sway --
-   except the breathing cadence, which is a visual pulse, not a respiration
-   reading.  Do not let it become one without a sensor behind it. */
+   Everything it does is published state except the breathing cadence, which
+   is a visual pulse, not a respiration reading -- do not let it become one
+   without a sensor behind it. */
 const orb = $("orb"), og = orb.getContext("2d");
 const STILL = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const LOBES = [{k: 2, a: .024, w: .31}, {k: 3, a: .030, w: -.55},
@@ -663,9 +595,6 @@ function drawOrb() {
   const col = S.tag.present ? stateColor(S.tag.emotion) : cssv("--critical");
 
   og.clearRect(0, 0, w, h);
-  /* Alphas re-cut for a white canvas.  A glow that read as light spilling off
-     a dark page reads as dirt on paper, so the aura is halved and the body
-     fill is raised instead -- the shape carries where the halo used to. */
   const aura = og.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 1.9);
   aura.addColorStop(0, rgba(col, 0.07 + 0.13 * ov.env));
   aura.addColorStop(1, rgba(col, 0));
@@ -689,10 +618,8 @@ function drawOrb() {
 requestAnimationFrame(drawOrb);
 
 /* ---- the emotion timeline ------------------------------------------------ */
-/* Samples {t, level, ema, motion, alarm}: seeded once from /history (the
-   server keeps 15 min at 1 Hz), then appended live from the stream.  The
-   chart is the page's centrepiece: comfort bands as the backdrop, the raw
-   level dotted, the decision-driving trend solid, motion starts flagged. */
+/* Samples {t, level, ema, motion, alarm}: seeded once from /history (15 min
+   at 1 Hz on the server), then appended live from the stream. */
 const WINDOW_S = 900;
 const HIST = [];
 let tlDirty = true, hoverX = null;
@@ -739,19 +666,14 @@ function drawTimeline() {
   const x = t => padL + clamp((t - (tNow - WINDOW_S)) / WINDOW_S, 0, 1) * pw;
   const y = v => padT + (1 - clamp(v, 0, 1)) * ph;
   tg.clearRect(0, 0, w, h);
-  // canvas text is outside the CSS ladder, so it carries its own floor:
-  // 10px here was the least readable thing on the page
+  // canvas text is outside the CSS type ladder, so it carries its own floor
   tg.font = `${13 * dpr}px ${getComputedStyle(document.body).fontFamily}`;
 
   // comfort bands: the ladder as the backdrop, named on the right edge
   const edges = [0, ...RANK_BANDS, 1];
   for (let i = 0; i < 5; i++) {
     const yTop = y(edges[i + 1]), yBot = y(edges[i]);
-    /* On the old black page these bands ran at 0.14 and still read as a
-       backdrop.  On DESIGN.md's white canvas the same alpha turns the chart
-       into four coloured slabs with a thin line lost on top, so the bands
-       drop to a tint and the data carries.  The right-edge labels keep the
-       ordinal reading either way. */
+    // a tint only: any stronger and the bands overwhelm the line on white
     tg.globalAlpha = 0.11;
     tg.fillStyle = rankColor(i);
     tg.fillRect(padL, yTop, pw, yBot - yTop);
@@ -774,9 +696,7 @@ function drawTimeline() {
     tg.fillText(back ? `${back / 60}m ago` : "now", xx, h - 6 * dpr);
   }
 
-  /* The span before the first sample is *no data*, not a flat calm baby --
-     on a freshly started server that is most of the chart, and unlabelled it
-     reads as fifteen quiet minutes that never happened. */
+  /* The span before the first sample is *no data*, not a flat calm baby. */
   const t0 = HIST.length ? HIST[0].t : tNow;
   if (t0 > tNow - WINDOW_S + 20) {
     const xEnd = x(t0), gap = xEnd - padL;
@@ -817,12 +737,6 @@ function drawTimeline() {
     }
   }
 
-  /* The wave IS the picture: the raw level carries the baby's actual
-     texture -- sway ripple, every startle -- and it used to be a faint
-     dotted whisper under a bold EMA whose plateaus read as straight lines.
-     Swapped: the raw level is the crisp ink line, and the decision trend is
-     a wide soft band behind it, still legible as "what decisions use"
-     without flattening the story. */
   const line = (key, color, width, dash, alpha = 1) => {
     tg.strokeStyle = color; tg.lineWidth = width * dpr;
     tg.globalAlpha = alpha;

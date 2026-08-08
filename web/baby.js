@@ -24,17 +24,12 @@ function smooth01(v) {
   return x * x * (3 - 2 * x);
 }
 
-// ?level=0.65 is a visual-test hook. It never changes server state and is
-// absent from the actual iPhone URL.
+// ?level=0.65 is a visual-test hook; it never changes server state.
 const previewRaw = new URLSearchParams(location.search).get("level");
 const previewLevel = previewRaw === null ? NaN : Number(previewRaw);
 const previewState = new URLSearchParams(location.search).get("state");
 const hasPreview = Number.isFinite(previewLevel);
-// ?pose=crying pins one *pure* pose, no blend.  ?level= can only reach the
-// five rungs of the live ladder, and the other twelve need a hand on the
-// wheel -- which makes a repeatable capture of all seventeen impossible to
-// script.  This is the bench hook the camera-side recognizer is graded with
-// (perception/nubzuki.py); like ?level= it never touches server state.
+// ?pose=crying pins one *pure* pose, no blend: perception/nubzuki.py's bench hook.
 const previewPose = new URLSearchParams(location.search).get("pose");
 
 function stateWord(state, level) {
@@ -50,8 +45,7 @@ function setCaption(words, levelText_) {
   if (levelText_ !== captionLevel) levelText.textContent = captionLevel = levelText_;
 }
 
-// The fixed layer is sized from the visible rectangle for the same reason the
-// canvas is; without this the CSS box and the backing store disagree on a phone.
+// Sized from the visible rectangle, or the CSS box and backing store disagree on a phone.
 function fitViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
@@ -75,8 +69,7 @@ events.onerror = () => {
 };
 events.onmessage = event => {
   live = JSON.parse(event.data);
-  // The caption is written by the render loop, which knows whether a hand is
-  // on the wheel; writing it here too would flicker between the two.
+  // the render loop owns the caption; writing it here too would flicker
   const ipad = live.ipad;
   if (motionStarted && ipad?.connected) {
     sensorText.textContent = `Sensor live · ${(ipad.accel_rms || 0).toFixed(3)} m/s² · `
@@ -98,13 +91,8 @@ function motionHandler(event) {
   while (samples.length && samples[0].t < now - KEEP_MS) samples.shift();
 }
 
-/* ---- rough handling -> outrage ------------------------------------------
-   The cradle's own envelope tops out at a_peak 0.05 g (~0.5 m/s2), so a
-   sustained acceleration well above it can only be a hand shaking the
-   device.  The meter rises fast and falls slow -- one hard shake reads as a
-   few seconds of indignation, not a single flickered frame -- and it feeds
-   the same live ladder as everything else, so shaking harder walks the face
-   through crying -> angry -> rage exactly like a rising distress level. */
+/* ---- rough handling -> outrage ----------------------------------------- */
+// The envelope tops out at 0.05 g, so accel above it is a hand shaking it.
 let lastFeat = null;
 let shake = 0;
 const SHAKE_FROM = 2.0, SHAKE_FULL = 7.0;   // m/s2 RMS: begins / full rage
@@ -210,22 +198,9 @@ start.addEventListener("click", async () => {
   }
 });
 
-/* ------------------------------------------------------------------------ *
- * Nubzuki, rebuilt as a vector rig
- *
- * The KAIST mascot is redrawn from paths rather than blitted from the
- * reference artwork, because a cradle display has to *move*: breathe, blink,
- * glance around, tremble, and ride the sway the iPad is measuring -- none of
- * which a bitmap can do.  Proportions and palette are measured off the
- * supplied artwork (head half-width = 100 units, so every constant below is
- * a percentage of it).
- *
- * The sticker sheet is a circumplex, so the wheel *is* the expression space:
- * every pose on the sheet is an anchor at the coordinates it occupies there,
- * and what gets drawn is a distance-weighted blend of the nearby ones.  That
- * is what keeps the face continuous -- there are no frames to switch between,
- * only a point moving through a field.
- * ------------------------------------------------------------------------ */
+/* ---- Nubzuki, a vector rig ----------------------------------------------
+   Units: head half-width = 100, every constant a percentage of it.  The sheet
+   is a circumplex: poses are anchors, the face a blend of nearby ones. */
 
 const INK = "#241917";
 const BLUE = "#3CA9E1";
@@ -244,16 +219,12 @@ const ART = {
   groundY: 148, shadowRx: 56, shadowRy: 12,
   ink: 4.2
 };
-// Design box the figure is fitted into: the head plus room for a held heart,
-// a lying pose's sideways reach, falling tears and rising "z"s.
+// Design box the figure is fitted into, in head units.
 const BOX = {x: -168, y: -92, w: 336, h: 272};
-// Where the figure's middle sits inside the clear band above the setup card,
-// as a fraction of that band.  Slightly high so the head reads first.
+// The figure's middle inside the clear band, as a fraction of that band.
 const FACE_CENTRE_Y = .46;
 
-// Every parameter a pose can set.  Poses list only what they change; the rest
-// stay at these, and the live value of each is a spring easing toward the
-// blend, so nothing about the face can jump.
+// Every parameter a pose can set; poses list only what they change.
 const BASE = {
   eyeOpen: 1, eyeBig: 0, eyesOff: 0, brow: 0, blush: 0, blueBlush: 0,
   tear: 0, shine: 0, hunch: 0, flush: 0, dusk: 0, rage: 0, rainbow: 0,
@@ -263,8 +234,7 @@ const BASE = {
 };
 const POSE_KEYS = Object.keys(BASE);
 
-// The sheet's own layout, read off it: x is valence (POSITIVE right), y is
-// screen-down so ACTIVE is negative -- the same frame the wheel is drawn in.
+// Sheet coordinates: x is valence (POSITIVE right), y screen-down (ACTIVE < 0).
 const POSES = [
   {key: "rage", label: "Raging", at: [-.73, -.68],
    p: {eyeOpen: .5, brow: 1, rage: 1, energy: 1, armUp: .18, hunch: .12}},
@@ -325,16 +295,11 @@ function fullParams(pose) {
   return out;
 }
 
-// The Jetson gives one distress number, and this ladder turns it into a blend
-// of two *named* poses.  Sampling the wheel field along a path instead would
-// let whatever pose happens to lie near that path leak in -- which is how a
-// merely fussing infant ended up wearing sunglasses.
+// The Jetson's one distress number becomes a blend of the two *named* poses
+// either side of it; sampling the wheel field instead lets stray poses leak in.
 const LIVE_LADDER = [
   {at: 0, key: "sitHeart"}, {at: .22, key: "neutral"},
-  // crying at .38, not .50: the virtual baby's whole FUSS band (~.25-.35)
-  // used to draw ~80% neutral, which the camera correctly named neutral --
-  // so fussing was invisible through the lens and the machine reacted only
-  // to full cries.  At .38 a fussing face is half crying: legible.
+  // crying at .38, not .50: at .50 the FUSS band drew as neutral to the camera.
   {at: .38, key: "crying"}, {at: .78, key: "angry"}, {at: 1, key: "rage"}
 ];
 
@@ -363,9 +328,7 @@ function liveLook(level, asleep) {
   };
 }
 
-// Distance-weighted blend of the poses near a point.  The falloff is steep on
-// purpose: standing next to an anchor should read as that pose, and blends
-// should only matter in the gaps between them.
+// Blend reach; the falloff is steep so standing next to an anchor reads as it.
 const POSE_REACH = .5;
 
 function poseAt(x, y) {
@@ -405,8 +368,7 @@ function dominantPose(x, y) {
   return best;
 }
 
-// Frame-rate independent easing: the fraction closed per second is fixed, so
-// a 30 Hz iPad and a 120 Hz one settle over the same wall-clock time.
+// Frame-rate independent easing: `rate` is the fraction closed per second.
 function ease(current, target, rate, dt) {
   return current + (target - current) * (1 - Math.exp(-rate * dt));
 }
@@ -479,7 +441,6 @@ function starPath(ctx, cx, cy, outer, inner, points, rot) {
   ctx.closePath();
 }
 
-// A soft starburst: the wet shine the reference art draws around teary eyes.
 function shinePath(ctx, r, spikes, phase) {
   const n = spikes * 2;
   const at = i => {
@@ -497,9 +458,8 @@ function shinePath(ctx, r, spikes, phase) {
   ctx.closePath();
 }
 
-// The mascot's flat-colour look: one ink outline around the *union* of a set
-// of subpaths.  Stroking at twice the ink width and then refilling in colour
-// erases every internal seam, so limbs merge into the body like the artwork.
+// The flat-colour look the recognizer matches on: one ink outline around the
+// *union* of the subpaths -- stroke at 2x ink, then refill, erases the seams.
 function inkFill(ctx, trace, fill) {
   ctx.beginPath();
   trace(ctx);
@@ -525,8 +485,6 @@ function handOf(side, lift, wobble) {
     x: side * (ART.shoulderX + len * Math.cos(angle)),
     y: ART.shoulderY - len * Math.sin(angle)
   };
-  // Clasped at the mouth, or folded across the chest: both are reached by
-  // moving the hand, so the arm stays one capsule off the same shoulder.
   out.x = lerp(out.x, side * 11, R.armsIn);
   out.y = lerp(out.y, 52, R.armsIn);
   out.x = lerp(out.x, -side * 18, R.armsCross);
@@ -572,11 +530,7 @@ function headTrace(ctx) {
   ctx.ellipse(0, 0, ART.headRx, ART.headRy, 0, 0, TAU);
 }
 
-// The front-arm clip stands clear of the head's ink band by a full stroke.
-// Landing the clip *on* the outline is what stripes a hairline across the
-// face: the clipped fill only half-covers its edge pixels, so the ink beneath
-// shows through.  A pad this wide puts the seam where the arm behind the head
-// has already painted the same pixels, and the join disappears.
+// A full stroke: clipping the front arm *on* the head outline stripes the face.
 const CLIP_PAD = ART.ink * 2;
 
 function headDepth(x, y, P) {
@@ -584,12 +538,9 @@ function headDepth(x, y, P) {
                     (y - P.headY) / (ART.headRy + CLIP_PAD));
 }
 
-// The stretch of an arm that belongs in *front* of the head: from the hand
-// back to where the arm's centreline leaves the head, plus enough overrun to
-// park its end cap outside the clip.  A whole arm cannot simply be redrawn in
-// front -- a resting one only grazes the head's rim with its outline, and the
-// clip would keep that ink while cutting away the blue that belongs under it,
-// leaving a stray line across the face.
+// The stretch of an arm that belongs in *front* of the head: hand back to
+// where its centreline leaves the head, plus overrun to park the end cap
+// outside the clip.  A whole arm redrawn in front leaves a stray rim line.
 function frontArm(side, P) {
   const shoulderX = side * ART.shoulderX;
   const hand = side < 0 ? P.handL : P.handR;
@@ -607,8 +558,8 @@ function frontArm(side, P) {
 
 /* --- the face ----------------------------------------------------------- */
 
-// The colour washes that ride on the head.  Painted into whatever region is
-// clipped, so a lid can put them back over itself.
+// The mood wash, painted over the white head into whatever region is clipped
+// (so a lid can put it back over itself): rainbow, flush pink, dusk purple.
 function paintWashes(ctx) {
   if (R.rainbow > .01) {
     const bow = ctx.createLinearGradient(-ART.headRx, 0, ART.headRx, 0);
@@ -620,8 +571,7 @@ function paintWashes(ctx) {
     ctx.fillRect(-ART.headRx, -ART.headRy, ART.headRx * 2, ART.headRy * 2);
     ctx.globalAlpha = 1;
   }
-  // The flush gives way as rage turns the skin red -- stacked, the two just
-  // grey each other out.
+  // The flush gives way as rage reddens the skin; stacked, the two grey out.
   const flush = R.flush * (1 - .75 * R.rage);
   if (flush > .01) {
     const wash = ctx.createLinearGradient(0, ART.headRy * .1, 0, ART.headRy);
@@ -641,8 +591,7 @@ function paintWashes(ctx) {
   for (const [amount, rgb] of cheeks) {
     if (amount <= .02) continue;
     for (const side of [-1, 1]) {
-      // Squash the context rather than the arc, so the gradient squashes with
-      // it -- an ellipse under a round gradient ends on a hard edge.
+      // Squash the context, not the arc, so the gradient squashes with it.
       ctx.save();
       ctx.translate(side * ART.eyeDx, ART.eyeDy + ART.eyeR * 1.15);
       ctx.scale(1, .58);
@@ -691,11 +640,8 @@ function drawEye(ctx, side, P) {
   ctx.arc(px - r * .17, py - r * .21, pupil * (.20 + .22 * R.shine), 0, TAU);
   ctx.fill();
 
-  // The lid is head-coloured, so a closing eye simply loses its white; its
-  // slant is the brow, inner corner low, which is how the reference sheet
-  // draws the loudest poses.  It is confined to the eye and hands the wash
-  // back afterwards -- a bare rectangle of flat blue would scrub the flush
-  // off the surrounding head and leave two blue panels across the face.
+  // The lid is head-coloured, so a closing eye loses its white; it repaints the
+  // wash, or flat blue would scrub the flush off the surrounding head.
   const lidY = -r - 2 + (1 - open) * (2 * r + 4);
   ctx.save();
   ctx.beginPath();
@@ -714,7 +660,6 @@ function drawEye(ctx, side, P) {
   ctx.restore();
 
   // ...and the lash line fades in behind it, so a blink still reads at speed.
-  // White tips, parallel slant: that is how the reference sheet draws sleep.
   if (open < .5) {
     ctx.save();
     ctx.translate(ex, ey);
@@ -779,9 +724,7 @@ function drawEyewear(ctx) {
 }
 
 function drawFace(ctx, P) {
-  // Everything here is clipped just inside the head, so lids and washes can be
-  // drawn as generous shapes without ever reaching the outline -- the seam
-  // then falls on flat colour, where a half-covered edge pixel cannot show.
+  // Clipped just inside the head, so lids and washes never reach the outline.
   ctx.save();
   ctx.beginPath();
   ctx.ellipse(0, 0, ART.headRx - 1, ART.headRy - 1, 0, 0, TAU);
@@ -844,8 +787,7 @@ function drawHeadProps(ctx, P) {
 }
 
 function drawHeldHeart(ctx, P) {
-  // The held heart is put away by shrinking, not by fading to a grey ghost:
-  // an ink outline at half alpha over blue reads as dirt, not as a heart.
+  // Put away by shrinking, not fading: ink at half alpha over blue reads as dirt.
   if (R.heart <= .12) return;
   ctx.save();
   ctx.globalAlpha = clamp((R.heart - .12) * 4, 0, 1);
@@ -923,8 +865,7 @@ function drawNotes(ctx, P) {
   ctx.restore();
 }
 
-// Things that rest on the floor rather than on the infant, so they stay put
-// when a lying pose tips the figure over.
+// On the floor rather than on the infant, so a lying pose does not tip them.
 function drawGroundProps(ctx, P) {
   if (R.cup > .02) {
     ctx.save();
@@ -1045,8 +986,7 @@ function drawNubzuki(ctx, P) {
   drawGroundProps(ctx, P);
 
   ctx.save();
-  // Lying tips the whole figure about where it meets the floor; the head then
-  // counter-rotates so it rests on its side rather than standing on end.
+  // Lying tips the figure about its floor contact; the head counter-rotates.
   ctx.translate(P.lieShift, ART.groundY);
   ctx.rotate(-P.lieRot * DEG);
   ctx.translate(0, -ART.groundY + P.bodyY);
@@ -1075,9 +1015,7 @@ function drawNubzuki(ctx, P) {
   drawHeadProps(ctx, P);
   ctx.restore();
 
-  // A raised arm passes in *front* of the head.  Clipping this second pass to
-  // the head's outer edge splices it onto the same arm already drawn behind,
-  // so the limb reads as one piece with no seam at the crossing.
+  // A raised arm passes in *front* of the head, spliced onto the arm behind.
   const front = [-1, 1].map(side => frontArm(side, P)).filter(Boolean);
   if (front.length) {
     ctx.save();
@@ -1111,22 +1049,16 @@ function drawNubzuki(ctx, P) {
 
 /* --- the feelings wheel -------------------------------------------------- */
 
-// The reference sticker sheet is laid out as a circumplex -- ACTIVE over CALM,
-// NEGATIVE across to POSITIVE -- with a pose in each region.  Drawing that
-// same wheel turns it into both a readout and a control: the dot is where the
-// infant sits now, the tail is the last 45 s of it, and a finger on it poses
-// the infant by hand.
+// The sheet's circumplex as readout and control: the dot is where the infant
+// sits now, the tail its last 45 s (WHEEL_KEEP / WHEEL_HZ), a finger poses it.
 const WHEEL_HZ = 2;
 const WHEEL_KEEP = 90;
 const wheelTrail = [];
 let wheelNext = 0;
 let wheelSeeded = false;
 
-// Roughly the inverse of livePoint: right is settled, up is roused, and the
-// calm-and-positive corner is asleep.  It does not have to round-trip exactly
-// -- the poses drive the drawing, and this only supplies the caption's number.
-// Sleep is gated on positive valence so the quiet-but-miserable corner stays
-// awake and fussing.
+// Roughly the inverse of the pose blend, for the caption's number only.  Sleep
+// is gated on positive valence so quiet-but-miserable stays awake and fussing.
 function feltToState(x, y) {
   const arousal = -y;
   return {
@@ -1149,8 +1081,7 @@ function wheelGeom(w, h, dpr) {
   return {cx: w - r - pad, cy: h - r - pad, r, reach: r * .84};
 }
 
-// The tap target that hands the wheel back to the Jetson, shown only while a
-// hand is overriding it -- an override with no visible way out is a trap.
+// The tap target that hands the wheel back to the Jetson, shown only while held.
 function livePill(geom, dpr) {
   const pw = 58 * dpr, ph = 22 * dpr;
   return {x: geom.cx - pw / 2, y: geom.cy - geom.r - ph - 8 * dpr, w: pw, h: ph};
@@ -1196,8 +1127,7 @@ function drawWheel(ctx, w, h, dpr, rgb, held) {
   if ("letterSpacing" in ctx) ctx.letterSpacing = "0px";
 
   const reach = r * .84;
-  // Every pose the sheet draws, marked where it sits -- so the wheel shows
-  // what there is to reach, not just where the infant happens to be.
+  // Every pose the sheet draws, marked where it sits.
   ctx.fillStyle = "rgba(51,37,29,.20)";
   for (const pose of POSES) {
     ctx.beginPath();
@@ -1252,9 +1182,7 @@ function drawWheel(ctx, w, h, dpr, rgb, held) {
 
 /* --- driving the wheel by hand ------------------------------------------- */
 
-// While set, this overrides what the face shows.  It is deliberately local:
-// the cradle-mounted page reports IMU features to the Jetson and takes state
-// back over SSE, and it does not get to tell the judge what it saw.
+// Overrides what the face shows.  Local: it never reaches the judge.
 let manual = null;
 let wheelDrag = false;
 
@@ -1290,8 +1218,7 @@ canvas.addEventListener("pointerdown", event => {
   }
   if (Math.hypot(p.x - geom.cx, p.y - geom.cy) > geom.r) return;
   wheelDrag = true;
-  // Capture keeps the drag alive past the wheel's edge, but throws if the id
-  // is not a live pointer -- never worth losing the drag over.
+  // Capture keeps the drag alive past the wheel's edge, but throws on a dead id.
   try { canvas.setPointerCapture(event.pointerId); } catch (_) {}
   holdWheel(p.x, p.y);
   event.preventDefault();
@@ -1310,9 +1237,7 @@ for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
 
 /* --- the animation loop ------------------------------------------------- */
 
-// The cradle's own motion, preferred from this device's IMU and otherwise
-// reconstructed from what the server reports, so the figure visibly rides the
-// sway even when /baby is being watched from a laptop.
+// The cradle's own motion in degrees: this device's IMU if any, else the server.
 function cradleTilt(t) {
   if (samples.length >= 4) {
     const recent = samples.slice(-6);
@@ -1347,8 +1272,7 @@ function spawn(kind, x, y, tint) {
   }
 }
 
-// Where a point on the figure ends up once a lying pose has tipped it, so the
-// particles it sheds start from the right place.
+// Where a point on the figure ends up once a lying pose has tipped it.
 function lieXform(x, y, P) {
   const a = -P.lieRot * DEG;
   const dy = y + P.bodyY - ART.groundY;
@@ -1366,12 +1290,8 @@ function frame(nowMs) {
   lastFrame = t;
 
   const dpr = clamp(window.devicePixelRatio || 1, 1, 3);
-  // visualViewport, not innerWidth/innerHeight.  On a phone browser the layout
-  // viewport is taller than what you can actually see -- the dynamic URL bar
-  // and the gesture bar sit over it -- so a face centred in `innerHeight` is
-  // centred on a rectangle that extends past the glass, and the top of the
-  // head is simply not on screen.  A clipped figure can never match a whole
-  // template, which is what "it cannot detect the nubzuki" turned out to be.
+  // visualViewport, not innerWidth/innerHeight: the layout viewport extends past
+  // the glass, and a figure clipped there can never match a whole template.
   const vv = window.visualViewport;
   const vw = vv ? vv.width : innerWidth;
   const vh = vv ? vv.height : innerHeight;
@@ -1383,12 +1303,10 @@ function frame(nowMs) {
 
   // A hand on the wheel outranks the preview hook, which outranks the Jetson.
   const held = manual;
-  // rough handling outranks the Jetson (the shake is real and local), but
-  // never a hand on the wheel -- a person steering keeps authorship
+  // rough handling outranks the Jetson, but never a hand on the wheel
   const rough = shakeUpdate();
-  // live.face is the plant's ground truth (--sense mode); tag is what the
-  // machine believes it saw.  The DRAWN infant is the truth -- the camera
-  // then closes the loop by reading this very drawing back.
+  // live.face is the plant's ground truth; the DRAWN infant is what the camera
+  // reads back to close the loop.
   const jetLevel = live?.face?.level ?? live?.tag?.level ?? 0;
   const jetState = live?.face?.state ?? live?.tag?.emotion ?? "CALM";
   const level = held ? held.level
@@ -1405,17 +1323,13 @@ function frame(nowMs) {
     spot = {x: held.x, y: held.y};
     want = poseAt(spot.x, spot.y);
   } else if (pinnedPose) {
-    // The anchor's own parameters, not poseAt() at its coordinates: a bench
-    // capture has to be the pose itself, not whatever its neighbours blend to.
+    // The anchor's own parameters, not poseAt(): a bench capture is the pose.
     spot = {x: pinnedPose.at[0], y: pinnedPose.at[1]};
     want = fullParams(pinnedPose);
   } else if (live?.face?.state && rough < .05) {
-    // Sense mode draws PURE poses (the camera names whole poses; a blend
-    // reads as its nearest neighbour) and ROTATES inside the state's pool,
-    // so over a session the machine genuinely wears all 17.  serve.py's
-    // POSE_STATE mirrors the pools, so any pick reads back as exactly the
-    // state that chose it.  Each pick holds 8-14 s -- long enough for the
-    // camera's anti-flicker vote to lock on.
+    // Sense mode draws PURE poses (the camera names whole poses) and rotates
+    // inside the state's pool; serve.py's POSE_STATE mirrors the pools.  A pick
+    // holds 8-14 s -- long enough for the camera's anti-flicker vote to lock on.
     const st = live.face.state;
     const pool = STATE_POOL[st] || ["neutral"];
     const nowS = performance.now() / 1000;
@@ -1433,8 +1347,7 @@ function frame(nowMs) {
   }
   for (const key of POSE_KEYS) R[key] = ease(R[key], want[key], 2.4, dt);
 
-  // Blinks, saccades: the small involuntary motion that stops a face looking
-  // like a still.  Both quicken with distress and stop once the eyes are shut.
+  // Blinks and saccades: both quicken with distress, stop once the eyes shut.
   if (t > R.nextBlink && R.eyeOpen > .5) {
     R.blinkUntil = t + .17;
     R.nextBlink = t + 1.5 + Math.random() * 3.6 * (1 - .6 * R.energy);
@@ -1452,9 +1365,7 @@ function frame(nowMs) {
   R.lean = ease(R.lean, cradle.lean, 6.5, dt);
   R.bob = ease(R.bob, cradle.bob, 6.5, dt);
 
-  // Held, the dot is the finger and must not lag it; free, it glides.  Either
-  // way it starts on the real reading -- easing in from a placeholder would
-  // draw a 45-second tail across the wheel that the infant never took.
+  // The dot must not lag a finger, and starts on the real reading (no fake tail).
   if (!wheelSeeded || wheelDrag) {
     wheelSeeded = true;
     R.feltX = spot.x;
@@ -1468,14 +1379,11 @@ function frame(nowMs) {
     if (wheelTrail.length > WHEEL_KEEP) wheelTrail.shift();
   }
 
-  // Breath drives squash, bob and the arm swing off one clock, so the whole
-  // body moves as one thing rather than as independent wobbles.
+  // One clock drives squash, bob and arm swing, so the body moves as one.
   const period = lerp(3.8, 1.7, R.energy);
   R.breath += dt / period;
   const breath = Math.sin(R.breath * TAU);
-  // An upset baby shudders; it does not buzz.  Both rates stay near 4 Hz and
-  // the amplitude stays under two units -- faster or wider than this and the
-  // figure reads as a rendering fault rather than as distress.
+  // Rates near 4 Hz, amplitude under two units: wider reads as a render fault.
   const tremble = R.energy * R.energy * 1.5;
   const shakeX = tremble * Math.sin(t * TAU * 3.7);
   const shakeY = tremble * Math.sin(t * TAU * 4.6 + 1.1);
@@ -1489,8 +1397,7 @@ function frame(nowMs) {
 
   const P = {
     t,
-    // Red arrives decisively rather than through a long muddy purple: a
-    // half-blended skin reads as a rendering fault, not as an emotion.
+    // Red arrives decisively: a half-blended skin reads as a fault, not rage.
     skin: mix(mix(BLUE, RAGE_RED, smooth01((R.rage - .30) / .55)),
               PINK, R.rainbow * .85),
     bounce: R.bob - Math.abs(Math.sin(t * TAU * (.45 + .55 * R.energy)))
@@ -1513,9 +1420,7 @@ function frame(nowMs) {
   P.handL = handOf(-1, liftL, wobbleL);
   P.handR = handOf(1, liftR, wobbleR);
 
-  // Particles: tears while crying, hearts while soothed or dreaming, "z"s
-  // while asleep.  Spawned in the tipped frame so a lying pose sheds them
-  // from where its head actually is.
+  // Tears crying, hearts soothed, "z"s asleep -- spawned in the tipped frame.
   const headAt = lieXform(P.headX, P.headY, P);
   if (R.tear > .18 && Math.random() < R.tear * dt * 9) {
     const side = Math.random() < .5 ? -1 : 1;
@@ -1545,8 +1450,7 @@ function frame(nowMs) {
   g.fillStyle = "#fff";
   g.fillRect(0, 0, w, h);
 
-  // A wash the colour of the mood, so the cradle display reads from across
-  // the room before you can make out the face.
+  // A page-wide wash the colour of the mood (moodRgb), readable across the room.
   const hue = moodRgb();
   const auraAlpha = lerp(.07, .14, clamp(Math.max(level, R.rage, R.dusk,
                                                   R.rainbow), 0, 1));
@@ -1557,24 +1461,13 @@ function frame(nowMs) {
   g.fillStyle = aura;
   g.fillRect(0, 0, w, h);
 
-  // The face is laid out in the band *above* the setup card, whose height is
-  // measured rather than assumed -- it changes with orientation, with the
-  // safe-area inset, and with how long the status line happens to be.  Guessing
-  // a reserve put the figure's feet behind the card in landscape on every iPad
-  // size checked.  A fraction of the viewport cannot know any of that; the
-  // element does.
+  // The band *above* the setup card, measured rather than assumed: it changes
+  // with orientation, safe-area inset and status-line length.
   const cardTop = setup ? setup.getBoundingClientRect().top * dpr : h;
   const band = clamp(cardTop - 8 * dpr, h * .45, h);
-  // .96, up from .86/.88.  Two reasons pulling the same way: on the cradle
-  // iPad the face is the whole point of the surface, and the camera reading it
-  // back gets its accuracy from pixels on the figure -- a live capture had it
-  // at 76 px across, small enough that two poses holding a heart beside the
-  // head could not be told apart.  Filling the clear band is free resolution.
+  // .96: the camera's accuracy is pixels on the figure; a live capture had 76.
   const scale = Math.min(w * .96 / BOX.w, band * .96 / BOX.h);
-  // Sitting the figure at FACE_CENTRE_Y is a preference, not a licence to go
-  // off-screen: once it fills 96% of the band there is no room left to bias it
-  // upward, and in landscape the head went past the top edge.  Clamp the
-  // centre so the whole figure stays inside the band it was scaled to fit.
+  // FACE_CENTRE_Y is a preference: at 96% of the band there is no room to bias.
   const half = BOX.h * scale / 2;
   const midY = clamp(band * FACE_CENTRE_Y, half, Math.max(half, band - half));
   g.translate(w / 2 - (BOX.x + BOX.w / 2) * scale,
@@ -1593,9 +1486,7 @@ function frame(nowMs) {
   }
   drawWheel(g, w, h, dpr, hue, !!held);
 
-  // One writer for the caption, so an override cannot be contradicted by the
-  // next SSE frame.  Posed by hand it names the pose; live it reports the
-  // judge's own vocabulary, because that is what the cradle is acting on.
+  // One writer for the caption, so the next SSE frame cannot contradict it.
   if (held) {
     setCaption(dominantPose(held.x, held.y).label,
                level.toFixed(2) + " manual");

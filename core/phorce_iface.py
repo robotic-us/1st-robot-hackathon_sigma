@@ -1,29 +1,12 @@
 #!/usr/bin/env python3
 """The only file in this project that knows phorce or ROS 2 exist.
 
-Two implementations behind one interface:
-
-* :class:`MockRobot`  -- synthetic 4-axis feedback, logs ``play()`` calls.
-  Runs on a laptop with no ROS, no robot, no phorce package installed.
-* :class:`PhorceRobot` -- the real thing, via the ``phorce`` facade.  Every
-  phorce import happens lazily inside :meth:`start`, so merely importing this
-  module never fails on a machine without the SDK.
-
-Pick one with :func:`make_robot`.
-
-Things the hackathon docs are emphatic about, encoded here so we cannot forget:
-
-* ``/phorce/feedback`` is 1 kHz and **must** be subscribed with
-  ``qos_profile_sensor_data``.  With the default reliable QoS you get zero
-  messages and *no error* -- a silent failure that costs hours.
-* ``result.ok`` is an **attribute**, not a method.
-* Only reject code 5 (BUSY / QUEUE_FULL) is worth retrying.  Codes 12
-  (NOT_READY_FOR_MOTION) and 13 (RECOVERY_REQUIRED) need a *human* to press a
-  physical button -- looping on them accomplishes nothing.
-* An axis value may be trusted only when that axis's ``valid`` flag is true.
-  ``not stale`` is explicitly **not** a substitute: an axis that has never
-  reported is not stale either.
-* The robot plays one motion at a time and has no queue.
+MockRobot (no ROS/robot/SDK needed) and PhorceRobot (real, lazy imports)
+behind one interface; pick with :func:`make_robot`.  Contract: feedback is
+1 kHz and needs qos_profile_sensor_data (default QoS = silence, no error);
+``result.ok`` is an attribute, not a method; only reject 5 (BUSY) is worth
+retrying -- 12/13 need a human; trust an axis only when its ``valid`` flag
+is true; one motion at a time, no queue.
 
 Smoke-test the mock::
 
@@ -85,12 +68,7 @@ class JointState:
         return None
 
     def positions(self, indices: Sequence[int]) -> Optional[list[float]]:
-        """Positions for ``indices``, or ``None`` if any of them is untrustworthy.
-
-        Returning ``None`` rather than a partly-garbage vector is deliberate: the
-        decider scores slots by how close their start pose is to where we are,
-        and a wrong pose is worse than no pose (which it handles explicitly).
-        """
+        """Positions for ``indices``, or ``None`` if any axis is untrustworthy."""
         out: list[float] = []
         for index in indices:
             axis = self.by_index(index)
@@ -104,11 +82,7 @@ class JointState:
         return self._gather(indices, "velocity_rad_s")
 
     def external_force(self, indices: Sequence[int]) -> Optional[list[float]]:
-        """Disturbance-observer estimate per axis -- "what is pushing on me".
-
-        DREAM-Chunk's collision-resistance term is built on this: it is the only
-        contact signal the participant API exposes, and it needs no extra sensor.
-        """
+        """Disturbance-observer estimate per axis -- the API's only contact signal."""
         return self._gather(indices, "dob_a")
 
     def _gather(self, indices: Sequence[int], attribute: str) -> Optional[list[float]]:
@@ -125,12 +99,8 @@ class JointState:
 
 
 class PlayOutcome(Enum):
-    """What came of a ``play()`` request.
-
-    ``OK`` from :meth:`RobotInterface.play` means *accepted and started* -- see
-    that method's docstring for why the call is asynchronous.  ``OK`` delivered
-    to the completion callback means the motion actually finished.
-    """
+    """What came of a ``play()`` request.  ``OK`` from ``play()`` = accepted
+    and started; ``OK`` at the completion callback = actually finished."""
 
     OK = "ok"
     BUSY = "busy"                        # reject code 5 -- retry next tick
@@ -142,17 +112,8 @@ PlayCallback = Callable[[int, PlayOutcome], None]
 
 
 class MockMotionModel(Protocol):
-    """How the mock robot should move while a slot is playing.
-
-    Supplied from outside so this module stays ignorant of the motion format:
-    ``phorce_iface`` is the hardware boundary, and teaching it about P-Vectors
-    would put the world model on the wrong side of that line.  ``main.py``
-    hands in an adapter over the chunk dictionary (see dream.ChunkMockModel).
-
-    Without one the mock free-runs on a synthetic drift, which is fine for
-    smoke-testing plumbing but useless for testing DREAM-Chunk -- the dream
-    would diverge constantly because nothing is following it.
-    """
+    """How the mock robot moves while a slot plays; supplied from outside so
+    this module stays ignorant of the motion format."""
 
     def duration_s(self, slot_id: int) -> float: ...
 
@@ -216,22 +177,11 @@ class RobotInterface(ABC):
             return self._last_outcome
 
     def play(self, slot_id: int) -> PlayOutcome:
-        """Request a motion slot.  **Returns immediately.**
-
-        The real ``robot.play()`` blocks until the motion completes -- up to 30
-        seconds.  Calling that inline would stall the decision loop for the whole
-        motion, so the request is handed to a worker thread and this returns
-        straight away:
-
-        * ``BUSY``  -- a motion is already running; the robot has no queue, so
-          there is nothing to do but try again on the next tick.
-        * ``OK``    -- accepted and started.  The terminal result arrives via the
-          ``on_play_result`` callback and :meth:`last_outcome`.
-        * ``ERROR`` -- the slot id is outside the contract (1..50).
-
-        This does not weaken the two-rate rule: ``play()`` must still never be
-        called from the 1 kHz feedback path.  It just stops the 2 Hz decision
-        loop from blocking too.
+        """Request a motion slot.  **Returns immediately** (worker thread; the
+        real ``robot.play()`` blocks up to ~30 s).  BUSY = already running, no
+        queue, retry next tick; OK = accepted and started (terminal result via
+        the callback / :meth:`last_outcome`); ERROR = slot outside 1..50.
+        Still never call this from the 1 kHz feedback path.
         """
         if not (MIN_MOTION_ID <= slot_id <= MAX_MOTION_ID):
             LOGGER.error("slot %r outside the contract range %d..%d (0 = no-motion sentinel)",
@@ -279,20 +229,11 @@ class RobotInterface(ABC):
 
 
 class CliRobot(RobotInterface):
-    """Plays the SD card's slots through the organizer's own thin client.
-
-    The path the team has actually proven on the hardware is ``phorce play N``
-    -- the CLI that ships with the rig -- not a long-lived action-server
-    client of our own.  So this backend runs exactly that command, once per
-    request, with ``--json``, and maps the reply onto the PlayOutcome
-    vocabulary.  What the CLI needs (ROS_DOMAIN_ID=21, a sourced workspace)
-    it inherits from the environment, the same as running it by hand.
-
-    Measured contract (sim, 2026-08-08): success is ``{"ok": true,
-    "status_name": "SUCCEEDED", "decision": "ACCEPTED", ...}``; the reject
-    taxonomy rides ``decision``/``decision_reason``/``recovery_required``
-    (codes 12/13 -- a human must zero or park the rig -- set
-    ``recovery_required``).
+    """Plays slots through the organizer's own ``phorce play N --json`` CLI --
+    the path proven on the hardware.  Needs (ROS_DOMAIN_ID=21, sourced
+    workspace) are inherited from the environment.  Measured contract:
+    success = ``ok`` + ``status_name == "SUCCEEDED"``; rejects ride
+    ``decision_reason``/``recovery_required`` (codes 12/13 set the latter).
     """
 
     def __init__(self, target: str = "robot", binary: str = "phorce",
@@ -351,12 +292,9 @@ class CliRobot(RobotInterface):
 # Mock -- no ROS, no robot, no phorce package
 # --------------------------------------------------------------------------- #
 class MockRobot(RobotInterface):
-    """Synthetic feedback plus a ``play()`` that logs and takes realistic time.
-
-    Deliberately imperfect on purpose: it reports BUSY while a motion is running
-    (because the real robot has no queue) and can be told to reject, so the retry
-    and needs-operator paths get exercised long before the robot arrives.
-    """
+    """Synthetic feedback plus a ``play()`` that logs and takes realistic time;
+    reports BUSY while playing and can be told to reject, so the retry and
+    needs-operator paths get exercised without the robot."""
 
     def __init__(
         self,
@@ -376,9 +314,7 @@ class MockRobot(RobotInterface):
         self.feedback_hz = feedback_hz
         self.motion_duration_s = motion_duration_s
         self.reject_rate = reject_rate
-        # Obstacle simulation, for testing DREAM-Chunk with no robot: after
-        # jam_after_s, one axis stops moving and its disturbance observer reads
-        # a large external force -- exactly what a hand on the arm looks like.
+        # Obstacle sim: after jam_after_s one axis freezes with a big DOB force.
         self.jam_after_s = jam_after_s
         self.jam_axis = jam_axis
         self._jam_hold: Optional[float] = None
@@ -412,9 +348,7 @@ class MockRobot(RobotInterface):
             t = now - self._t0
             active = self.is_motion_active()
 
-            # With a motion model the mock is a digital twin: while a slot is
-            # playing it tracks that slot's real trajectory, so a dream of the
-            # same slot matches and only a genuine fault makes it diverge.
+            # With a motion model the mock tracks the playing slot's trajectory.
             commanded: Optional[list[float]] = None
             if self.motion_model is not None and active and self._active_slot is not None:
                 if self._active_start is not None:
@@ -429,14 +363,12 @@ class MockRobot(RobotInterface):
                     previous = self._drift[slot] if self._drift else base
                     velocity = (base - previous) * self.feedback_hz
                 else:
-                    # Free-run: slow drift per axis, phase-shifted so the axes
-                    # are not clones.
+                    # Free-run: slow phase-shifted drift per axis.
                     phase = 0.7 * slot
                     base = 0.30 * math.sin(2.0 * math.pi * 0.05 * t + phase)
                     velocity = 0.30 * 2.0 * math.pi * 0.05 * math.cos(
                         2.0 * math.pi * 0.05 * t + phase)
                     if active and self.motion_model is None:
-                        # While "playing", the joints actually move a bit more.
                         base += 0.15 * math.sin(2.0 * math.pi * 0.8 * t + phase)
                         velocity += 0.15 * 2.0 * math.pi * 0.8 * math.cos(
                             2.0 * math.pi * 0.8 * t + phase)
@@ -446,8 +378,7 @@ class MockRobot(RobotInterface):
 
                 jammed = self.jam_after_s > 0.0 and t >= self.jam_after_s and index == self.jam_axis
                 if jammed:
-                    # Freeze where the obstacle caught it and report the force
-                    # the servo is now fighting.
+                    # Freeze at the obstacle; report the force being fought.
                     if self._jam_hold is None:
                         self._jam_hold = position
                     position = self._jam_hold + noise
@@ -477,8 +408,7 @@ class MockRobot(RobotInterface):
         duration = self.motion_duration_s
         if self.motion_model is not None:
             duration = self.motion_model.duration_s(slot_id) or duration
-            # Launch from wherever the mock currently is, exactly as the real
-            # robot would -- that is what the dream is anchored on too.
+            # Launch from wherever the mock currently is, as the robot would.
             state = self.latest()
             self._active_start = (
                 state.positions(self.axes) if state is not None else [0.0] * len(self.axes)
@@ -503,21 +433,14 @@ class MockRobot(RobotInterface):
 # Real -- the phorce facade
 # --------------------------------------------------------------------------- #
 class PhorceRobot(RobotInterface):
-    """The real robot, on the Jetson.
-
-    ``import phorce`` happens inside :meth:`start` so this module still imports
-    cleanly on a laptop.
-    """
+    """The real robot, on the Jetson; ``import phorce`` is lazy inside
+    :meth:`start` so this module still imports cleanly on a laptop."""
 
     def __init__(
         self,
         target: str = "robot",
         axes: Sequence[int] = DEFAULT_AXES,
-        # "rclpy", not "facade": the installed SDK's Robot exposes only
-        # close/doctor/play/play_async/status/motions.  robot.watch() appears in
-        # the older (RH_Guide_Angel) tutorial but does not exist in the shipped
-        # package -- calling it is an AttributeError at start().  Verified with
-        # `python3 -c "import phorce; print(dir(phorce.Robot))"` on the golden image.
+        # "rclpy", not "facade": the shipped SDK has no robot.watch() push API.
         feedback_source: str = "rclpy",
         on_play_result: Optional[PlayCallback] = None,
     ) -> None:
@@ -536,20 +459,14 @@ class PhorceRobot(RobotInterface):
         import phorce  # noqa: PLC0415 -- lazy on purpose; absent on a laptop
 
         self._phorce = phorce
-        # connect() is a context manager. We are not inside a `with`, so drive it
-        # by hand and unwind in close().
+        # connect() is a context manager: driven by hand, unwound in close().
         self._connection = phorce.connect(self.target)
         self._robot = self._connection.__enter__()
         LOGGER.info("connected to phorce target=%s", self.target)
 
         try:
-            # Real Status fields (checked against the installed SDK): state_name,
-            # primary_state, physical_idle, recovery_required, contract_active,
-            # age_ms, is_fresh().  There is no ethercat_operational/estop_active
-            # here -- that spelling is from the older guide generation.
             status = self._robot.status()
-            # is_fresh is a method in one SDK generation and a plain bool in
-            # another (the sim target ships the latter) -- take either.
+            # is_fresh is a method in one SDK generation, a plain bool in another.
             fresh = status.is_fresh() if callable(status.is_fresh) else status.is_fresh
             LOGGER.info("state=%s fresh=%s physical_idle=%s recovery_required=%s",
                         status.state_name, fresh,
@@ -563,8 +480,7 @@ class PhorceRobot(RobotInterface):
             LOGGER.exception("status() failed (continuing anyway)")
 
         if self.feedback_source == "facade":
-            # Kept only for a future SDK that grows a push API. Today there is
-            # none, so refuse loudly instead of dying on an AttributeError.
+            # No push API in today's SDK -- refuse loudly.
             raise RuntimeError(
                 "feedback_source='facade' needs robot.watch(), which the installed "
                 "phorce SDK does not provide. Use feedback_source='rclpy'."
@@ -590,12 +506,8 @@ class PhorceRobot(RobotInterface):
 
     # -- feedback ---------------------------------------------------------- #
     def _on_feedback(self, frame: object) -> None:
-        """Called at 1 kHz.  Store the latest frame and return -- nothing else.
-
-        Do not decide, log or send from here: the robot takes one motion at a
-        time with no queue, so a play() call at this rate would be discarded as
-        BUSY roughly a thousand times a second.
-        """
+        """Called at 1 kHz.  Store the latest frame and return -- never decide,
+        log or send from here."""
         now = time.monotonic()
         states: list[AxisState] = []
         try:
@@ -619,12 +531,7 @@ class PhorceRobot(RobotInterface):
         self._store(JointState(axes=tuple(states), ts=now))
 
     def _start_rclpy_feedback(self) -> None:  # pragma: no cover - needs ROS
-        """Subscribe to /phorce/feedback directly, bypassing the facade.
-
-        Only needed if you want the raw message; the facade's ``watch()`` is the
-        easier path.  Kept because it is where the single nastiest failure mode
-        lives, and it should be visible in our own code rather than assumed.
-        """
+        """Subscribe to /phorce/feedback directly, bypassing the facade."""
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
@@ -634,19 +541,14 @@ class PhorceRobot(RobotInterface):
         if not rclpy.ok():
             rclpy.init()
         node = Node("perception_decider_feedback")
-        # qos_profile_sensor_data (best effort) is MANDATORY here. The publisher
-        # is a 1 kHz best-effort sensor stream; subscribing with the default
-        # reliable QoS is not an error -- you simply receive nothing, forever,
-        # in silence. If feedback is "not arriving", suspect this line first.
+        # qos_profile_sensor_data is MANDATORY: the default reliable QoS
+        # receives nothing, forever, in silence.  Suspect this line first.
         node.create_subscription(
             PhorceFeedback, "/phorce/feedback", self._on_feedback, qos_profile_sensor_data
         )
         self._ros_node = node
-        # A dedicated executor, NOT rclpy.spin(node): spin() grabs the process-
-        # wide global executor, which the phorce SDK is already spinning from
-        # its own thread.  Two threads contending for it starve the SDK's
-        # liveness watchdog and every play dies with PhorceUnavailable
-        # ("모션 스택이 사라졌습니다") while the stack is demonstrably up.
+        # A dedicated executor, NOT rclpy.spin(): the SDK already spins the
+        # global executor; contending starves its watchdog (PhorceUnavailable).
         executor = SingleThreadedExecutor()
         executor.add_node(node)
         self._ros_thread = threading.Thread(
@@ -666,16 +568,14 @@ class PhorceRobot(RobotInterface):
 
         try:
             result = robot.play(slot_id)
-            # .ok is an ATTRIBUTE, not a method. `result.ok()` would be a truthy
-            # bound method and would silently "succeed" every time.
+            # .ok is an ATTRIBUTE; result.ok() would be truthy every time.
             return PlayOutcome.OK if result.ok else PlayOutcome.ERROR
         except phorce.MotionBusy:
-            # Reject code 5. The only code worth retrying -- it clears on its own.
+            # Reject code 5 -- the only code worth retrying.
             LOGGER.debug("play(%d) busy", slot_id)
             return PlayOutcome.BUSY
         except phorce.MotionRejected:
-            # Codes 12/13: NOT_READY_FOR_MOTION / RECOVERY_REQUIRED. Waiting does
-            # nothing; someone has to press a physical button.
+            # Codes 12/13: a human must press a physical button.
             return PlayOutcome.NEEDS_OPERATOR
         except phorce.MotionAborted:
             LOGGER.error("play(%d) aborted mid-motion -- follow the recovery steps "
@@ -692,29 +592,12 @@ class PhorceRobot(RobotInterface):
 class SlotBridge:
     """Keeps a :class:`RobotInterface` playing the slot the engine is in.
 
-    The live loop streams continuous offsets to the dashboard and RViz, but
-    the physical robot only plays pre-compiled slots (``motion_NN.csv``,
-    already loaded on the PCM).  This is the whole adapter: every decision
-    tick the caller passes the slot number the engine's mode maps to (or
-    ``None``), and the bridge keeps the robot replaying it back-to-back --
-    the robot has no queue, so "continuous rocking" is just re-requesting
-    the slot whenever the robot goes idle.  ``repeat=False`` opts out of the
-    replay: one completed episode per decision, and the rig stays quiet
-    until the caller names a different slot (or parks and re-commands).
-
-    Deliberate semantics:
-
-    * ``None`` (parked / tapering) stops *requesting*; it cannot stop a slot
-      already running -- the participant API has no abort.  The physical
-      safety stop is the robot's own contract and the E-stop, not this class.
-    * NEEDS_OPERATOR (reject 12/13) holds off for ``RETRY_OPERATOR_S``: a
-      human has to press the zero button, and hammering ``play()`` meanwhile
-      accomplishes nothing (see the module docstring).
-    * ERROR holds off briefly too, so a persistent fault logs at a readable
-      rate instead of every tick.
-
-    Time is injected (``tick(now, ...)``) so the hold-offs are testable with
-    a fake clock, same rule as ``core/cradle.py``.
+    The robot has no queue, so "continuous rocking" = re-requesting the slot
+    whenever the robot goes idle (``repeat=False``: one episode per decision).
+    ``None`` stops *requesting* only -- the API has no abort; the physical
+    stop is the robot's own contract and the E-stop.  NEEDS_OPERATOR and
+    ERROR hold off retries.  Time is injected (``tick(now, ...)``) so the
+    hold-offs are testable with a fake clock.
     """
 
     RETRY_OPERATOR_S = 10.0
@@ -726,22 +609,13 @@ class SlotBridge:
                  max_slot: Optional[int] = None,
                  repeat: bool = True) -> None:
         self.robot = robot
-        # repeat=False: a slot that has *completed* is not re-requested while
-        # the caller keeps naming it -- one physical episode per decision.
-        # A different slot, or a park-and-recommand (None between ticks),
-        # counts as a new decision and plays.  Rejects and errors were never
-        # played, so they still retry under the hold-offs below.
+        # repeat=False: a *completed* slot is not re-requested while still
+        # named; a new slot or a park-and-recommand plays.  Rejects/errors
+        # still retry under the hold-offs below.
         self.repeat = repeat
-        # A rest between completed slots.  The demo's rig plays finite
-        # episodes and the team wants breathing room between them, not a
-        # seamless replay -- and a request is only ever issued after the
-        # previous play's aggregate completion came back, so the rest starts
-        # counting from a *fully finished* motion, never mid-episode.
+        # Rest between completed slots; counts from a fully finished motion.
         self.rest_s = max(0.0, rest_s)
-        # slots above this simply do not exist on the card: the screen may
-        # still play them (the engine is continuous) but the robot must not
-        # be asked -- it is told apart from "parked" so the operator learns
-        # why the rig went quiet, once per offending slot
+        # Slots above this are not on the card: screen only, warned once each.
         self.max_slot = max_slot
         self._off_card: set = set()
         self._log = log if log is not None else (
@@ -774,8 +648,7 @@ class SlotBridge:
         if self.robot.is_motion_active():
             return
         if self._awaiting:
-            # The play we issued has completed; its terminal outcome decides
-            # whether re-requesting now is useful or noise.
+            # Our play completed; its outcome decides whether to re-request.
             self._awaiting = False
             outcome = self.robot.last_outcome()
             if outcome is PlayOutcome.NEEDS_OPERATOR:
@@ -803,18 +676,15 @@ class SlotBridge:
             if slot_id != self._last_slot:
                 self._log(f"robot: playing slot {slot_id}")
                 self._last_slot = slot_id
-        # BUSY needs nothing: is_motion_active() covers our own plays, so BUSY
-        # means someone else owns the robot right now -- try again next tick.
+        # BUSY = someone else owns the robot -- try again next tick.
 
 
 # --------------------------------------------------------------------------- #
 # Factory
 # --------------------------------------------------------------------------- #
 def make_robot(mock: bool = True, **kwargs: object) -> RobotInterface:
-    """The config flag that picks real vs mock.
-
-    ``mock=True`` needs nothing installed; ``mock=False`` needs the Jetson.
-    """
+    """The config flag that picks real vs mock; ``mock=True`` needs nothing
+    installed, ``mock=False`` needs the Jetson."""
     if mock:
         allowed = {"axes", "feedback_hz", "motion_duration_s", "reject_rate",
                    "seed", "on_play_result", "jam_after_s", "jam_axis",
@@ -822,9 +692,7 @@ def make_robot(mock: bool = True, **kwargs: object) -> RobotInterface:
         return MockRobot(**{k: v for k, v in kwargs.items() if k in allowed})  # type: ignore[arg-type]
     allowed = {"target", "axes", "feedback_source", "on_play_result"}
     kw = {k: v for k, v in kwargs.items() if k in allowed}
-    # target "cli" (or "cli:sim:demo") plays through the organizer's own
-    # `phorce play N` command instead of a live client of ours -- the path
-    # the team has actually proven on the hardware
+    # target "cli" (or "cli:sim:demo") plays via the organizer's own CLI.
     tgt = str(kw.get("target") or "")
     if tgt == "cli" or tgt.startswith("cli:"):
         return CliRobot(target=tgt[4:] or "robot",

@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
 """Prove the IDEA.md learning works: N simulated nights -> one HTML report.
 
-The claim on the slide is "5일밤 뒤면 바로 잘 진정시킴" -- after a few nights
-the cradle knows *this* baby.  This tool runs that experiment end to end:
-one infant with a fixed hidden temperament (perception/baby.py), the same
-policy carried across every night (its step history IS the personalisation),
-and, for the control arm, the report's fixed trial ladder on identical
-nights.  Everything goes through the real CradleMachine -- same gates, same
-30 s checkpoints, same abort rules.
-
-Output: ``data/learning.html`` -- self-contained (inline SVG, no libraries,
-light/dark via prefers-color-scheme, styled like the live dashboard) -- plus
-the same numbers on stdout.  Open the file in any browser or beamer.
-
-Usage::
+One infant with a fixed hidden temperament, one policy carried across every
+night (its step history IS the personalisation), against the report's fixed
+ladder on identical nights -- all through the real CradleMachine.
 
     python3 tools/learn_report.py                   # 5 nights -> data/learning.html
     python3 tools/learn_report.py --nights 7 --seed 4 --out /tmp/r.html
@@ -25,7 +15,7 @@ import argparse
 import random
 from pathlib import Path
 
-if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+if __package__ in (None, ""):
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -64,7 +54,7 @@ def run_night(seed: int, personality: Personality,
 
 
 # --------------------------------------------------------------------------- #
-# The page: dashboard-styled, inline SVG, zero dependencies
+# The page: data/learning.html, self-contained -- inline SVG, no CDN, light/dark
 # --------------------------------------------------------------------------- #
 CSS = """
 :root{--page:#fff;--ink:#111;--ink2:#3d3d3d;--muted:#6f6f6f;
@@ -109,19 +99,14 @@ td b{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:500}
 
 
 def bars_svg(nights: list[dict]) -> str:
-    """Grouped bars: crying minutes per night, ladder vs learning policy.
-
-    One y scale, thin marks with 2 px rounded tops anchored to the baseline,
-    a direct value label on every bar (few marks), identity by legend + fixed
-    order (ladder always left), never colour alone.
-    """
+    """Grouped bars: crying minutes per night, ladder (always left) vs policy."""
     n = len(nights)
     width, height, pad_l, pad_b, pad_t = 840, 240, 8, 26, 18
     plot_h = height - pad_b - pad_t
     peak = max(max(x["ladder"], x["policy"]) for x in nights) or 1.0
     group_w = (width - 2 * pad_l) / n
     bar_w = min(46.0, group_w * 0.28)
-    gap = 2.0                                     # the 2 px surface spacer
+    gap = 2.0
     parts = [f'<svg viewBox="0 0 {width} {height}" role="img" '
              f'aria-label="minutes upset per night, fixed ladder versus '
              f'learning policy">']
@@ -227,10 +212,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     NIGHT_S = args.night_s
-    # The demo temperament collides head-on with the fixed ladder (M10/M12
-    # agitate this baby) and its real tastes live in the N-system feature
-    # space: wide slow circling shapes soothe, trembles annoy.  The policy
-    # is never told any of this.
+    # The demo temperament collides with the fixed ladder; never told to the policy.
     personality = (Personality(love="N24", hate=frozenset({"M10", "M12", "N05"}),
                                shape_love="circle", shape_hate="vert",
                                size_pref="large", speed_pref="slow",

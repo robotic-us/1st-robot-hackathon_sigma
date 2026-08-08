@@ -1,31 +1,10 @@
 #!/usr/bin/env python3
 """The infant-cradle motion library (M01-M50) and its safety state machine.
 
-A transcription of docs/infant_robotic_cradle_evidence_report_ko.pdf into
-runnable form:
-
-* ``LIBRARY``       the 50 motions of section 7 -- C0 stop/transition
-                    commands, P1 horizontal-sway trial candidates, R
-                    research-only modes (refused unless explicitly allowed)
-* ``MotionEngine``  plays them: phase-continuous sine synthesis with S-curve
-                    amplitude ramps (min 5 s, default 30 s).  The kinematic
-                    envelope of section 6 (0.2-0.8 Hz, A <= 30 mm hard,
-                    base a_peak <= 0.05 g) is asserted over the whole library
-                    at import time -- the report's V0 gate: bad units or axes
-                    must not load.
-* ``CradleMachine`` the priority ladder of section 5: safety gate first, then
-                    stable-sleep taper, quiet-awake hold ("the default is not
-                    moving"), and 30 s cry trials with improvement checks,
-                    single-step escalation, one micro-resume, and caregiver
-                    alerts.
-
-Nothing here touches HTTP, cameras or ROS, and time is injected everywhere,
-so the selftest drives a whole trial with a fake clock in milliseconds.
-serve.py wires the machine to the tag reading (a stand-in for the infant
-sensors) and the engine's offset to the cradle pose.
-
-Tested by ``python3 tests.py cradle``.
-"""
+Transcribes docs/infant_robotic_cradle_evidence_report_ko.pdf: ``LIBRARY``
+(§7), ``MotionEngine`` (§6 envelope asserted at import), ``CradleMachine``
+(§5 priority ladder, safety gate first).  Time is injected everywhere
+(no time.time() inside).  Tested by ``python3 tests.py cradle``."""
 
 from __future__ import annotations
 
@@ -54,18 +33,15 @@ def smoothstep(u: float) -> float:
     return u * u * (3.0 - 2.0 * u)
 
 
-# --------------------------------------------------------------------------- #
-# The library, report section 7
-# --------------------------------------------------------------------------- #
+# --- the library, report section 7 ----------------------------------------- #
 @dataclass(frozen=True)
 class Motion:
     id: str
     name: str
     kind: str          # static|pause|soft_start|taper|micro_resume|sine|
                        # diagonal|ellipse|circle|lissajous|pseudo_walk|
-                       # adaptive_a|adaptive_f|npath (the N01-N34 system)
-    grade: str         # C0 stop/transition, P1 trial candidate, R research,
-                       # N = the team's 34-motion system (docs/motion-system.png)
+                       # adaptive_a|adaptive_f|npath
+    grade: str         # C0 stop/transition, P1 trial, R research, N team system
     desc: str
     axis: str = ""     # ML | AP | Z | APML | MLZ
     f_hz: float = 0.0
@@ -74,8 +50,7 @@ class Motion:
     a2_mm: float = 0.0  # secondary amplitude (ellipse minor, z-depth, lissajous)
     sign: float = 1.0   # diagonal +-45 deg, circle CW/CCW
     ramp_s: float = 0.0  # soft_start / taper lengths
-    # N-system features -- the vocabulary the virtual baby's taste and the
-    # policy's generalisation both speak (docs/motion-system.png columns)
+    # N-system features (docs/motion-system.png columns)
     shape: str = ""     # still|horiz|vert|vert_fall|v|v_fall|parab|dwell|
                         # circle|ellipse|inf|arc
     size: str = ""      # small | large
@@ -85,11 +60,7 @@ class Motion:
 
     @property
     def slot(self) -> int:
-        """The PCM slot this entry compiles to -- M*NN* is ``motion_NN.csv``.
-
-        The one home of that naming rule: the compiler (tools/make_motions.py)
-        and the live player (serve.py's SlotBridge feed) both read it here.
-        """
+        """The PCM slot: M*NN* -> ``motion_NN.csv`` (one home of the rule)."""
         return int(self.id[1:])
 
     def worst_components(self) -> list[tuple[float, float]]:
@@ -128,15 +99,9 @@ DECAY_T_S = 25.0                # 감쇠: amplitude e-folds this fast
 
 
 def _build_n_library() -> list[Motion]:
-    """The team's 34-motion system (docs/motion-system.png) as N01-N34.
-
-    One kind ("npath") whose ``shape`` field picks the trajectory in the
-    ML-Z plane -- the two channels this rig actually has (AP is pitch-only).
-    Sizes/speeds are chosen so every component, the doubled-frequency z terms
-    and the vibe overlay included, passes the report's V0 envelope gate:
-    shapes whose z runs at 2f take their "fast" at 0.4 Hz and "slow" at
-    0.2 Hz so nothing leaves the 0.2-0.8 Hz band.
-    """
+    """The team's 34-motion system (docs/motion-system.png) as N01-N34:
+    "npath" kind, ``shape`` picks the ML-Z trajectory, sized so every
+    component (2f z terms and vibe included) passes the V0 gate."""
     lib: list[Motion] = []
 
     def add(n, shape, size, speed, desc, f, a, b=0.0, vibe=False, decay=False):
@@ -144,8 +109,7 @@ def _build_n_library() -> list[Motion]:
                else "_VIBE" if vibe and not decay else "_DECAY")
         name = f"{shape.upper()}_{size[:1].upper()}{speed[:1].upper()}{tag}" \
                if size else f"{shape.upper()}{tag}"
-        # N01 (rest, no tremble) IS the parked state: static, so commanding
-        # it tapers to a stop instead of holding an empty oscillation mode
+        # N01 (rest, no tremble) IS the parked state: static -> tapers to stop
         kind = "static" if shape == "still" and not vibe else "npath"
         lib.append(Motion(f"N{n:02d}", name, kind, "N", desc, axis="MLZ",
                           f_hz=f, a_mm=a, a2_mm=b, shape=shape, size=size,
@@ -309,9 +273,7 @@ LIBRARY = _build_library()
 N_LIBRARY = _build_n_library()
 LIBRARY_BY_ID = {m.id: m for m in (*LIBRARY, *N_LIBRARY)}
 
-# The N motions a soothing trial may use: everything that keeps moving --
-# N01 is the parked state and the decay entries stop by themselves, so a
-# 10 s observation of them measures mostly silence.
+# Trial candidates: everything that keeps moving (no parked N01, no decay)
 N_CANDIDATES = tuple(m.id for m in N_LIBRARY
                      if not m.decay and not (m.shape == "still" and not m.vibe))
 
@@ -332,17 +294,10 @@ def catalog() -> list[dict]:
     return out
 
 
-# --------------------------------------------------------------------------- #
-# The engine: library entry -> live (ap, ml, z) offset in millimetres
-# --------------------------------------------------------------------------- #
+# --- the engine: library entry -> live (ap, ml, z) offset in mm ------------ #
 class MotionEngine:
-    """Phase-continuous playback with S-curve amplitude ramps.
-
-    ``command()`` accepts any library id: C0 entries act on the current mode
-    (soft start, taper, resume), oscillation entries become the current mode.
-    R-grade entries are refused unless ``allow_research`` -- the report bars
-    them from any automatic infant mode.
-    """
+    """Phase-continuous playback with S-curve ramps; C0 ids act on the
+    current mode; R-grade refused unless ``allow_research`` (report's bar)."""
 
     def __init__(self, allow_research: bool = False) -> None:
         self.allow_research = allow_research
@@ -394,7 +349,6 @@ class MotionEngine:
             return ok, (f"{m.id} {m.name}: {target.id} at 50% amplitude, "
                         f"{m.ramp_s:.0f} s ramp")
 
-        # an oscillation entry becomes the current mode
         return self._start(m, now,
                            max(RAMP_MIN_S, ramp_s if ramp_s is not None
                                else RAMP_DEFAULT_S), scale=1.0)
@@ -458,13 +412,7 @@ class MotionEngine:
 
     def _npath_mm(self, m: Motion, s: float,
                   p: list[float]) -> tuple[float, float, float]:
-        """One N-system trajectory sample: (ap, ml, z) in millimetres.
-
-        All shapes live in the ML-Z plane (the rig's two real translation
-        channels).  ``decay`` entries die away on their own; the 진동 overlay
-        is a 0.8 Hz / 3 mm tremble on whichever channel the shape leaves
-        quietest.
-        """
+        """One N-system sample: (ap, ml, z) mm, in the ML-Z plane."""
         a, b = m.a_mm * s, m.a2_mm * s
         if m.decay:
             fade = math.exp(-max(0.0, self.mode_t) / DECAY_T_S)
@@ -540,13 +488,9 @@ class MotionEngine:
             "motion": m.id if m else None,
             "name": m.name if m else "STATIC",
             "grade": m.grade if m else "C0",
-            # what sort of thing this is (sine/taper/pause/...), so a reader
-            # can describe it in words without parsing the name
             "kind": m.kind if m else "static",
-            # ...and which way it moves: ML sways, Z lifts, AP tilts (rendered
-            # as the see-saw channel -- the rig has no second horizontal axis)
+            # ML sways, Z lifts, AP tilts (rendered as pitch -- no 2nd axis)
             "axis": m.axis if m else "",
-            # the N-system trajectory family, for the dashboard's wording
             "shape": m.shape if m else "",
             "f_hz": round(f, 2),
             "a_mm": round(a_now, 2),
@@ -554,15 +498,11 @@ class MotionEngine:
             "tapering": self.tapering,
             "offset_mm": {"ap": round(ap, 2), "ml": round(ml, 2), "z": round(z, 2)},
             "a_peak_g": round(a_peak_g(f, a_now), 4),
-            # so the library selector can show which R entries it would refuse
-            # rather than letting the click fail with no explanation
             "research": self.allow_research,
         }
 
 
-# --------------------------------------------------------------------------- #
-# The state machine, report section 5
-# --------------------------------------------------------------------------- #
+# --- the state machine, report section 5 ----------------------------------- #
 CALM_LEVEL = 0.12          # below this, nobody fusses (report 5.2)
 CRY_LEVEL = 0.45           # above this the trial starts one rung up
 TRIAL_LADDER = ("M10", "M12", "M13", "M16")   # fuss -> cry -> escalation (ML)
@@ -580,18 +520,13 @@ COOLDOWN_ABORT_S = 90.0
 
 
 class CradleMachine:
-    """The report's priority ladder over a MotionEngine.
+    """The report's §5 priority ladder over a MotionEngine.
 
-    Inputs per tick: is the face (tag) visible, a 0..1 distress level, and
-    the jam flag standing in for an arm-desync/E-stop.  The safety gate runs
-    even with ``auto`` off; ``auto`` only enables the trial/sleep behaviour.
-
-    ``give_up`` is the report's own §5 hand-over -- no improvement by the
-    deadline, or sustained worsening, stops the trial and calls a caregiver.
-    Turned off (``serve.py`` does, for the demo) the machine never hands the
-    baby over: it re-decides and keeps trying instead, and a trial still ends
-    at the 5-minute cap.  The safety gate is *not* part of this: a jam, a lost
-    face or a pain/posture alarm tapers and alerts either way.
+    Inputs per tick: face visible, 0..1 distress, jam flag.  The safety gate
+    runs even with ``auto`` off.  ``give_up`` is the §5 hand-over (taper +
+    caregiver on no improvement / worsening); off, the machine switches
+    motion and keeps trying, ending only at the 5-minute cap -- the safety
+    gate is not part of this and tapers/alerts either way.
     """
 
     def __init__(self, engine: MotionEngine,
@@ -600,29 +535,21 @@ class CradleMachine:
         self.engine = engine
         self.auto = True
         self.give_up = give_up
-        # The trial rhythm.  The report spec is 30 s checkpoints; the demo
-        # rig plays each motion for ~10 s, so serve.py passes 10 and the
-        # ramps and the no-improvement deadline scale with it.
+        # Trial rhythm: report 30 s; serve.py passes 10 (demo), all scales
         self.check_s = max(RAMP_MIN_S, check_every_s)
         self._no_improve_s = 2.0 * self.check_s
         self._step_ramp_s = max(RAMP_MIN_S, self.check_s / 3.0)
-        # A 30 s soft start inside a 10 s trial means the motion is only just
-        # at strength when the machine already re-decides -- the baby never
-        # feels the pick, and the demo reads as "nothing happens for ages".
-        # At the report's own cadence nothing changes.
+        # short trials get a short start ramp, or the pick is never felt
         self._start_ramp_s = (RAMP_DEFAULT_S if self.check_s >= RAMP_DEFAULT_S
                               else self._step_ramp_s)
-        # The pauses scale with the same demo pace.  At check_s = 30 (the
-        # report) k = 1 and these are exactly 30 / 90 / 30 s; at --pace 10 a
-        # hand-over otherwise leaves the cradle still for two whole minutes
-        # (30 s taper + 90 s cooldown), which is the gap that reads as dead.
+        # pauses scale with the same pace (exactly 30 / 90 / 30 s at check_s=30)
         k = min(1.0, self.check_s / CHECK_EVERY_S)
         self._cool_end_s = COOLDOWN_END_S * k
         self._cool_abort_s = COOLDOWN_ABORT_S * k
         self._taper_s = max(RAMP_MIN_S, RAMP_DEFAULT_S * k)
-        # Optional (now, ema) -> motion-id hook (core/policy.py): may suggest
-        # *which* P1 motion a trial uses; every when/abort/taper decision
-        # stays here.  Anything but a valid P1 id falls back to the ladder.
+        # Optional (now, ema) -> motion-id hook (core/policy.py): suggests
+        # *which* motion only; every when/abort/taper decision stays here,
+        # and anything but a valid pick falls back to the ladder.
         self.advisor = None
         self.state = "quiet"       # quiet | trial | settling | gate_fail
         self.ema = 0.0
@@ -648,18 +575,10 @@ class CradleMachine:
         self.events.append(text)
 
     def _set_trend(self, kind: str, now: float, restart: bool = False) -> None:
-        """Keep the checkpoint verdict instead of discarding it.
+        """Record the checkpoint verdict; only a *change* restarts its clock.
 
-        The machine already decides improving / not improving / worse -- it is
-        what every checkpoint branches on -- but it only ever said so in a log
-        line.  A caregiver's actual question is "is this working?", so the
-        verdict is worth a value.  Only a *change* restarts the clock, so the
-        dashboard counts the run rather than the tick.
-
-        ``restart`` is for the sites that put a *different motion* on: "new"
-        means "just started", so its clock has to reset even when the previous
-        verdict happened to be "new" as well.  Checkpoint verdicts don't
-        restart -- that is what lets the panel say "settling, 40 s".
+        ``restart`` forces the reset when a different motion starts, even if
+        the previous verdict was also "new".
         """
         if restart or kind != self._trend:
             self._trend = kind
@@ -680,8 +599,7 @@ class CradleMachine:
             "no_improve_s": round(self._no_improve_s, 1) if self.give_up else 0,
             "give_up": self.give_up,
             "alert": self.alert,
-            # the checkpoint verdict, and how long it has held.  Gated on the
-            # state here, so no other branch has to remember to clear it.
+            # checkpoint verdict + how long held; gated on state so it clears
             "trend": self._trend if self.state == "trial" else "",
             "trend_s": round(now - self._trend_t0, 1) if self.state == "trial" else 0,
         }
@@ -738,8 +656,7 @@ class CradleMachine:
                     if self.give_up:
                         self._abort(now, "worse during trial")
                         return
-                    # Not handing over -- but not sitting on a motion the baby
-                    # is getting worse under either: change it now, off-cycle.
+                    # give_up off: don't sit on a worsening motion -- switch now
                     self._retry(now, "worse under")
             else:
                 self._worse_t = 0.0
@@ -760,14 +677,11 @@ class CradleMachine:
                     self._log(f"no improvement at {self.check_s:.0f} s -- "
                               f"one step up to {step}")
                 elif not self.give_up:
-                    # below the cry line and not improving: with no hand-over
-                    # to fall back on, the answer is a different motion, not
-                    # the same one until the 5-minute cap
+                    # not improving, no hand-over: try a different motion
                     self._retry(now, f"no improvement at {self.check_s:.0f} s "
                                      "on")
                 else:
-                    # give_up on, below the cry line: the ladder holds what it
-                    # has and lets _deadline run out.  Nothing to do but say so.
+                    # give_up on, below the cry line: hold, let _deadline run
                     self._set_trend("holding", now)
             if self.give_up and now >= self._deadline:
                 self._abort(now, f"no improvement in {self._no_improve_s:.0f} s")
@@ -804,8 +718,7 @@ class CradleMachine:
             return step
         pick = self.advisor(now, self.ema)
         m = LIBRARY_BY_ID.get(str(pick).upper()) if pick else None
-        # P1 = the report's trial candidates; N = the team's 34-motion
-        # system (envelope-gated at import like everything else)
+        # P1 = report trial candidates; N = the team's system (envelope-gated)
         if m is not None and m.grade in ("P1", "N") and m.kind != "static":
             return m.id
         return step
@@ -813,8 +726,7 @@ class CradleMachine:
     def _retry(self, now: float, why: str) -> str:
         """Keep the trial alive on a different motion (``give_up`` off).
 
-        The baseline moves to where the baby actually is, or the same rung
-        would re-trigger on the next tick and the machine would churn.
+        Baseline moves to where the baby is, or the rung would re-trigger.
         """
         was = self.engine.mode.id if self.engine.mode else "?"
         self._rung = min(self._rung + 1, len(TRIAL_LADDER) - 1)
@@ -826,8 +738,7 @@ class CradleMachine:
         if step != was:
             self.engine.command(step, now, ramp_s=self._step_ramp_s)
             self._log(f"{why} {was} -- trying {step}, not handing over")
-        # else: the bare ladder is out of rungs and has nothing else to offer
-        # (no advisor).  Hold what is playing rather than churn the log.
+        # else: ladder out of rungs, no advisor -- hold rather than churn
         return step
 
     def _start_trial(self, now: float) -> None:
@@ -841,8 +752,7 @@ class CradleMachine:
         self._worse_t = 0.0
         self._resumed = False
         self._set_trend("new", now, restart=True)
-        # the banner states a *live* condition: the machine has taken the baby
-        # back, so the previous hand-over is history, not the current ask
+        # the machine has taken the baby back: the old hand-over alert clears
         self.alert = ""
         self._log(f"cry trial: {step} soft start (level {self.ema:.2f})")
 

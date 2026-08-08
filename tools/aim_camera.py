@@ -1,32 +1,9 @@
 #!/usr/bin/env python3
 """Point the camera at the cradle iPad, and print the flags that read it.
 
-Aiming is the fiddly part of the vision link, and all of it is guesswork by
-eye: which rectangle of the frame the panel occupies, and whether the figure
-lands big enough to name.  This asks the camera instead.  It grabs a few
-frames, finds the page with the recognizer's own ``find_page``, measures the
-figure, and prints the ``serve.py`` line to run -- so the crop is the panel's
-real rectangle and the zoom is chosen from a measured table, not a hunch.
-
-It then *checks* its own recommendation: the same frame is re-read through the
-proposed crop and zoom, and the poses named before and after are printed side
-by side.  A recommendation that does not improve the reading is worth seeing
-before the demo, not during it.
-
-Why the numbers it picks:
-
-* the **crop** settles the page competition -- ``find_page`` takes the largest
-  bright near-neutral region, so a lit whiteboard or a window bigger than the
-  iPad wins the frame and the mascot is never looked at
-* the **zoom** rescues a small figure, and nothing else: measured on a
-  photographed panel, naming at a 44 px figure runs 8-10/17 at x1, 14-15/17 at
-  x2 and 16/17 at x3, while at 63 px and above the three are within noise
-
-The cost of a zoom is not a constant, so it is timed here rather than quoted:
-the read scales with the magnified area, so x3 on a distant panel's small crop
-runs ~28 ms a frame while x3 on a crop five times as wide runs ~570 ms.  That
-happens to line up -- x3 is affordable exactly where it helps -- but it is
-worth seeing the number for the crop you actually have.
+Finds the panel, measures the figure, prints the serve.py --crop/--zoom line
+to run, then re-reads through its own recommendation and prints named-before
+vs named-after.  Zoom bands and per-crop costs are measured, not guessed.
 
     python3 tools/aim_camera.py                       # camera 0, print flags
     python3 tools/aim_camera.py --camera-size 1920x1080
@@ -47,16 +24,15 @@ import cv2
 from perception import nubzuki as nz
 from perception.nubzuki import magnify
 
-# Figure height in pixels -> the zoom that measured best there.  The bands come
-# from the photographed-panel sweep in CLAUDE.md; above BIG_PX all three zooms
-# were within noise of each other, so the honest answer is "do not bother".
+# Figure height (px) -> best-measuring zoom (photographed-panel sweep in
+# CLAUDE.md); above BIG_PX all three zooms were within noise.
 TINY_PX = 48
 SMALL_PX = 62
 BIG_PX = 62
 
 
 def suggest_zoom(figure_h: int) -> tuple[float, str]:
-    """The zoom for a figure this tall, and why -- see the table above."""
+    """The zoom for a figure this tall, and why."""
     if figure_h <= 0:
         return 2.0, "no figure measured: x2 is the safe default for a demo"
     if figure_h < TINY_PX:
@@ -72,8 +48,7 @@ def suggest_zoom(figure_h: int) -> tuple[float, str]:
 
 def suggest_crop(page: tuple[int, int, int, int],
                  shape: tuple[int, ...]) -> tuple[int, int, int, int] | None:
-    """The page rectangle, padded, clamped to the frame -- or None if it is
-    already the whole frame and there is nothing to crop away."""
+    """The page rectangle, padded and clamped -- None if it already fills the frame."""
     fh, fw = shape[:2]
     x, y, w, h = page
     pad = int(0.06 * max(w, h))
@@ -85,15 +60,10 @@ def suggest_crop(page: tuple[int, int, int, int],
 
 
 def page_candidates(bgr) -> list[tuple[int, int, int, int]]:
-    """Every bright near-neutral region large enough to be a panel, biggest
-    first.
+    """Every bright near-neutral region large enough to be a panel, biggest first.
 
-    ``nz.find_page`` returns only the largest, which is correct inside the
-    recognizer -- it is choosing one page to normalise -- and exactly wrong
-    for aiming: the whole reason to crop is that something in the room is
-    *bigger* than the iPad.  Trusting it here recommended cropping to a lit
-    whiteboard, with the mascot outside the box.  So collect the candidates
-    and let :func:`pick_page` choose the one Nubzuki is actually standing on.
+    ``nz.find_page`` returns only the largest, which is exactly wrong for
+    aiming; collect the candidates and let :func:`pick_page` choose.
     """
     import numpy as np
 
@@ -113,10 +83,7 @@ def page_candidates(bgr) -> list[tuple[int, int, int, int]]:
 def pick_page(frame, zooms=(1.0, 2.0, 3.0)):
     """The candidate the mascot is on: (page, zoom, poses) or None.
 
-    "Which rectangle is the panel" has one honest test -- read each candidate
-    and keep the one a figure can be named in.  Zooms are tried in order so a
-    distant panel is still recognised as the panel, and the zoom that found it
-    is worth reporting: it is evidence, not a preference.
+    Reads each candidate at each zoom and keeps the one a figure is named in.
     """
     for page in page_candidates(frame):
         box = suggest_crop(page, frame.shape)
@@ -241,10 +208,7 @@ def main(argv: list[str] | None = None) -> int:
           f"   named {poses[0]}")
     print(f"\nzoom:        x{zoom:g} -- {why}")
 
-    # What each zoom costs *on this crop*, timed here rather than quoted from
-    # a table: the read scales with the magnified area, so x3 is nearly free
-    # on a distant panel's small crop and ruinous on a large one -- which is
-    # the happy case, since x3 only helps when the figure is small anyway.
+    # Cost per zoom timed on *this* crop: the read scales with magnified area.
     print(f"\n{'zoom':>6} {'named':>22} {'ms/frame':>9} {'fps':>6}")
     for z in (1.0, 2.0, 3.0):
         v = magnify(view, z)

@@ -1,20 +1,8 @@
 #!/usr/bin/env python3
 """Generate the IDEA.md scenario corpus: taught soothing sessions as JSONL.
 
-docs/IDEA.md says "여러가지의 시나리오를 우리가 만들고 LLM 에게 학습 시킴" --
-this is the making.  For each scenario a virtual infant gets a random hidden
-Personality (perception/baby.py), and the ReflexBrain (the taught strategy,
-core/policy.py) soothes it through the *real* CradleMachine closed loop.
-Each finished session is one JSONL line:
-
-    {"personality": {...}, "steps": [{"motion", "before", "after"}, ...],
-     "outcome": "calmed" | "unsettled"}
-
-The steps are what the LLM is taught from (few-shot in ClaudeBrain's
-prompt); the personality is kept only so a human can audit that the
-recorded behaviour makes sense -- the LLM never sees it.
-
-Usage::
+One line per session: the ReflexBrain soothing a random hidden Personality
+(audit-only) through the real CradleMachine -- few-shot fodder for ClaudeBrain.
 
     python3 tools/make_scenarios.py                 # 12 -> data/scenarios.jsonl
     python3 tools/make_scenarios.py --n 4 --out /tmp/s.jsonl --seed 7
@@ -27,7 +15,7 @@ import json
 import random
 from pathlib import Path
 
-if __package__ in (None, ""):   # direct run: put the repo root on sys.path
+if __package__ in (None, ""):
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

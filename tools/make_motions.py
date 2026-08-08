@@ -1,52 +1,12 @@
 #!/usr/bin/env python3
-"""core/cradle.py -> motion_NN.csv, the format the pcm and the simulator both read.
+"""core/cradle.py -> motion_NN.csv, the MotionMap format pcm and simulator read.
 
-Discovered empirically against the shipped simulator (the error messages are
-good teachers).  A motion file is one CSV per slot, in the MotionMap layout from
-the P-Vector guide:
-
-    MS ID,MS NAME,MD ID,C-Vector,P-Vector 1
-    1,LEFT_SMALL,MD1,0,"-14.32,1600,0,0"
-    ...one row per axis...
-
-Rules the loader enforces, learned the hard way:
-
-* **The MS ID inside the file must match the filename number.** ``motion_01.csv``
-  with MS ID 0 is rejected with "파일명과 내용의 MS_ID 불일치" -- and the message
-  says the real pcm rejects it too, not just the sim.
-* ``MD ID`` is 1-based (``MD1`` = feedback ``axis[0]``).
-* A P-Vector cell is ``"yd, L_traj, s0, sd"``: target position in **degrees**
-  (int16, -360..360 per the spec sheet), length in 1 kHz samples, then the
-  acceleration and deceleration shaping terms.
-
-``yd`` is an *absolute* target, not a delta -- the unit trajectory runs from
-wherever the axis currently is to ``yd``.  So we write ``end_pose`` converted to
-degrees, and the arm reaches the same posture regardless of where it started.
-
-This exists so we can populate a catalog **without a robot and without teaching
-anything** -- which is what makes the simulator useful and gives DREAM-Chunk a
-dictionary with more than one entry per cell.  Motions taught for real in phorce
-Studio will overwrite these; treat them as scaffolding, not as the final poses.
-
-**--library** compiles the evidence report's M01-M50 (core/cradle.py) into 50
-pcm slots instead -- the full-simulation catalog, MS ID k = M{k:02d}.  A sway
-becomes a chain of rest-to-rest quintic half-cycles (both a sine and a quintic
-have zero velocity at the extremes), with the amplitude envelope ramped in and
-out so every slot starts soft and ends parked at rest.  Schedules are written in
-millimetres of plate travel and solved into crank angles through the rig's real
-inverse kinematics (core/rig.py), one solve per P-Vector -- so the four cranks
-carry different magnitudes, which is correct: the linkage is not symmetric.
-
-Notes for the honest small print: the rig is two five-bar linkages, giving three
-channels -- ML rides sway (all four cranks the same way), Z rides heave (each
-pair's two cranks opposed, which is a real motion on this rig and used to be
-compiled as a flat hold), and AP rides pitch, because every joint turns about Y
-so there is no second horizontal axis to translate along.  Diagonals drive sway
-and pitch together; ellipse/circle/Lissajous keep their primary amplitude on one
-channel, their components being in quadrature which one half-cycle grid cannot
-carry; pseudo-walk uses its band centre.  C0 transition commands compile as
-reference episodes around a 0.5 Hz / A10 sway (soft starts ramp in over their
-30/60 s, tapers ramp out over theirs).
+Loader rules: the MS ID inside the file must match the filename number; ``MD
+ID`` is 1-based (``MD1`` = feedback ``axis[0]``); a P-Vector cell is
+``"yd, L_traj, s0, sd"`` with ``yd`` an *absolute* target in degrees (int16,
+-360..360) and ``L_traj`` in 1 kHz samples.  Schedules are millimetres of plate
+travel solved into crank angles through the rig IK (core/rig.py), one solve per
+P-Vector, so the four cranks carry different magnitudes.
 
 Usage::
 
@@ -93,22 +53,13 @@ def write_motion(
 AXES = 4
 REFERENCE = (0.5, 10.0)  # (Hz, mm) sway the C0 transition episodes demonstrate
 
-# The rig is two five-bar linkages, not a parallelogram -- measured off the
-# assembly STL, see core/rig.py for the derivation.  It has three channels:
-#
+# Three channels (two five-bar linkages, see core/rig.py):
 #   sway   all four cranks the same way          -> horizontal, ~4.3 mm/deg
 #   heave  each pair's two cranks opposed        -> VERTICAL, ~3.1 mm/deg
 #   pitch  one pair up while the other goes down -> a see-saw
-#
-# So the schedules below are built in **millimetres of plate travel** and turned
-# into crank angles by the real inverse kinematics, one solve per P-Vector.  The
-# old code worked in degrees through a single lever and copied one number to all
-# four rows, which collapsed every motion into the same sway -- and compiled the
-# Z modes to flat zeros on the false premise that the rig has no vertical DOF.
 
-# Which channel each library axis rides.  AP is the one the rig genuinely lacks
-# (every joint turns about Y, so there is no second horizontal axis); it is
-# rendered as pitch rather than dropped.  See CLAUDE.md.
+# Which channel each library axis rides.  AP has no translation axis (every
+# joint turns about Y); rendered as pitch rather than dropped.  See CLAUDE.md.
 CHANNEL = {"ML": "sway", "Z": "heave", "AP": "pitch", "": "sway"}
 
 
@@ -117,10 +68,8 @@ def per_axis(schedule: list[tuple[float, int]], channel: str = "sway",
              second_channel: str = "pitch") -> list[list[tuple[float, int]]]:
     """A plate-travel schedule (mm) -> one crank-angle row per axis, MD1..MD4.
 
-    Each P-Vector is solved through the linkage, so what lands in the CSV is the
-    angle each crank actually needs -- including the fact that the four cranks
-    do *not* share a magnitude, because the geometry is not symmetric.  ``second``
-    adds a simultaneous channel on the same timing grid (the diagonals).
+    Each P-Vector is solved through the linkage; ``second`` adds a simultaneous
+    channel on the same timing grid (the diagonals).
     """
     if second is not None:
         assert len(schedule) == len(second), "channels must share a timing grid"
@@ -153,9 +102,8 @@ def sway_schedule(amp_mm: float, f_hz: float, ramp_s: float = 5.0,
                   taper_s: float | None = None) -> list[tuple[float, int]]:
     """One amplitude entry per half-cycle: (peak plate travel mm, half-cycle ms).
 
-    The amplitude envelope smoothsteps up over ``ramp_s``, holds, and back
-    down over ``taper_s`` (defaults to ``ramp_s``; 0 skips a side) -- the same
-    shape the live MotionEngine plays, coarsened to half-cycle resolution.
+    Envelope smoothsteps up over ``ramp_s``, holds, down over ``taper_s``
+    (defaults to ``ramp_s``; 0 skips a side).
     """
     from core.cradle import smoothstep
 
@@ -181,13 +129,7 @@ def compile_halves(schedule: list[tuple[float, int]]) -> list[tuple[float, int]]
 
 
 def library_episode(m) -> list[list[tuple[float, int]]]:
-    """One library entry -> its slot trajectory, one segment list per axis.
-
-    Schedules are in millimetres of plate travel; ``per_axis`` solves each one
-    through the linkage.  ML sways, Z heaves (real on this rig, contrary to what
-    this compiler used to assume), AP has no axis to translate on and so renders
-    as pitch, and the diagonals drive sway and pitch together.
-    """
+    """One library entry -> its slot trajectory, one segment list per axis."""
     ref_f, ref_mm = REFERENCE
     if m.kind == "static":
         return per_axis([(0.0, 1000)])
@@ -219,15 +161,12 @@ def library_episode(m) -> list[list[tuple[float, int]]]:
 
     base = compile_halves(sway_schedule(m.a_mm, m.f_hz))
     if m.kind == "diagonal":
-        # ap = v, ml = sign * v with v = a/sqrt(2): sway and pitch in phase, the
-        # sign deciding which way the see-saw leans against the sway.
+        # v = a/sqrt(2): sway and pitch in phase, sign picks the lean.
         v = 1.0 / math.sqrt(2.0)
         return per_axis(scaled(base, m.sign * v), "sway",
                         scaled(base, v), "pitch")
-    # Everything else rides the channel its axis maps to.  Ellipse, circle and
-    # Lissajous put two components in quadrature, which one half-cycle grid
-    # cannot carry, so they keep their primary amplitude on that channel; all
-    # eight are R-grade, so nothing automatic reaches them.
+    # Quadrature shapes keep their primary amplitude on their axis's channel;
+    # all eight are R-grade, so nothing automatic reaches them.
     return per_axis(base, CHANNEL.get(m.axis, "sway"))
 
 
@@ -249,12 +188,8 @@ def write_slot(path: Path, slot_id: int, name: str,
 def build_library(out: Path) -> int:
     from core.rig import LEVER_M as lever_m
     from core.cradle import A_HARD_MM, LIBRARY
-    # The report's cap is on plate travel (A_HARD_MM one-way), and core/cradle.py
-    # already refuses a library entry that exceeds it.  This is the second guard,
-    # in crank-angle space: no slot may ask a crank for more than the hard cap
-    # costs on the *most demanding* channel.  Heave and pitch need more angle per
-    # millimetre than sway does (~3.1 vs ~4.3 mm/deg), so the ceiling is theirs,
-    # and checking against sway alone wrongly failed every A20 pitch entry.
+    # Second guard, in crank-angle space: ceiling taken over all three channels
+    # -- heave/pitch cost more angle per mm than sway (~3.1 vs ~4.3 mm/deg).
     hard_deg = max(abs(v)
                    for chan in ("sway_mm", "heave_mm", "pitch_mm")
                    for v in cradle_axis_degrees(**{chan: A_HARD_MM}))
@@ -272,8 +207,8 @@ def build_library(out: Path) -> int:
                 f"{m.id} MD{axis + 1} must end parked at rest"
         segments = axis_segments[0]
         duration = sum(ms for _, ms in segments) / 1000.0
-        # Which channel this slot actually uses, read back off the rows: the
-        # two cranks of a pair agree on a pure sway and oppose on heave/pitch.
+        # Channel read back off the rows: a pair agrees on sway, opposes on
+        # heave/pitch.
         pair = [round(a[0] + b[0], 6) for a, b in
                 zip(axis_segments[0], axis_segments[1])]
         chan = "sway" if all(abs(v) > 1e-9 or abs(a[0]) < 1e-9
@@ -295,12 +230,8 @@ def build_library(out: Path) -> int:
 def build_n34(out: Path) -> int:
     """Compile the team's N01-N34 system (docs/motion-system.png) to slots.
 
-    No per-shape compiler code: each entry is *sampled from the live
-    MotionEngine* every 250 ms and every sample is solved through the rig
-    IK -- so the robot plays exactly what the dashboard and RViz simulate,
-    V-swings, circles, figure-eights, trembles and decays included.  Each
-    file ramps in over 4 s, holds (or decays), tapers via N01 and ends
-    parked at rest.
+    Each entry is sampled from the live MotionEngine every 250 ms, each sample
+    solved through the rig IK; ramps in over 4 s, tapers via N01, ends parked.
     """
     from core.cradle import A_HARD_MM, VIBE_MM, N_LIBRARY, MotionEngine
     hard_deg = max(abs(v)

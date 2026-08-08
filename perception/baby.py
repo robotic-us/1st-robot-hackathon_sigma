@@ -1,30 +1,11 @@
 #!/usr/bin/env python3
 """A virtual infant: a random state process the cradle can try to soothe.
 
-No camera, no models, no tags.  States wander SLEEP <-> CALM <-> FUSS <-> CRY
-on randomized dwell times -- weighted so the infant is restless rather than
-settled: a soothed baby drifts back into fussing within a minute or so, which
-is what keeps the cradle (and the policy) working.  The loop closes: the
-engine's live sway is fed back in as ``soothing``, and a soothable fuss or
-cry *settles cumulatively* under it -- progress builds while good motion
-plays, shows in the distress level on the way, and drains at rest, so the
-machine's trials genuinely work,
-sometimes.  About a third of cries are unsoothable (hunger, diaper): motion
-never helps, which is exactly the path that must end in a caregiver alert.
-Rarely the face hides for a moment, tripping the safety gate.
+States wander SLEEP <-> CALM <-> FUSS <-> CRY on seeded random dwells, biased
+restless, under the engine's live sway (``soothing``); ~a third of cries are
+unsoothable.  ``Personality`` (docs/IDEA.md) adds taste, habituation and mood.
 
-With a ``Personality`` (docs/IDEA.md) the motion identity matters too: a
-loved motion soothes 3x, hated ones agitate, a liked transition doubles up.
-Emotions are also time-related: habituation wears every motion out with use
-(and lets it recover at rest), and a slow mood cycle makes some stretches
-fussier -- so "play the favourite forever" stops being a winning strategy.
-
-The baby draws itself as a circle: colour = state, radius = distress, and its
-position rides the cradle's actual plate offset -- you can watch the sway
-rock it.  serve.py --baby streams that as the camera; RViz shows the cradle
-answering (./cad/view.sh).
-
-Deterministic under a seed; tested by ``python3 tests.py baby``.
+    python3 serve.py --baby [--baby-seed N]   # repeatable; tests.py baby
 """
 
 from __future__ import annotations
@@ -37,25 +18,20 @@ from typing import Optional
 import cv2
 import numpy as np
 
-# state -> (base distress, wander); thresholds live in core.cradle:
-# CALM_LEVEL=0.12 separates quiet from fuss, CRY_LEVEL=0.45 fuss from cry.
+# state -> (base distress, wander), 0..1; CALM_LEVEL/CRY_LEVEL live in core.cradle.
 STATES = {
     "SLEEP": (0.02, 0.01),
     "CALM":  (0.06, 0.03),
     "FUSS":  (0.30, 0.05),
     "CRY":   (0.62, 0.08),
 }
-DWELL_S = {           # how long a state lingers before rolling the dice again
+DWELL_S = {           # seconds a state lingers before the dice roll again
     "SLEEP": (25.0, 60.0),
     "CALM":  (12.0, 30.0),
     "FUSS":  (15.0, 40.0),
     "CRY":   (15.0, 35.0),
 }
-# Weighted transitions at the end of a dwell.  This infant is deliberately
-# *unsettled*: content stretches are short and rarely renew themselves, so
-# calm is something the cradle keeps earning rather than a resting state it
-# falls into.  A baby that mostly sits happy makes a demo where nothing
-# happens -- and gives the policy almost no trials to learn from.
+# Weighted transitions at the end of a dwell, biased *unsettled*: calm is earned.
 NEXT = {
     "SLEEP": (("SLEEP", 0.35), ("CALM", 0.65)),
     "CALM":  (("CALM", 0.25), ("SLEEP", 0.15), ("FUSS", 0.6)),
@@ -65,35 +41,23 @@ NEXT = {
 SOOTHE_RATE = 0.08    # per second at full sway: ~12 s of good motion to settle
 SOOTHABLE_P = 0.7     # the rest are hunger/diaper -- caregiver work
 AGITATE_RATE = 0.05   # per second under a *hated* motion: fussing worsens
-# Rough handling -> outrage: the same thresholds web/baby.js uses to drive
-# the drawn face into rage (SHAKE_FROM/SHAKE_FULL, m/s^2 accel RMS).  Only a
-# real tablet can supply the measurement -- every simulated run passes
-# sensed=None and never sees this path.
+# Rough handling (m/s^2 accel RMS), as in web/baby.js; only a tablet measures it.
 SHAKE_FROM_MS2 = 2.0
 SHAKE_FULL_MS2 = 7.0
-# Settling is *cumulative*, not a per-tick coin flip.  A real infant winds
-# down: rocking that is working shows progressive calming, and interrupting it
-# loses the progress gradually rather than instantly.  So soothing integrates
-# into a 0..1 "settling" score -- one full unit steps the state down -- and the
-# distress level shows the partial progress on the way.  Rest lets it drain.
-# (The memoryless model this replaces is still reachable as
-# ``VirtualBaby(cumulative=False)``; it is what docs/dream-chunk.md's
-# measurement was taken against, and the difference is the whole point there.)
+# cumulative=True: soothing integrates into a 0..1 settling score, one unit = a
+# step down.  False is the old memoryless model, kept so the comparison repeats.
 SETTLE_DRAIN_S = 45.0     # progress half-lives away over ~30 s of no motion
 SETTLE_SHOW = 0.6         # how much of the band the partial progress moves
-# Time-related emotion (docs/IDEA.md follow-up): no motion works forever.
-# Habituation builds while a motion is engaged and decays while it rests,
-# so even the loved motion wears out and the policy must rotate; a slow
-# mood cycle makes some stretches of the night fussier than others.
+# Habituation wears out even a loved motion; a mood cycle adds fussy stretches.
 FATIGUE_S = 75.0          # this long at full strength ~= fully worn out
 FATIGUE_RECOVER_S = 300.0
-FATIGUE_FLOOR = 0.15      # a worn-out motion keeps 15% of its effect
-MOOD_PERIOD_S = 540.0     # one good-to-grumpy cycle every 9 minutes
+FATIGUE_FLOOR = 0.15      # a worn-out motion keeps this much of its effect
+MOOD_PERIOD_S = 540.0
 MOOD_DEPTH = 0.35         # grumpy half: soothing 35% weaker, calm shorter
 HIDE_MEAN_S = 600.0   # a face-lost blip roughly every 10 min
 HIDE_FOR_S = 1.5
 
-COLORS_BGR = {        # matches the dashboard's palette
+COLORS_BGR = {        # the dashboard's palette
     "SLEEP": (255, 154, 76), "CALM": (80, 185, 63),
     "FUSS": (65, 179, 227), "CRY": (77, 72, 229),
 }
@@ -101,35 +65,21 @@ COLORS_BGR = {        # matches the dashboard's palette
 
 @dataclass(frozen=True)
 class Personality:
-    """docs/IDEA.md: a fixed, hidden motion temperament (the '성격').
-
-    Two layers, multiplied together by ``gain``:
-
-    * **Specific motions** -- a loved id (3x), hated ids (agitate), a liked
-      transition (combo[0] then combo[1], 2x).
-    * **Features** (the N-system vocabulary, docs/motion-system.png) -- a
-      favourite and a hated *shape*, small-vs-large, fast-vs-slow, and a
-      feeling about the tremble.  Preferences therefore generalise: a baby
-      that loves wide slow circles also likes wide slow ovals, a little.
-
-    Time leaks in too: during a grumpy mood stretch, fast motions lose most
-    of their charm.  The policy never sees any of this -- only the ranks
-    it produces.
-    """
+    """docs/IDEA.md: a fixed, hidden motion temperament (the '성격') -- ``gain``
+    multiplies id tastes (love 3x, hate agitates, combo 2x) by N-system features
+    (shape/size/speed/vibe).  The policy never sees it, only ranks."""
 
     love: str = ""
     hate: frozenset = frozenset()
     combo: tuple = ()          # (a, b): b soothes 2x right after a
-    shape_love: str = ""       # this shape soothes 1.9x
-    shape_hate: str = ""       # this shape agitates
+    shape_love: str = ""
+    shape_hate: str = ""
     size_pref: str = ""        # "small" | "large" | ""
     speed_pref: str = ""       # "fast" | "slow" | ""
     vibe_pref: int = 0         # +1 loves the tremble, -1 hates it
 
-    # Felt-motion thresholds: how IMU features (web/baby.js -> serve.py's
-    # IPadMotion) map into the taste vocabulary.  Demo-scale, like the
-    # 0.12 m/s^2 strength reference -- never a physical safety measurement.
-    FELT_FAST_HZ = 0.45      # the N system's own fast/slow boundary
+    # Felt-motion thresholds: IMU features -> the taste vocabulary (demo-scale).
+    FELT_FAST_HZ = 0.45
     FELT_LARGE_MS2 = 0.09    # accel RMS above this reads as a wide motion
     FELT_VIBE_JERK = 2.5     # jerk RMS above this reads as a tremble
 
@@ -140,13 +90,7 @@ class Personality:
 
     @classmethod
     def felt(cls, sensed) -> Optional[dict]:
-        """IMU features -> the taste vocabulary, or None without a signal.
-
-        What the tablet *measures* outranks what the engine *commanded*:
-        speed from the dominant frequency, size from acceleration RMS,
-        tremble from jerk.  Shape cannot be told from one IMU, so shape
-        keeps coming from the motion id.
-        """
+        """IMU features -> the taste vocabulary (shape excepted), or None."""
         if not sensed or sensed.get("samples", 0) < 8:
             return None
         out: dict = {}
@@ -171,8 +115,7 @@ class Personality:
             base = 3.0
         else:
             base = 1.0
-        # What the motion is like: declared by its library entry, then
-        # overridden by whatever the tablet actually measured.
+        # Library-declared character, overridden by what the tablet measured.
         m = self._features(motion) if motion else None
         shape = m.shape if m is not None else ""
         size = m.size if m is not None else ""
@@ -248,7 +191,7 @@ class BabyReading:
     y: float
     distance: float
     distress: float
-    emotion: str          # the state name -- shown in the dashboard
+    emotion: str
     name: str = "virtual"
     ts: float = 0.0
 
@@ -260,16 +203,9 @@ class VirtualBaby:
                  personality: Personality | None = None,
                  cumulative: bool = True, tempo: float = 1.0) -> None:
         self.rng = random.Random(seed)
-        # Dwell divisor, default 1.0 = the measured dynamics every benchmark
-        # in docs/dream-chunk.md ran on.  A camera demo wants more *states
-        # per minute* than a realistic infant provides, so serve.py's --sense
-        # runs tempo > 1: same transition graph, same levels, same soothing
-        # physics -- the clock between scene changes just runs faster.
+        # Dwell divisor; --sense demos run tempo > 1 for more states per minute.
         self.tempo = max(0.1, tempo)
         self.personality = personality
-        # True: soothing accumulates and shows (the model of a real settle).
-        # False: the original memoryless Poisson step-down, kept so the
-        # docs/dream-chunk.md measurement can be reproduced against both.
         self.cumulative = cumulative
         self.settling = 0.0        # 0..1 progress towards the next step down
         self.state = "CALM"
@@ -283,11 +219,7 @@ class VirtualBaby:
         self._mood = 1.0
         self._mood_phase = self.rng.uniform(0.0, 2.0 * math.pi)
         self._t: float | None = None
-        # The first act is scripted, not diced: a few calm seconds, then a
-        # fuss.  Left to the dice, CALM dwells 20-60 s with a 40% exit to
-        # FUSS -- an opening that can sit quiet for many minutes, which reads
-        # as "nothing is running".  Only the opening is special-cased; every
-        # transition after it is the normal process.
+        # The opening act alone is scripted: a few calm seconds, then a fuss.
         self._opening = True
 
     def _dwell(self) -> float:
@@ -330,16 +262,14 @@ class VirtualBaby:
             if self._motion is not None:
                 self._prev_motion = self._motion
             self._motion = motion
-        # Time-related emotion: the mood cycle, and habituation -- exposure
-        # builds while a motion is engaged, every motion recovers at rest.
+        # Mood cycle, then habituation: builds while engaged, fades at rest.
         self._mood = 1.0 - MOOD_DEPTH * (0.5 + 0.5 * math.sin(
             2.0 * math.pi * now / MOOD_PERIOD_S + self._mood_phase))
         if dt > 0.0:
             decay = math.exp(-dt / FATIGUE_RECOVER_S)
             for k in list(self._fatigue):
                 self._fatigue[k] *= decay
-                # cleanup threshold well under one tick's build increment,
-                # or accumulation dies at birth (build adds ~4e-4 per frame)
+                # well under one tick's build (~4e-4/frame), or it dies at birth
                 if self._fatigue[k] < 1e-6:
                     del self._fatigue[k]
         if motion and soothing > 0.2:
@@ -351,12 +281,8 @@ class VirtualBaby:
                                  else self._dwell())
         if now >= self._until:
             self._transition(now)
-        # The closed loop: a soothable fuss/cry yields to sway, hunger does
-        # not.  With a personality the motion identity matters: the loved
-        # motion soothes faster, a hated one agitates instead -- and any
-        # motion, loved included, fades with heavy use.  When a tablet in
-        # the cradle measures the *actual* motion, its felt character
-        # (tempo, intensity, tremble) is what the taste judges.
+        # The closed loop: a soothable fuss/cry yields to sway, hunger does not.
+        # A loved motion soothes faster, a hated one agitates, use fades both.
         gain = 1.0
         if self.personality is not None and soothing > 0.2:
             gain = self.personality.gain(motion, self._prev_motion, self._mood,
@@ -375,32 +301,21 @@ class VirtualBaby:
                     if self.rng.random() < 1.0 - math.exp(-rate * dt):
                         self._step_down(now)
                 else:
-                    # the settle builds; one whole unit is a step down
                     self.settling += rate * dt
                     if self.settling >= 1.0:
                         self.settling = 0.0
                         self._step_down(now)
         elif dt > 0.0:
-            # nothing helping right now: the progress drains away, it is not
-            # banked for later
             self.settling *= math.exp(-dt / SETTLE_DRAIN_S)
         if not upset:
             self.settling = 0.0
         base, wander = STATES[self.state]
         target = base + wander * math.sin(now * 0.9 + sum(map(ord, self.state)) % 7)
         if self.cumulative and self.settling > 0.0:
-            # partial progress is visible: a baby half-way to settling is
-            # already quieter than one that has not started.  Without this the
-            # level teleports at the step and no observer -- policy, dream
-            # model or caregiver -- can tell "working" from "not yet".
+            # partial progress shows, so an observer can tell working from not-yet
             below = STATES[{"CRY": "FUSS", "FUSS": "CALM"}[self.state]][0]
             target -= (target - below) * SETTLE_SHOW * min(1.0, self.settling)
-        # A measured violent shake outranks every state's own band: the level
-        # is lifted into the top rank ("very upset", >= 0.62) exactly as the
-        # drawn face escalates crying -> angry -> rage.  No state in STATES
-        # reaches that band on its own (CRY sits at its lower edge), so this
-        # is the honest path there -- the plant screaming about real rough
-        # handling, not the sim inventing misery.
+        # A measured violent shake outranks every state's band (top rank, >= 0.62).
         if sensed:
             shake = ((float(sensed.get("accel_rms", 0.0) or 0.0) - SHAKE_FROM_MS2)
                      / (SHAKE_FULL_MS2 - SHAKE_FROM_MS2))
@@ -419,8 +334,7 @@ class VirtualBaby:
 
 
 def baby_frame(reading: BabyReading, offsets_mm=(0.0, 0.0, 0.0)) -> np.ndarray:
-    """The circle IS the baby: a plain ring -- state colour on the border,
-    radius = distress -- riding the cradle's real plate offset."""
+    """The circle IS the baby: ring colour = state, radius = distress."""
     frame = np.full((480, 640, 3), 26, np.uint8)
     if not reading.present:
         cv2.putText(frame, "FACE HIDDEN", (200, 240),
@@ -431,7 +345,7 @@ def baby_frame(reading: BabyReading, offsets_mm=(0.0, 0.0, 0.0)) -> np.ndarray:
     cy = 240
     radius = int(50 + 90 * reading.distress)
     color = COLORS_BGR.get(reading.emotion, (160, 160, 160))
-    cv2.circle(frame, (cx, cy), radius, color, 6, cv2.LINE_AA)   # ring only
+    cv2.circle(frame, (cx, cy), radius, color, 6, cv2.LINE_AA)
     cv2.putText(frame, f"{reading.emotion}  distress {reading.distress:.2f}",
                 (10, 470), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
     return frame

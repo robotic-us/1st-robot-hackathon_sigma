@@ -13,6 +13,9 @@ __pycache__/
 # macOS Finder droppings
 .DS_Store
 
+# MS Office lock files (open documents in docs/)
+~$*
+
 # Recorded output from `run.py --save`
 *.mp4
 *.avi

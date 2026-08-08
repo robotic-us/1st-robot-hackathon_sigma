@@ -1,4 +1,4 @@
-# TEST.md — the tested command lines
+# DEMO.md — the tested command lines
 
 One sentence per command; all verified on this Jetson (2026-08-08); run from the repo root.
 

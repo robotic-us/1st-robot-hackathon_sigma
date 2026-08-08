@@ -1,23 +1,10 @@
 #!/usr/bin/env python3
 """The mascot recognizer's answers, drawn on the wheel it answers in.
 
-One figure, self-contained HTML with inline SVG (no build step, no CDN -- the
-demo LAN has neither).  For every figure on docs/Nubzuki.jpg it draws two
-things and the line between them:
-
-    o   where the sheet *prints* the figure -- the ground truth, since the
-        sheet is itself a circumplex and position states the emotion
-    *   the anchor of the pose the classifier *named* it
-    -   the error, so a misread pose is a long line you can see across the room
-
-If the classifier were guessing, the lines would be long and tangled.  That is
-the whole check, and it needs no numbers to read -- the table underneath has
-them anyway, for anyone who cannot use the picture or wants to verify it.
-
-Colour is the five-state vocabulary the cradle actually consumes
-(perception/nubzuki.py), not the pose, because that is the quantity the
-decision layer sees.  The dashed path is the live ladder: the only five poses
-the machine can command, in level order.
+Per figure on docs/Nubzuki.jpg: a hollow ring where the sheet *prints* it (its
+own circumplex is the ground truth), a filled dot at the pose the classifier
+*named*, the line between them the error; colour is the five-state vocabulary
+the decision layer sees.  Self-contained HTML, inline SVG (demo LAN has no CDN).
 
     python3 tools/nubzuki_wheel.py                  # data/nubzuki_wheel.html
     python3 tools/nubzuki_wheel.py --image shot.png # grade any frame instead
@@ -40,8 +27,7 @@ W = 660
 R = 250
 CX = CY = W // 2
 
-# One hue per state, legible on both themes; these are the SVG twins of
-# nubzuki.STATE_COLOUR, which is BGR because it is drawn with cv2.
+# SVG twins of nubzuki.STATE_COLOUR, which is BGR because cv2 draws it.
 STATE_CSS = {
     nz.AWAKE: "#4f9d4a",
     nz.EYES_CLOSED: "#b08528",
@@ -71,8 +57,7 @@ def wheel_svg(seen: list) -> str:
         out.append(f'<text x="{x:.0f}" y="{y:.0f}" text-anchor="{anchor}" '
                    f'class="ax">{text}</text>')
 
-    # The live ladder, behind everything: the machine's own path across the
-    # wheel, from content to raging.
+    # The live ladder: the machine's own path across the wheel, in level order.
     ladder = sorted(nz.LIVE_LEVEL, key=lambda k: nz.LIVE_LEVEL[k])
     pts = " ".join(f"{at(*nz.POSES[k])[0]:.1f},{at(*nz.POSES[k])[1]:.1f}"
                    for k in ladder)
@@ -88,7 +73,6 @@ def wheel_svg(seen: list) -> str:
                    f'class="printed"/>')
         out.append(f'<circle cx="{ax:.1f}" cy="{ay:.1f}" r="7" '
                    f'fill="{colour}" class="named"/>')
-        # Nudge the label off the dot, away from the middle of the wheel.
         dx = 12 if s.valence >= 0 else -12
         anchor = "start" if s.valence >= 0 else "end"
         out.append(f'<text x="{ax + dx:.1f}" y="{ay + 4:.1f}" '
